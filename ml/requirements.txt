@@ -1,0 +1,31 @@
+# Export environment for Vysion XR (R2). Python >=3.10,<3.14 (executorch 1.3.1 metadata; use 3.12 with uv).
+#   uv venv --python 3.12 ml/.venv && source ml/.venv/bin/activate && uv pip install -r ml/requirements.txt
+#
+# RULE (docs/stack.md D1, gradle/libs.versions.toml): the PyPI `executorch` pin MUST equal the Android AAR
+# version; a .pte built with another version is not guaranteed to load on the 1.3.1 runtime.
+executorch==1.3.1                      # VERIFIED: PyPI 2026-05-29; requires torch>=2.12.0a0, torchao>=0.17.0
+torch==2.12.0                          # VERIFIED exists (PyPI 2026-05-13); satisfies the executorch constraint.
+                                       # Pairing with 1.3.1 is by date, not by an upstream statement: if pip reports
+                                       # a conflict, drop this line and let executorch choose.
+torchao>=0.17.0                        # VERIFIED constraint from executorch 1.3.1 metadata
+pytorch-tokenizers>=1.3.0              # VERIFIED constraint from executorch 1.3.1 metadata
+
+# ── Detector: examples/models/yolo26/export_and_validate.py at tag v1.3.1 (docs/stack.md §3-R2, VERIFIED) ──
+ultralytics==8.4.14                    # VERIFIED: the example's requirements.txt pin at v1.3.1
+opencv-python<5                        # the example lists it unpinned; 5.0.0.93 is current on PyPI (checked
+                                       # 2026-10-17) and untested with ultralytics 8.4.14, so stay on 4.x
+
+# ── VLM, option C (Gemma 3 4B via optimum-executorch; docs/stack.md D5 / plan.md Q6) ─────────────────────
+# Install these into a SECOND venv (ml/.venv-vlm): optimum-executorch pins transformers==5.0.0rc1, which may
+# not resolve next to ultralytics. See ml/README.md §3.
+#   uv venv --python 3.12 ml/.venv-vlm && source ml/.venv-vlm/bin/activate
+#   uv pip install "executorch==1.3.1" "torch==2.12.0" "optimum-executorch==1.1.0" "huggingface_hub>=1.0,<3"
+# optimum-executorch==1.1.0            # VERIFIED: PyPI 2026-02-10; requires optimum~=2.0.0, executorch>=1.0.0,
+#                                      #   transformers==5.0.0rc1, pytorch-tokenizers>=1.0.1, accelerate>=0.26.0
+# transformers==5.0.0rc1               # pulled in by optimum-executorch; do not pin it differently
+# huggingface_hub>=1.0,<3              # `hf auth login` for the gated google/gemma-3-4b-it (2.2.0 current on PyPI)
+
+# ── VLM, option A (SRS path: examples/models/gemma4/export_gemma4.py; export works, Android LlmModule
+#    cannot load the result, docs/stack.md D5) ─────────────────────────────────────────────────────────────
+# transformers>=5.2.0                  # stack.md: the gemma4 script needs it; the repo pins 5.0.0rc1 → install
+#                                      #   separately, third venv, only if option A is chosen

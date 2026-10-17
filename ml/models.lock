@@ -1,0 +1,50 @@
+{
+  "_comment": "ml/models.lock: source of truth for model artifacts (ADR-0007). scripts/fetch_models.sh reads this; the app reads the copy placed in assets/models/ to print name, quantization, backend and size on the diagnostics overlay (FR-G5). JSON on purpose: bash parses it with python3, Android with org.json. A url of \"TBD\" means: not published yet; build it with the `export` script and run fetch_models.sh --from <dir>. Replace TBD sha256 with the value the script prints after the first verified copy.",
+  "schema": 1,
+  "executorch_python": "see ml/requirements.txt",
+  "executorch_android": "see gradle/libs.versions.toml [executorch]",
+  "models": [
+    {
+      "name": "vlm",
+      "role": "Text Reader, Audio Description, door one-shot, arrival check (FR-T1, FR-D1, FR-N3, FR-N6)",
+      "dest": "vlm.pte",
+      "url": "TBD",
+      "sha256": "TBD",
+      "bytes": 0,
+      "backend": "XNNPACK",
+      "quantization": "4-bit weights",
+      "input_width": 0,
+      "input_height": 0,
+      "export": "ml/export/export_vlm.sh",
+      "source_model": "Gemma 4 edge multimodal (~2B); fallback SmolVLM-500M keeps this same dest (RK-2)"
+    },
+    {
+      "name": "vlm-tokenizer",
+      "role": "tokenizer artifact for the ExecuTorch multimodal runner",
+      "dest": "vlm-tokenizer.json",
+      "url": "TBD",
+      "sha256": "TBD",
+      "bytes": 0,
+      "backend": "-",
+      "quantization": "-",
+      "input_width": 0,
+      "input_height": 0,
+      "export": "ml/export/export_vlm.sh",
+      "source_model": "same as vlm; tokenizer.json (HF tokenizers format) for both VLM paths in ml/README.md, the file LlmModule(tokenizerPath) takes"
+    },
+    {
+      "name": "detector",
+      "role": "people and common obstacles during Navigation (FR-N2)",
+      "dest": "detector.pte",
+      "url": "TBD",
+      "sha256": "TBD",
+      "bytes": 0,
+      "backend": "XNNPACK",
+      "quantization": "int8",
+      "input_width": 640,
+      "input_height": 640,
+      "export": "ml/export/export_detector.sh",
+      "source_model": "YOLO26-n (COCO)"
+    }
+  ]
+}

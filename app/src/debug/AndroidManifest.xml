@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only manifest additions. Merged into the debug build only; the release APK has none of this.
+
+  BenchmarkReceiver runs the SRS §7 measurement protocol on demand from scripts/benchmark.sh:
+    adb shell am broadcast -a com.vysion.xr.BENCH ‑‑es model vlm ‑‑ei runs 20
+  It is exported so the shell can reach it; it accepts only enum/int extras and writes JSON under
+  files/bench/. See plan.md ## Security (attack surface) for why this is acceptable in debug.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".diagnostics.BenchmarkReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.vysion.xr.BENCH" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

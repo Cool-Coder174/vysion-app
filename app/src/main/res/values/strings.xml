@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Only non-spoken, non-cue UI strings live here (app name, TalkBack labels for controls).
+         Every spoken sentence lives in voice/Cues.kt (SRS §8 R4). -->
+    <string name="app_name">Vysion XR</string>
+
+    <!-- The product sentence, verbatim (SRS §3). Shown in onboarding and the README. -->
+    <string name="product_sentence">Vysion XR helps you read, understand, and move through a space. It is not validated for unassisted travel by blind users.</string>
+
+    <!-- TalkBack labels (NFR accessibility: every control carries a label). -->
+    <string name="a11y_mic_button">Microphone. Hold to speak a command.</string>
+    <string name="a11y_mode_read">Text Reader mode</string>
+    <string name="a11y_mode_describe">Audio Description mode</string>
+    <string name="a11y_mode_navigate">Navigation mode</string>
+    <string name="a11y_diagnostics_toggle">Toggle diagnostics overlay</string>
+    <string name="a11y_transcript_panel">Transcript</string>
+    <string name="a11y_stop_button">Stop speaking</string>
+</resources>

@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew *)",
+      "Bash(bash scripts/*)",
+      "Bash(scripts/*)",
+      "Bash(adb *)",
+      "Bash(~/Library/Android/sdk/platform-tools/adb *)",
+      "Bash(python3 *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(find *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)"
+    ]
+  }
+}

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vysion XR manifest. Sources and verification for every entry: docs/stack.md §2.7.
+  Privacy boundary (ADR-0003): NO network permission. CI greps this file and the merged manifest.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Jetpack XR feature flag. required="false" keeps ONE APK installable on the S25 Ultra fallback (ADR-0006).
+         https://developer.android.com/develop/xr/jetpack-xr-sdk/build-immersive -->
+    <uses-feature android:name="android.software.xr.api.spatial" android:required="false" />
+    <uses-feature android:name="android.hardware.xr.input.hand_tracking" android:required="false" />
+    <!-- CAMERA implies a camera feature; declare it optional so the APK is not filtered. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <!-- World-facing camera (camera id 0) and the microphone for SpeechRecognizer. Both runtime permissions,
+         requested with a spoken explanation (FR-G1, platform/Permissions.kt). -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Android XR permissions. All "dangerous": declared here AND requested at runtime.
+         https://developer.android.com/develop/xr/permissions
+         https://developer.android.com/reference/androidx/xr/runtime/manifest/ManifestPermission -->
+    <uses-permission android:name="android.permission.SCENE_UNDERSTANDING_COARSE" /> <!-- planes, anchors, hit tests (R3) -->
+    <uses-permission android:name="android.permission.SCENE_UNDERSTANDING_FINE" />   <!-- depth maps: proximity (FR-N1) -->
+    <uses-permission android:name="android.permission.HAND_TRACKING" />              <!-- pinch-and-hold push-to-talk (FR-G2, P1) -->
+    <uses-permission android:name="android.permission.HEAD_TRACKING" />              <!-- DeviceTrackingMode.SPATIAL → head pose (FR-N3/N4) -->
+
+    <!-- This app declares NO network permission (ADR-0003).
+         The next two lines are manifest-merger GUARDS, not grants: they strip the permission if a library
+         adds it, so the overlay's "Network permission: none" (FR-G5) stays true on the merged APK.
+         ACCESS_NETWORK_STATE arrives transitively from androidx.media3:media3-exoplayer (pulled in by
+         SceneCore); we never use ExoPlayer, and media3's NetworkTypeObserver catches the SecurityException
+         (verified with javap on media3-common 1.10.0, 2026-10-17). scripts/check_privacy.sh accepts only
+         the tools:node="remove" form. -->
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+
+    <!-- Package visibility for the SpeechRecognizer fallback (createSpeechRecognizer, targetSdk ≥ 30). -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".VysionApplication"
+        android:label="@string/app_name"
+        android:allowBackup="false"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+
+        <!-- Launch straight into Full Space (Jetpack XR managed) with passthrough (FR-G1).
+             Other documented value: XR_ACTIVITY_START_MODE_HOME_SPACE.
+             https://developer.android.com/develop/xr/jetpack-xr-sdk/build-immersive -->
+        <property
+            android:name="android.window.PROPERTY_XR_ACTIVITY_START_MODE"
+            android:value="XR_ACTIVITY_START_MODE_FULL_SPACE_MANAGED" />
+        <!-- The user walks to a door: ask for the large boundary. -->
+        <property
+            android:name="android.window.PROPERTY_XR_BOUNDARY_TYPE_RECOMMENDED"
+            android:value="XR_BOUNDARY_TYPE_LARGE" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
