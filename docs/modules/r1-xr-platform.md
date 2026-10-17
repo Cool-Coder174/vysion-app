@@ -17,7 +17,7 @@ R1 is the app shell and the state machine everything else hangs off. SRS §8: **
 | `app/src/main/kotlin/com/vysion/xr/platform/DeviceProfile.kt` | Runtime XR check (ADR-0006), pre-existing | real |
 | `app/src/main/kotlin/com/vysion/xr/platform/ui/SpatialShell.kt` | `SpatialShell(graph, diagnostics)`: Full Space layout, `Subspace` → `SpatialRow` → overlay panel + transcript panel + `Orbiter` control panel; passthrough fallback | real (verified APIs only) |
 | `app/src/main/kotlin/com/vysion/xr/platform/ui/FlatShell.kt` | `FlatShell(graph, diagnostics)`: 2D layout for the S25 Ultra; `rememberShellState` shared by both shells | real |
-| `app/src/main/kotlin/com/vysion/xr/platform/ui/ControlPanel.kt` | Mic (hold), three mode buttons, stop, diagnostics toggle; TalkBack labels from `strings.xml` | real |
+| `app/src/main/kotlin/com/vysion/xr/platform/ui/ControlPanel.kt` | Mic (hold), three mode buttons, stop, diagnostics toggle; TalkBack labels from `strings.xml`; `compact` = two-per-line phone layout that `FlatShell` picks below 600 dp | real |
 | `app/src/main/kotlin/com/vysion/xr/platform/ui/TranscriptPanel.kt` | 48 sp white on black (21:1), auto-scroll from `Speaker.progress` | real |
 | `app/src/main/kotlin/com/vysion/xr/platform/ui/OverlayCanvas.kt` | Draws `NormalizedBox` outlines and the door highlight on a `Canvas` | real |
 | `app/src/test/kotlin/com/vysion/xr/platform/ModeControllerTest.kt` | JUnit 4 + coroutines-test: `ModeControllerTest`, `DoorVoteTest`, `FrameMathTest` | tests |

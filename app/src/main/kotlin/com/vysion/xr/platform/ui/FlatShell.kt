@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vysion.xr.AppGraph
@@ -76,6 +77,7 @@ fun FlatShell(graph: AppGraph, diagnostics: @Composable () -> Unit) {
                 diagnosticsShown = diagnosticsShown,
                 onToggleDiagnostics = { diagnosticsShown = !diagnosticsShown },
                 modifier = Modifier.fillMaxWidth().padding(PANEL_MARGIN),
+                compact = LocalConfiguration.current.screenWidthDp < COMPACT_WIDTH_DP, // phone portrait
             )
         }
         if (diagnosticsShown) {
@@ -117,3 +119,6 @@ internal fun rememberShellState(graph: AppGraph): ShellState {
 /** SRS §6: the analysis stream is 640x480. */
 private const val OVERLAY_ASPECT = 4f / 3f
 private val PANEL_MARGIN = 12.dp
+
+/** Material's compact window-width class: below it [ControlPanel] lays its controls out two per line. */
+private const val COMPACT_WIDTH_DP = 600
