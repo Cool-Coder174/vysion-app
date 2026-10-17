@@ -172,11 +172,26 @@ adb shell cmd connectivity airplane-mode disable     # off
 ./gradlew testDebugUnitTest                 # the JVM tests always use the fakes; no device, no models
 ```
 
+On a laptop without an XR-capable emulator, use an Android 14 (API 34, the Galaxy XR's level) phone AVD:
+
+```bash
+sdkmanager --install "emulator" "system-images;android-34;google_apis;x86_64"   # arm64-v8a instead on Apple Silicon
+avdmanager create avd -n Vysion_Phone_API34 -k "system-images;android-34;google_apis;x86_64" -d pixel_8
+emulator -avd Vysion_Phone_API34 -no-snapshot-save &                            # add -no-window -no-audio for headless
+adb wait-for-device && ./gradlew installDebug -PuseFakes=true
+adb shell pm grant com.vysion.xr android.permission.CAMERA && adb shell pm grant com.vysion.xr android.permission.RECORD_AUDIO
+adb shell am start -n com.vysion.xr/.MainActivity
+```
+
+The APK is arm64-only (`abiFilters`); it still installs and runs on the x86_64 Android 14 image through the image's built-in ARM translation, which is fine for fakes and useless for ExecuTorch timing. Verified on 2026-10-17 on an Intel MacBook Pro (i9-9880H, 16 GB): emulator 37.2.12, cold launch 8.5 s, no crash; logcat showed `DeviceProfile: … (2D fallback)` and `manifest audit: network=none`.
+
 What you get: the app launches, the welcome and every answer go to `Speaker.say` (logcat shows `TODO(FR-G4) AndroidTtsPort.speak … dropping utterance` until R4 implements the TTS port, so nothing is audible yet), Read and Describe put the canned answer in the transcript panel, Navigation (GuideMe, FindDoor) reports unavailable (perception is `NoOp*` under fakes), the overlay shows the fake model (`fake-vlm`, backend `FAKE`) with real memory and the real manifest audit but no detector outlines (`NoOpNavigationEngine` emits no detections), and the 2D layout on a phone. What you do not get: camera frames, XR perception, ExecuTorch, or any number worth writing down. Fakes exist so a module builds and tests before the real thing lands (ADR-0005); they are never evidence for a P0 item.
 
 ## 9. Optional: the Android XR emulator
 
 Needs Android Studio (the XR tooling is absent from stable; stack.md §1 names the current **Canary**, Android Studio Rabbit 2 \| 2026.2.2 Canary 5 on 2026-10-17) and the system image `system-images;android-34;android-xr-preview-playstore;arm64-v8a` (API 34, macOS 13.3+ on Apple Silicon, 16 GB RAM). It is useful for the panel layout only: no world camera, no ExecuTorch numbers, no depth. Run the app there with `-PuseFakes=true`. The APK is arm64-only (`abiFilters`), which matches the arm64 image on Apple Silicon; on an x86_64 Linux host the arm64 image is slow or unavailable, so prefer the S25 Ultra.
+
+**Intel Macs cannot run the XR emulator at all.** Every Android XR system image Google publishes is arm64-v8a only (`system-images;android-34;android-xr-preview-playstore;arm64-v8a`, `…;android-xr-v3-playstore;arm64-v8a`, `…;google-xr;arm64-v8a`, checked with `sdkmanager --list` on 2026-10-17), and the XR emulator requires Apple Silicon. Do not download the image on an Intel Mac: it will not boot. On Intel, the XR targets are the real Galaxy XR over ADB (§4–§5) and, for the 2D path, the phone AVD in §8.
 
 ## 10. Troubleshooting
 
