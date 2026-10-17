@@ -1,0 +1,50 @@
+# ── Gradle / Android build outputs ──────────────────────────────────────────
+.gradle/
+build/
+/app/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+local.properties
+
+# ── IDE ─────────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
+.kotlin/
+
+# ── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Model artifacts: fetched by scripts/fetch_models.sh, never committed ────
+# (hundreds of MB; the lockfile ml/models.lock is the source of truth)
+app/src/main/assets/models/*
+!app/src/main/assets/models/README.md
+!app/src/main/assets/models/.gitkeep
+*.pte
+*.ptd
+*.pth
+*.pt
+*.safetensors
+*.bin
+*.gguf
+ml/out/
+ml/.venv/
+ml/**/__pycache__/
+*.pyc
+
+# ── Benchmark / device pulls (results go in docs/benchmarks.md, not raw dumps) ─
+bench/out/
+*.log
+
+# ── Secrets (there should be none; the app has no network) ──────────────────
+*.jks
+*.keystore
+.env
+.env.*
