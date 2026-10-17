@@ -29,10 +29,17 @@ import kotlinx.coroutines.flow.receiveAsFlow
 
 /** The device port, scriptable: push depth maps, planes, head poses and anchor poses from a test. */
 internal class FakePerceptionSource : PerceptionSource {
-    val depth = MutableSharedFlow<DepthFrame>(replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val depth = MutableSharedFlow<DepthFrame>(
+        replay = 0,
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
     override val depthFrames: Flow<DepthFrame> = depth
     override val planes = MutableStateFlow<List<PlaneObservation>>(emptyList())
-    val handSamples = MutableSharedFlow<HandObservation>(extraBufferCapacity = 2, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val handSamples = MutableSharedFlow<HandObservation>(
+        extraBufferCapacity = 2,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
     override val hands: Flow<HandObservation> = handSamples
     override val headPose = MutableStateFlow<RawHeadPose?>(null)
 
@@ -78,7 +85,11 @@ internal class FakePerceptionSource : PerceptionSource {
 
 /** R1's contract, minimal: a latest-wins frame flow the test feeds. */
 internal class FakeFrameSource : FrameSource {
-    val frames = MutableSharedFlow<Bitmap>(replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val frames = MutableSharedFlow<Bitmap>(
+        replay = 0,
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
     override val analysisFrames: Flow<Bitmap> = frames
     override val stats: StateFlow<FrameStats?> = MutableStateFlow(null)
     override suspend fun start() = Unit
@@ -118,20 +129,30 @@ internal class FakeAnchorStore : AnchorStore {
     override suspend fun clear() = Unit
 }
 
+/**
+ * Counts attach / ping / detach. [isSpatial] starts `null` (A-6 not probed); set [playsSpatially] to
+ * script what the next [ping] finds out, as `SpatialAudioPinger.ping` does on the device.
+ */
 internal class FakePinger : AnchorPinger {
     val attached = mutableListOf<AnchorId>()
     var pings = 0
     var detaches = 0
+    var playsSpatially: Boolean? = null
+    override val isSpatial = MutableStateFlow<Boolean?>(null)
     override suspend fun attach(anchor: AnchorId) {
         attached += anchor
     }
     override fun ping() {
         pings++
+        playsSpatially?.let { isSpatial.value = it }
     }
     override fun detach() {
         detaches++
     }
-    override fun release() = Unit
+    var releases = 0
+    override fun release() {
+        releases++
+    }
 }
 
 /**
@@ -140,12 +161,20 @@ internal class FakePinger : AnchorPinger {
  * a constructor; nothing in R3 touches its pixels (R3 never reads frame contents, INV-3).
  */
 internal object TestBitmaps {
-    fun blank(): Bitmap {
+    fun blank(): Bitmap = TestInstances.allocate(Bitmap::class.java)
+}
+
+/**
+ * An instance of an Android framework class (`Application`, `Bitmap`) without running its constructor,
+ * for code that only holds the reference. Never call a framework method on it.
+ */
+internal object TestInstances {
+    fun <T : Any> allocate(type: Class<T>): T {
         val unsafeClass = Class.forName("sun.misc.Unsafe")
         val field = unsafeClass.getDeclaredField("theUnsafe").apply { isAccessible = true }
         val unsafe = field.get(null)
         val allocate = unsafeClass.getMethod("allocateInstance", Class::class.java)
-        return allocate.invoke(unsafe, Bitmap::class.java) as Bitmap
+        return checkNotNull(type.cast(allocate.invoke(unsafe, type))) { "allocateInstance returned null" }
     }
 }
 

@@ -36,6 +36,8 @@ app/src/main/assets/models/*
 *.gguf
 ml/out/
 ml/.venv/
+ml/.venv-*/
+ml/.executorch-src/
 ml/**/__pycache__/
 *.pyc
 

@@ -127,7 +127,8 @@ class ProximityMonitorTest {
     @Test
     fun `median depth around a pixel is robust to a single outlier`() {
         val frame = depthFrame(fov = fov, fillM = 2f, centerM = 0.2f)
-        assertEquals(2f, DepthCone.medianTrustedDepthAround(frame, frame.width / 2, frame.height / 2, radius = 1)!!, 1e-6f)
+        val median = DepthCone.medianTrustedDepthAround(frame, frame.width / 2, frame.height / 2, radius = 1)
+        assertEquals(2f, median!!, 1e-6f)
         val empty = depthFrame(fov = fov, fillM = 0f)
         assertNull(DepthCone.medianTrustedDepthAround(empty, 5, 5))
     }

@@ -4,7 +4,7 @@ Source: SRS §7. Two models ship; three more are stretch goals. **The VLM is the
 
 | Model | Role | Export path | Backend | Pri | Fallback |
 |---|---|---|---|---|---|
-| Gemma 4 edge multimodal (~2B) | Text Reader, Audio Description, door one-shot, arrival check | ExecuTorch `examples/models/gemma4` export, 4-bit weight quantization, Android multimodal runner | XNNPACK CPU | P0 | SmolVLM-500M via the ExecuTorch Qualcomm VLM example if Gemma 4 is too slow or too large on the headset |
+| Gemma 4 edge multimodal (~2B) (SRS line; blocked at 1.3.1, D5: the shipped VLM is the Q6 choice below) | Text Reader, Audio Description, door one-shot, arrival check | ExecuTorch `examples/models/gemma4` export, 4-bit weight quantization, Android multimodal runner | XNNPACK CPU | P0 | SmolVLM-500M via the ExecuTorch Qualcomm VLM example if Gemma 4 is too slow or too large on the headset |
 | YOLO26-n (COCO) | People and common obstacles during Navigation | ExecuTorch YOLO26 example, int8 | XNNPACK CPU | P0 | Detector off; proximity from depth alone |
 | YOLO26-n door fine-tune | Continuous door tracking | Colab fine-tune on a public door dataset, same export | XNNPACK | P2 | VLM one-shot + anchor (the P0 path) |
 | Supertonic or Voxtral TTS | ExecuTorch speech out | ExecuTorch TTS examples | XNNPACK | P2 | Android TTS |
@@ -24,6 +24,8 @@ The table above is the SRS's. Live verification against ExecuTorch 1.3.1 changed
 | **C (default)** | **Gemma 3 4B** (`google/gemma-3-4b-it`) exported with optimum-executorch 1.1.0 to an `LlmModule`-compatible `.pte` (`token_embedding` / `text_decoder` / `vision_encoder`) + `tokenizer.json`; loaded with `LlmModuleConfig … modelType(MODEL_TYPE_MULTIMODAL)`; image via `prefillImages`, streaming `onResult` into TTS; exact flags in `ml/README.md` | ~2 h; the HF model is **gated** (accept the license, have a token); separate venv (pins transformers 5.0.0rc1); ~4B params puts memory near the 4 GB budget; image preprocessing numbers (896×896, 256 tokens) UNVERIFIED | decide Sat 11:00 |
 | A | Kotlin port of the C++ `Gemma4Runner` over plain `Module`: `execute("vision_encoder", …)` then a decode loop over `execute("text_decoder", input_ids, input_pos, inputs_embeds)`; constants and patch math in `docs/stack.md` §3-R2 | ~1 day; the AAR has no tokenizer class, so the four fixed prompts are pre-tokenized offline and ids decoded via `tokenizer.json`; follow-up questions need real encoding | alternative |
 | B | From-source AAR with a custom JNI around `Gemma4Runner` | highest schedule risk | not planned |
+
+**Decision (`plan.md` Q6, due Sat 11:00, R2 + Isaac): not recorded yet.** Until this line names a path, option C is the default the code and docs are written for, not a decision. When it is taken, replace this paragraph with: `Decision (Sat HH:MM, R2 + Isaac): option C | option A. Evidence: HF license accepted yes/no; first LlmModule load on the S25 Ultra ok/fail (logcat line). Consequence for FR-T1: prefill overload <uint8 | float>, input <W>x<H>, IMAGE_SOFT_TOKENS <n>, chat template <raw | wrapped> (docs/stack.md "Corrections").` and add the same line to the `plan.md` Replan Log. FR-T1's VLM half (R2 P0 "first image-to-text on the headset") starts after it.
 
 Whatever is chosen keeps `vlm.pte` + `vlm-tokenizer.json` as the lockfile destinations and the `InferenceEngine.describe(bitmap, prompt)` contract. Published reference numbers for Gemma 4 E2B on a Galaxy S25 with the C++ runner (ExecuTorch README, not our device): 4.3 GB file, TTFT 3.83 s, 6 tok/s, peak 2600 MB. Measured numbers for whatever we ship go in [`benchmarks.md`](benchmarks.md).
 
@@ -46,8 +48,8 @@ P1 variants (`DESCRIBE_BRIEF`, `DESCRIBE_DETAILED`, `TRANSLATE_ES`, `FOLLOW_UP(q
 
 ```
 app/src/main/assets/models/          # gitignored; filled by scripts/fetch_models.sh
-  vlm.pte                            # Gemma 4 edge (or the fallback), 4-bit, XNNPACK
-  vlm-tokenizer.json                 # tokenizer the multimodal runner needs (exact filename per ml/README.md)
+  vlm.pte                            # the VLM chosen at plan.md Q6 (or the fallback), 4-bit, XNNPACK
+  vlm-tokenizer.json                 # tokenizer.json for LlmModule(tokenizerPath)
   detector.pte                       # YOLO26-n int8, XNNPACK
 ml/models.lock                       # name | url | sha256 | bytes | export-commit — the source of truth
 ```
@@ -63,8 +65,10 @@ On first launch the app copies the `.pte` files from assets to `filesDir/models/
 ## Fallback decision tree (RK-2, decided by Sat 16:00)
 
 ```
-Gemma 4 edge 4-bit on headset, 20 runs, read prompt, 60 max tokens
-├─ median ≤ 6 s AND peak PSS ≤ 4 GB  → ship Gemma 4
-├─ median ≤ 8 s                       → ship Gemma 4 for Describe; cap tokens at 40 for Read; note the miss
-└─ otherwise                          → export SmolVLM-500M (same InferenceEngine, same prompts), A/B, ship the faster
+Chosen VLM, 4-bit, on headset, 20 runs, READ prompt, 60 max tokens
+├─ median ≤ 6 s AND peak PSS ≤ 4 GB  → ship it
+├─ median ≤ 8 s                       → ship it for Describe; cap tokens at 40 for Read; note the miss
+└─ otherwise                          → export the smaller fallback (same InferenceEngine, same prompts), A/B, ship the faster
 ```
+
+"The smaller fallback" is a smaller `LlmModule`-compatible optimum-executorch export: SmolVLM-500M has no runnable path at ExecuTorch 1.3.1 (`docs/stack.md` D5; same text as `docs/modules/r2-ml-executorch.md`).

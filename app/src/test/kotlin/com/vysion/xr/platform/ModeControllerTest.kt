@@ -1,7 +1,5 @@
 package com.vysion.xr.platform
 
-import com.vysion.xr.core.ModePhrasebook
-import com.vysion.xr.core.PromptSet
 import android.graphics.Bitmap
 import com.vysion.xr.core.AnchorId
 import com.vysion.xr.core.AnchorStore
@@ -20,9 +18,11 @@ import com.vysion.xr.core.InferenceEngine
 import com.vysion.xr.core.InferenceException
 import com.vysion.xr.core.ListeningState
 import com.vysion.xr.core.Mode
+import com.vysion.xr.core.ModePhrasebook
 import com.vysion.xr.core.ModeState
 import com.vysion.xr.core.NavigationCue
 import com.vysion.xr.core.NavigationEngine
+import com.vysion.xr.core.PromptSet
 import com.vysion.xr.core.RelativeTarget
 import com.vysion.xr.core.Speaker
 import com.vysion.xr.core.SpeechProgress
@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -82,8 +83,10 @@ class ModeControllerTest {
     fun `read walks IDLE CAPTURING INFERRING SPEAKING IDLE and sets the transcript`() = controllerTest { f ->
         startAndSettle(f)
         val states = mutableListOf<ModeState>()
-        backgroundScope.launch { f.controller.state.collect { states += it } }
-        runCurrent()
+        // Unconfined: the collector runs inside every state write, so it records each transition. A
+        // StandardTestDispatcher collector in backgroundScope misses the final IDLE, because
+        // advanceUntilIdle() returns once only background work is left (kotlinx-coroutines-test ≥ 1.7).
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { f.controller.state.collect { states += it } }
 
         f.commands.inject(Command.Read)
         advanceUntilIdle()
@@ -92,9 +95,11 @@ class ModeControllerTest {
             listOf(ModeState.IDLE, ModeState.CAPTURING, ModeState.INFERRING, ModeState.SPEAKING, ModeState.IDLE),
             states,
         )
+        assertEquals(ModeState.IDLE, f.controller.state.value)
         assertEquals(READ_ANSWER, f.controller.transcript.value)
         assertEquals(Mode.TEXT_READER, f.controller.mode.value)
-        assertEquals(listOf(TestPhrasebook.modeAnnounced(Mode.TEXT_READER), READ_ANSWER), f.speaker.said) // FR-G3 then text
+        // FR-G3, then the text
+        assertEquals(listOf(TestPhrasebook.modeAnnounced(Mode.TEXT_READER), READ_ANSWER), f.speaker.said)
         assertEquals(1, f.frames.captures)
         assertTrue("thinking earcon before capture", f.speaker.earcons.contains(Earcon.THINKING))
         assertNotNull("command→action latency measured", f.controller.commandLatencyNanos.value)
@@ -146,7 +151,10 @@ class ModeControllerTest {
 
             advanceTimeBy(2)
             runCurrent()
-            assertTrue("failure spoken within 2 s of the timeout", f.speaker.said.contains(TestPhrasebook.inferenceFailed))
+            assertTrue(
+                "failure spoken within 2 s of the timeout",
+                f.speaker.said.contains(TestPhrasebook.inferenceFailed),
+            )
             advanceUntilIdle()
             assertEquals(ModeState.IDLE, f.controller.state.value)
             assertTrue(f.controller.lastError.value is InferenceException)
@@ -332,6 +340,156 @@ class ModeControllerTest {
         assertEquals("no command handled after stop", 0, f.frames.captures)
     }
 
+    @Test
+    fun `a door bearing whose spatial ping failed plays the PING earcon before its words (A-6)`() =
+        controllerTest { f ->
+            startAndSettle(f)
+            val pinged = NavigationCue.DoorBearing(clock = 2, distanceM = 3f, inView = true)
+            f.navigation.cuesFlow.tryEmit(pinged)
+            advanceUntilIdle()
+            val wordsOnly = listOf<Any>(TestPhrasebook.navigationCue(pinged)!!)
+            assertEquals("spatial ping played: words only", wordsOnly, f.speaker.events)
+
+            f.speaker.events.clear()
+            val unpinged = NavigationCue.DoorBearing(clock = 2, distanceM = 2.5f, inView = true, pinged = false)
+            f.navigation.cuesFlow.tryEmit(unpinged)
+            advanceUntilIdle()
+            assertEquals(listOf(Earcon.PING, TestPhrasebook.navigationCue(unpinged)!!), f.speaker.events)
+        }
+
+    @Test
+    fun `a hazard during a guidance utterance plays PROXIMITY without waiting for that utterance`() =
+        controllerTest { f ->
+            startAndSettle(f)
+            val bearing = NavigationCue.DoorBearing(clock = 2, distanceM = 3f, inView = true)
+            f.navigation.cuesFlow.tryEmit(bearing)
+            advanceTimeBy(1) // the bearing's words are being spoken (SAY_MS = 100)
+            runCurrent()
+            assertEquals(listOf(TestPhrasebook.navigationCue(bearing)), f.speaker.said)
+
+            val hazard = NavigationCue.Proximity(0.8f)
+            f.navigation.cuesFlow.tryEmit(hazard)
+            runCurrent() // no virtual time passes: the hazard lane does not wait behind the bearing (SRS §3)
+            assertTrue(f.speaker.earcons.contains(Earcon.PROXIMITY))
+            assertEquals(
+                listOf(TestPhrasebook.navigationCue(bearing), TestPhrasebook.navigationCue(hazard)),
+                f.speaker.said,
+            )
+        }
+
+    @Test
+    fun `arrived runs the arrival prompt once and shows its answer (FR-N6)`() = controllerTest { f ->
+        startAndSettle(f)
+        f.navigation.cuesFlow.tryEmit(NavigationCue.Arrived)
+        advanceUntilIdle()
+        assertEquals(TestPrompts.arrival, f.engine.lastPrompt)
+        assertEquals(1, f.engine.describeCalls)
+        assertEquals(1, f.frames.captures)
+        assertEquals(ARRIVAL_ANSWER, f.controller.transcript.value)
+        assertEquals(ModeState.IDLE, f.controller.state.value)
+    }
+
+    @Test
+    fun `brief and detailed pick the describe variants (FR-D3)`() = controllerTest { f ->
+        startAndSettle(f)
+        f.commands.inject(Command.Brief)
+        f.commands.inject(Command.Describe)
+        advanceUntilIdle()
+        assertEquals(TestPrompts.describeBrief, f.engine.lastPrompt)
+        f.commands.inject(Command.Detailed)
+        f.commands.inject(Command.Describe)
+        advanceUntilIdle()
+        assertEquals(TestPrompts.describeDetailed, f.engine.lastPrompt)
+    }
+
+    // ── A-7 / RK-4 ────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `voice commands unavailable is spoken once per run, after the welcome`() = controllerTest { f ->
+        f.commands.state.value = ListeningState.UNAVAILABLE
+        f.controller.start()
+        advanceUntilIdle()
+        assertEquals(listOf(TestPhrasebook.welcome, TestPhrasebook.voiceCommandsUnavailable), f.speaker.said)
+
+        f.commands.state.value = ListeningState.IDLE
+        advanceUntilIdle()
+        f.commands.state.value = ListeningState.UNAVAILABLE
+        advanceUntilIdle()
+        assertEquals("once per run", 1, f.speaker.said.count { it == TestPhrasebook.voiceCommandsUnavailable })
+
+        f.controller.stop()
+        f.speaker.said.clear()
+        f.controller.start()
+        advanceUntilIdle()
+        assertEquals(listOf(TestPhrasebook.welcome, TestPhrasebook.voiceCommandsUnavailable), f.speaker.said)
+    }
+
+    // ── FR-G6 ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `in Spanish switches the voice and the recognizer to es-MX together`() = controllerTest { f ->
+        startAndSettle(f)
+        assertNull("the bus keeps its own default until told", f.commands.lastLocale)
+        f.commands.inject(Command.InSpanish)
+        advanceUntilIdle()
+        assertEquals(Speaker.ES_MX, f.speaker.locale.value)
+        assertEquals(Speaker.ES_MX, f.commands.lastLocale)
+        assertEquals(ModeState.IDLE, f.controller.state.value)
+
+        // The prompt half of FR-G6: every prompt goes through PromptSet.forLocale with the new locale.
+        f.commands.inject(Command.Read)
+        advanceUntilIdle()
+        assertEquals(TestPrompts.read + TestPrompts.SPANISH_MARK, f.engine.lastPrompt)
+    }
+
+    // ── Lifecycle (AppGraph.stop/start follow onStop/onStart and repeat) ─────────────────────────
+
+    @Test
+    fun `stop then start restarts collectors and speaks the welcome again`() = controllerTest { f ->
+        startAndSettle(f)
+        f.commands.inject(Command.Read)
+        advanceUntilIdle()
+        assertEquals(Mode.TEXT_READER, f.controller.mode.value)
+
+        // Headset off in the middle of a Read, then straight back on, with a camera teardown that takes time.
+        f.frames.stopDelayMs = 20
+        f.engine.hangNextDescribe = true
+        f.commands.inject(Command.Read)
+        advanceTimeBy(CAPTURE_MS + 1)
+        assertEquals(ModeState.INFERRING, f.controller.state.value)
+        f.controller.stop()
+        assertNull("no mode while stopped: Navigation is off", f.controller.mode.value)
+        f.speaker.said.clear()
+
+        f.controller.start()
+        runCurrent()
+        assertEquals("the cancelled Read must not reset the new welcome", ModeState.SPEAKING, f.controller.state.value)
+        assertEquals(listOf(TestPhrasebook.welcome), f.speaker.said)
+        advanceUntilIdle()
+        assertEquals(ModeState.IDLE, f.controller.state.value)
+        assertEquals("the restart waits for the teardown", listOf("start", "stop", "start"), f.frames.lifecycle)
+
+        // Every lane is live again: commands (mode announced anew), cues, detections, Stop.
+        f.speaker.said.clear()
+        f.commands.inject(Command.Read)
+        advanceUntilIdle()
+        assertEquals(listOf(TestPhrasebook.modeAnnounced(Mode.TEXT_READER), READ_ANSWER), f.speaker.said)
+        assertEquals(READ_ANSWER, f.controller.transcript.value)
+
+        f.navigation.cuesFlow.tryEmit(NavigationCue.WallAhead(1.2f))
+        advanceUntilIdle()
+        assertEquals(TestPhrasebook.navigationCue(NavigationCue.WallAhead(1.2f)), f.speaker.said.last())
+
+        f.navigation.detectionsFlow.tryEmit(listOf(Detection("chair", 0.5f, DoorHighlight.boxFor(12, true)!!)))
+        advanceUntilIdle()
+        assertEquals(1, f.overlay.detections.value.size)
+
+        val stopsBefore = f.speaker.stopCalls
+        f.commands.inject(Command.Stop)
+        runCurrent()
+        assertEquals(stopsBefore + 1, f.speaker.stopCalls)
+    }
+
     // ── Harness ───────────────────────────────────────────────────────────────────────────────────
 
     private class Fixture(scope: CoroutineScope, engineWrapper: (FakeInferenceEngine) -> InferenceEngine) {
@@ -385,6 +543,7 @@ class ModeControllerTest {
         assertEquals(ModeState.IDLE, f.controller.state.value)
         f.speaker.said.clear()
         f.speaker.earcons.clear()
+        f.speaker.events.clear()
     }
 
     private companion object {
@@ -417,6 +576,16 @@ class DoorVoteTest {
         assertNull(DoorVote.parse("left or right"))
         assertNull(DoorVote.parse("centre"))
         assertNull(DoorVote.parse("leftish"))
+    }
+
+    @Test
+    fun `parse rejects a side word next to a negation, but keeps none`() {
+        assertNull(DoorVote.parse("There is no door on the left."))
+        assertNull(DoorVote.parse("Not on the right."))
+        assertNull(DoorVote.parse("The door isn't on the left."))
+        assertNull(DoorVote.parse("I cannot see a door at the center."))
+        assertEquals(HorizontalBearing.NONE, DoorVote.parse("No, none."))
+        assertEquals(HorizontalBearing.NONE, DoorVote.parse("None. There is no door."))
     }
 
     @Test
@@ -488,14 +657,24 @@ class FrameMathTest {
 private class TestFrameSource(private val captureMs: Long) : FrameSource {
     var started = false
     var captures = 0
+
+    /** "start" / "stop" in completion order, so a restart test can see that teardown finished first. */
+    val lifecycle = mutableListOf<String>()
+
+    /** Virtual time a `stop()` takes (the real one unbinds CameraX on the main thread). */
+    var stopDelayMs = 0L
     override val analysisFrames: Flow<Bitmap> = emptyFlow()
     override val stats: StateFlow<FrameStats?> = MutableStateFlow(null)
 
     override suspend fun start() {
         started = true
+        lifecycle += "start"
     }
 
-    override suspend fun stop() = Unit
+    override suspend fun stop() {
+        delay(stopDelayMs)
+        lifecycle += "stop"
+    }
 
     override suspend fun captureStill(): Bitmap {
         captures++
@@ -511,9 +690,17 @@ private class TestFrameSource(private val captureMs: Long) : FrameSource {
 
 /** plan.md: `MutableSharedFlow(extraBufferCapacity = 8, onBufferOverflow = DROP_OLDEST)`. */
 private class TestCommandBus : CommandBus {
-    private val events = MutableSharedFlow<CommandEvent>(extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    private val events =
+        MutableSharedFlow<CommandEvent>(extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     override val commands: Flow<CommandEvent> = events
     override val state = MutableStateFlow(ListeningState.IDLE)
+
+    /** Last locale passed to [setLocale]; `null` until the controller sets one (FR-G6). */
+    var lastLocale: Locale? = null
+
+    override fun setLocale(locale: Locale) {
+        lastLocale = locale
+    }
 
     override fun startListening() {
         state.value = ListeningState.LISTENING
@@ -532,6 +719,9 @@ private class TestCommandBus : CommandBus {
 private class TestSpeaker(private val sayMs: Long) : Speaker {
     val said = mutableListOf<String>()
     val earcons = mutableListOf<Earcon>()
+
+    /** Earcons and spoken texts interleaved in call order, for "earcon before words" assertions. */
+    val events = mutableListOf<Any>()
     var stopCalls = 0
     override val progress = MutableSharedFlow<SpeechProgress>()
     override val locale = MutableStateFlow(Speaker.EN_US)
@@ -539,6 +729,7 @@ private class TestSpeaker(private val sayMs: Long) : Speaker {
 
     override suspend fun say(text: String, interrupt: Boolean) {
         said += text
+        events += text
         isSpeaking.value = true
         try {
             delay(sayMs)
@@ -553,6 +744,7 @@ private class TestSpeaker(private val sayMs: Long) : Speaker {
 
     override fun earcon(kind: Earcon) {
         earcons += kind
+        events += kind
     }
 
     override fun setRate(rate: Float) = Unit
@@ -644,6 +836,7 @@ private object TestPhrasebook : ModePhrasebook {
     override val holdStill = "<cue:holdStill>"
     override val permissionExplanation = "<cue:permissionExplanation>"
     override val permissionDenied = "<cue:permissionDenied>"
+    override val voiceCommandsUnavailable = "<cue:voiceCommandsUnavailable>"
     override fun modeAnnounced(mode: Mode) = "<cue:mode:${mode.name}>"
     override fun navigationCue(cue: NavigationCue): String? =
         if (cue == NavigationCue.Arrived) null else "<cue:${cue::class.simpleName}>"
@@ -655,4 +848,10 @@ private object TestPrompts : PromptSet {
     override val describe = "<prompt:describe>"
     override val door = "<prompt:door>"
     override val arrival = "<prompt:arrival>"
+    override val describeBrief = "<prompt:describeBrief>"
+    override val describeDetailed = "<prompt:describeDetailed>"
+    override fun forLocale(prompt: String, locale: Locale): String =
+        if (locale.language == "es") prompt + SPANISH_MARK else prompt
+
+    const val SPANISH_MARK = "<es>"
 }

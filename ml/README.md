@@ -1,6 +1,6 @@
 # ml/ — model exports for Vysion XR (R2)
 
-Everything the app loads comes from here: `ml/models.lock` is the source of truth (ADR-0007), `ml/export/*.sh` build the artifacts on a laptop, `scripts/fetch_models.sh` puts them under `app/src/main/assets/models/`, and during development you sideload them instead so the dev APK stays ~20 MB (plan.md Q1).
+Everything the app loads comes from here: `ml/models.lock` is the source of truth (ADR-0007), `ml/export/*.sh` build the artifacts on a laptop, `scripts/fetch_models.sh` puts them under `app/src/main/assets/models/`, and during development you sideload them instead so the multi-GB models stay out of the dev APK (~65 MB without models, skeleton debug build, 2026-10-17; plan.md Q1).
 
 Pins: the Android AAR is `org.pytorch:executorch-android:1.3.1` (`gradle/libs.versions.toml`, `docs/stack.md` D1) and the Python export **must** use `executorch==1.3.1` (`ml/requirements.txt`). A `.pte` built with another version is not guaranteed to load on the 1.3.1 runtime.
 
@@ -16,7 +16,7 @@ The SRS says "Gemma 4 edge multimodal … `examples/models/gemma4` … Android m
 | A | `google/gemma-4-E2B-it` (ungated) | `examples/models/gemma4/export_gemma4.py`, §3 | NOT loadable by `LlmModule`; needs a Kotlin port of the C++ `Gemma4Runner` over plain `Module` (`docs/stack.md` §3-R2 option A) | ~1 day; the AAR has no tokenizer class |
 | B | same as A | same | from-source AAR with custom JNI | not planned |
 
-Whichever is chosen keeps the lockfile dests `vlm.pte` + `vlm-tokenizer.json` and the `InferenceEngine.describe(bitmap, prompt)` contract. Record the decision in `docs/model-plan.md` and the plan.md Replan Log.
+Whichever is chosen keeps the lockfile dests `vlm.pte` + `vlm-tokenizer.json` and the `InferenceEngine.describe(bitmap, prompt)` contract. Record the decision in the "Decision" line of `docs/model-plan.md` and in the plan.md Replan Log; until that line is filled, the decision has not been made and the option-C snippets are a default, not a fact.
 
 ## 1. Python environment (uv)
 
@@ -30,7 +30,7 @@ uv pip install -r ml/requirements.txt          # executorch==1.3.1, torch==2.12.
 python -c "import executorch, importlib.metadata as m; print(m.version('executorch'))"   # must print 1.3.1
 
 # The example scripts are not in the wheel in a runnable layout: clone the repo at the SAME tag (docs/stack.md §3-R2).
-git clone --depth 1 -b v1.3.1 https://github.com/pytorch/executorch ml/.executorch-src   # gitignored? add to .gitignore if kept
+git clone --depth 1 -b v1.3.1 https://github.com/pytorch/executorch ml/.executorch-src   # gitignored (.gitignore: ml/.executorch-src/)
 ```
 
 The VLM path C needs a **second** venv because `optimum-executorch==1.1.0` pins `transformers==5.0.0rc1` (VERIFIED, PyPI):
@@ -83,6 +83,10 @@ optimum-cli export executorch --model google/gemma-3-4b-it --task multimodal-tex
 
 Image input (stack.md: **UNVERIFIED**, HTTP 401 on the model card): SigLIP 896×896, 256 soft tokens, mean = std = 0.5. `FrameSource.captureStill()` (R1) center-crops to `ModelInfo.inputWidth/Height`; put the verified numbers into the lockfile row (`input_width`, `input_height`) and `ExecuTorchInferenceEngine.IMAGE_SOFT_TOKENS` once the first prefill reports `prompt_tokens` in `onStats`.
 
+Which `prefillImages` overload (**UNVERIFIED**; nobody knows whether the optimum-executorch `vision_encoder` normalizes internally): start with `prefillImages(IntArray uint8 CHW, 896, 896, 3)`, which is what `ExecuTorchInferenceEngine.prefillLocked` documents. If a printed sign comes back as garbage, switch to `prefillImages(FloatArray CHW, 896, 896, 3)` with `((v / 255) - 0.5) / 0.5` per channel (the mean = std = 0.5 above). Accept the overload when `onStats` reports `prompt_tokens` = `IMAGE_SOFT_TOKENS` + the prompt's tokens and the sign is read correctly; record it as a row in `docs/stack.md` "Corrections found at build time".
+
+Prompt format (**UNVERIFIED**): nobody checked whether `LlmModule`'s multimodal runner applies Gemma 3's chat template (`<start_of_turn>user\n … <end_of_turn>\n<start_of_turn>model\n`) or sends the prompt raw. On the first answer, run the same printed sign twice: (a) raw, `prefillImages(…)` then `generate(PromptLibrary.READ, seqLen, cb, false)`; (b) wrapped, `prefillPrompt("<start_of_turn>user\n")`, `prefillImages(…)`, then `generate(READ + "<end_of_turn>\n<start_of_turn>model\n", …)`, so the image sits inside the user turn. Keep the variant that answers with only the sign's text. The wrapping goes in `ExecuTorchInferenceEngine.prefillLocked` / `generateLocked`, never in `PromptLibrary.kt` (ADR-0001); a follow-up on the same frame (FR-D2) then continues with `<end_of_turn>\n<start_of_turn>user\n<question><end_of_turn>\n<start_of_turn>model\n`. Record the result in `docs/stack.md` "Corrections" (the §3-R2 row already there).
+
 ### Path A: Gemma 4 E2B through `examples/models/gemma4` (VERIFIED export flags; NOT loadable by `LlmModule`)
 
 ```bash
@@ -121,11 +125,14 @@ If `method_names` lacks `token_embedding`, the Android `LlmModule` will refuse t
 
 ## 5. Sideload during development (plan.md Q1, `docs/stack.md` Q20 / A-15)
 
-The engine resolves each lockfile `dest` in this order: `getExternalFilesDir("models")/<dest>` → `filesDir/models/<dest>` (copied from `assets/models/<dest>` on first launch, verified against the lockfile, `.part` then rename). Nothing else is ever written to storage (ADR-0003).
+**Step 0: a lockfile on the device.** `ModelCatalog` resolves nothing without one: it reads `assets/models/models.lock` inside the APK (gitignored, so a fresh clone has none) and falls back to `/sdcard/Android/data/com.vysion.xr/files/models/models.lock`. Either run `scripts/fetch_models.sh` once (it copies the lockfile into assets before exiting 2 on `TBD` rows), then `./gradlew assembleDebug` and install; or use `scripts/push_models.sh`, which pushes `models.lock` next to the models. A plain `adb push` of the `.pte` files alone is not enough.
+
+The engine resolves each lockfile `dest` in this order: `getExternalFilesDir("models")/<dest>` → `filesDir/models/<dest>` (copied from `assets/models/<dest>` on first launch, verified against the lockfile, `.part` then rename). Nothing else is ever written to storage (ADR-0003). A sideloaded file whose size or sha256 differs from a non-`TBD` lockfile row (for example an `adb push` still running) is refused and logged under `vysion.security` (plan.md Security, fail closed); the sha256 runs once per file per process.
 
 ```bash
+scripts/push_models.sh                     # pushes ml/out/* and ml/models.lock; or by hand:
 adb push ml/out/detector.pte /sdcard/Android/data/com.vysion.xr/files/models/
-adb push ml/out/vlm.pte ml/out/vlm-tokenizer.json /sdcard/Android/data/com.vysion.xr/files/models/
+adb push ml/out/vlm.pte ml/out/vlm-tokenizer.json ml/models.lock /sdcard/Android/data/com.vysion.xr/files/models/
 adb shell ls -la /sdcard/Android/data/com.vysion.xr/files/models/
 adb logcat -s vysion vysion.latency      # expect: "vlm → /storage/emulated/0/Android/data/com.vysion.xr/files/models/vlm.pte (N bytes)"
 ```
@@ -138,11 +145,10 @@ Each export script ends with a block formatted for the lockfile. For every artif
 
 1. `sha256`: paste the printed value (also what `scripts/fetch_models.sh` prints as "Computed:" for a `TBD` row).
 2. `bytes`: paste the printed size; the app refuses a copied file whose size differs (`ModelCatalog`).
-3. `url`: after the release tag exists, upload and point at the asset:
+3. `url`: R5 creates the release `v0.1.0-hackathon` (`docs/modules/r5-integration.md` "Release-tag procedure"); R2 only uploads the assets and points at them:
    ```bash
-   gh release create v0.1.0 --title "Vysion XR hackathon build" --notes "prebuilt .pte files, executorch 1.3.1"   # once, R5
-   gh release upload v0.1.0 ml/out/vlm.pte ml/out/vlm-tokenizer.json ml/out/detector.pte
-   # url: https://github.com/Cool-Coder174/vysion-app/releases/download/v0.1.0/<dest>
+   gh release upload v0.1.0-hackathon ml/out/vlm.pte ml/out/vlm-tokenizer.json ml/out/detector.pte
+   # url: https://github.com/Cool-Coder174/vysion-app/releases/download/v0.1.0-hackathon/<dest>
    ```
 4. `quantization`, `backend`, `input_width`, `input_height`, `source_model`: what the script printed; the overlay prints these verbatim (FR-G5).
 5. Run `scripts/fetch_models.sh` (or `--from ml/out`) until it prints `✓ … verified` for every row; it also copies the lockfile to `assets/models/models.lock`, which is what the app reads at runtime.

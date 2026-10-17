@@ -7,8 +7,8 @@ Source: SRS §12. Each of these is a yes/no we can answer in under an hour with 
 | A-1 | R1 | CameraX delivers world-camera frames (camera id 0) to a third-party app on this Galaxy XR firmware with only the `CAMERA` permission; note resolution and format | Sat 11:00 | | | |
 | A-2 | R1 | Compose for XR Full Space keeps passthrough on while our panels are shown | Sat 11:00 | | | |
 | A-3 | R2 | The current `org.pytorch:executorch-android` 1.3.x AAR on Maven includes the multimodal runner and XNNPACK, so no from-source build is needed | Sat 11:00 | | | |
-| A-4 | R2 | Gemma 4 edge multimodal exports with the documented script and its `.pte` fits in memory on the headset; record file size and load time | Sat 14:00 | | | |
-| A-5 | R3 | ARCore for Jetpack XR `1.0.0-alpha15` depth and plane tracking return data on the headset with the `SCENE_UNDERSTANDING_*` permissions granted | Sat 12:00 | | | |
+| A-4 | R2 | Gemma 4 edge multimodal exports with the documented script and its `.pte` fits in memory on the headset; record file size and load time | Sat 14:00 | no (`docs/stack.md` D5, 2026-10-17) | `LlmModule(MODEL_TYPE_MULTIMODAL)` refuses the `examples/models/gemma4` `.pte` (no `token_embedding` method) at 1.3.1, 1.5.1 and main | research (stack.md D5) |
+| A-5 | R3 | ARCore for Jetpack XR `1.0.0-alpha15` (SRS wording; the build pins `1.0.0-rc02`, `docs/stack.md` §1) depth and plane tracking return data on the headset with the `SCENE_UNDERSTANDING_*` permissions granted | Sat 12:00 | | | |
 | A-6 | R3 | SceneCore spatial audio point source is available and audible through the headset speakers | Sat 13:00 | | | |
 | A-7 | R4 | `SpeechRecognizer` works with network off on the headset | Sat 14:00 | | | |
 | A-8 | R4 | TTS has an es-MX or es-ES voice installed offline | Sat 14:00 | | | |
@@ -18,15 +18,21 @@ Source: SRS §12. Each of these is a yes/no we can answer in under an hour with 
 
 | Failed | Then |
 |---|---|
-| A-1 | RK-1 fallback: Read and Describe on the S25 Ultra; Navigation stays on the headset with depth and planes only |
+| A-1 | RK-1 fallback: Read and Describe on the S25 Ultra; Navigation stays on the headset with depth and planes only. How it runs: the same debug APK on the phone (`scripts/install_headset.sh --serial <s25>`, models via `scripts/push_models.sh --serial <s25>`); the wearer takes the phone for the Text Reader and Audio Description beats of `docs/demo.md`, points it at the sign / table and says "read this" / "describe" (or taps the panel), then returns to the headset for Navigation. FR-N3 ("find the door") and the detector outlines are cut from the headset demo (both need the headset camera): Navigation shows proximity (FR-N1) and wall / floor cues (FR-N5) only, and the README Limitations says so. Evidence: the phone's `vysion: DeviceProfile: … (2D fallback)`, `camera 0: …` and `vysion.latency: command->action` lines |
 | A-2 | Use the start-mode / passthrough-opacity API documented in `docs/stack.md`; if passthrough still drops, show panels only while a command is active |
 | A-3 | Build the AAR from source per the ExecuTorch Android docs; R2 loses ~2 h, cut R2's P1 first |
-| A-4 | RK-2 fallback: SmolVLM-500M, output tokens capped at 60 |
+| A-4 | A-4 answered no (D5); see A-13 |
 | A-5 | RK-5 fallback: plane hit tests and detector box height as the distance proxy |
 | A-6 | Non-spatial earcon through `Speaker.earcon(PING)`; say the bearing more often (every 2 s) |
 | A-7 | RK-4: pinch-to-talk and panel buttons are P0; recognition becomes P1 |
 | A-8 | Fall back to es-ES, then en-US with a spoken notice; Spanish stays P1 |
 | A-9 | Escalate to organizers immediately; nothing else in the plan assumes less than two devices |
+| A-10 | stack.md §5 Q1: bump `executorch = "1.5.1"` and/or `xrRuntime = "1.1.0-alpha01"` (both resolved by other verifiers); fallback `kotlin = "2.2.10"`; append a row to stack.md "Corrections found at build time" |
+| A-11 | — (implemented in `ModelCatalog`; the alternative is the external files dir, which the catalog checks first) |
+| A-12 | fall back to a `BuildConfig` flag set from `-PdeviceProfile=phone` (ADR-0006) |
+| A-13 | Option A (Kotlin `Module`-level port of `Gemma4Runner`), or cut the VLM to the S25 Ultra (`docs/stack.md` Q9). With the VLM off the headset, FR-N3 ("find the door") is cut from the headset demo (the door vote needs the VLM; the phone runs `NoOpNavigationEngine`): Navigation shows proximity and wall / floor cues, the demo drops the "find the door" beat, and the README Limitations says so |
+| A-14 | same as A-10 |
+| A-15 | Copy into `filesDir` via the app (the catalog's second path; needs the file in assets, i.e. a big APK) |
 
 ## Assumptions added by the skeleton
 

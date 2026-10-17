@@ -4,14 +4,17 @@
 
   BenchmarkReceiver runs the SRS §7 measurement protocol on demand from scripts/benchmark.sh:
     adb shell am broadcast -a com.vysion.xr.BENCH ‑‑es model vlm ‑‑ei runs 20
-  It is exported so the shell can reach it; it accepts only enum/int extras and writes JSON under
-  files/bench/. See plan.md ## Security (attack surface) for why this is acceptable in debug.
+  It is exported so the shell can reach it, but guarded by android.permission.DUMP: the shell uid holds
+  DUMP, so `adb shell am broadcast` from benchmark.sh works, while other apps on the headset cannot trigger
+  camera stills, VLM runs or GuideMe/Stop injection (androidx ProfileInstallReceiver uses the same guard).
+  It accepts only enum/int extras and writes JSON under files/bench/. See plan.md ## Security (attack surface).
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
         <receiver
             android:name=".diagnostics.BenchmarkReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:permission="android.permission.DUMP">
             <intent-filter>
                 <action android:name="com.vysion.xr.BENCH" />
             </intent-filter>

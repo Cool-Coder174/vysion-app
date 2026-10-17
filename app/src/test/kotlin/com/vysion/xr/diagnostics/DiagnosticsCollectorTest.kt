@@ -66,6 +66,23 @@ class DiagnosticsCollectorTest {
     }
 
     @Test
+    fun `detector fps ages to zero when no detect ran for a whole window`() {
+        val window = DiagnosticsCollector.DETECTOR_FPS_WINDOW_NANOS
+        val ran = InferenceStats(lastDetectMs = 30L, detectorFps = 5.5f, lastDetectAtNanos = 1_000L)
+        assertEquals(5.5f, DiagnosticsCollector.detectorFpsOf(ran, nowNanos = 1_000L + window))
+        // Navigation stopped or every detect() throws: the last value must not stay on the overlay or the soak row.
+        assertEquals(0f, DiagnosticsCollector.detectorFpsOf(ran, nowNanos = 1_000L + window + 1))
+    }
+
+    @Test
+    fun `detector residency is not measured until the detector is known, then follows the engine (INV-2)`() {
+        val loaded = stats.copy(detectorLoaded = true)
+        assertNull(DiagnosticsCollector.compose(vlm, null, loaded, null, null, 0L).detectorLoaded)
+        assertEquals(true, DiagnosticsCollector.compose(vlm, det, loaded, null, null, 0L).detectorLoaded)
+        assertEquals(false, DiagnosticsCollector.compose(vlm, det, stats, null, null, 0L).detectorLoaded)
+    }
+
+    @Test
     fun `compose passes the engine latencies through unchanged`() {
         val s = DiagnosticsCollector.compose(
             vlm = vlm,

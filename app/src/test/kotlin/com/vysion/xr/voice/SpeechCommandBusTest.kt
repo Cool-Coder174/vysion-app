@@ -1,6 +1,7 @@
 package com.vysion.xr.voice
 
 import com.vysion.xr.core.Command
+import com.vysion.xr.core.CommandBus
 import com.vysion.xr.core.CommandEvent
 import com.vysion.xr.core.CommandSource
 import com.vysion.xr.core.Earcon
@@ -15,7 +16,6 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -208,6 +208,31 @@ class SpeechCommandBusTest {
         assertNotNull(port.listener)
         bus.release()
         assertEquals(1, port.destroyCalls)
-        assertNull(null)
+        bus.startListening() // a destroyed recognizer is never started again
+        assertEquals(listOf("es-MX"), port.sessions)
+    }
+
+    @Test
+    fun `setLocale through the contract changes the language of the next session only (FR-G6)`() = runTest {
+        val port = FakeRecognizerPort()
+        val bus: CommandBus = bus(port) // ModeController sees only the contract (decision 3)
+        bus.startListening()
+        bus.setLocale(Speaker.ES_MX) // the session already open keeps en-US
+        port.listener!!.onResults(listOf("stop"))
+        bus.startListening()
+        port.listener!!.onResults(listOf("lee esto"))
+        bus.setLocale(Speaker.EN_US)
+        bus.startListening()
+        assertEquals(listOf("en-US", "es-MX", "en-US"), port.sessions)
+        // release through the contract: destroys once, ends the open session, and its cap never fires
+        bus.release()
+        bus.release()
+        assertEquals(1, port.destroyCalls)
+        assertEquals(ListeningState.IDLE, bus.state.value)
+        advanceTimeBy(SpeechCommandBus.LISTENING_CAP_MS + 1)
+        runCurrent()
+        assertEquals(0, port.cancelCalls)
+        bus.startListening()
+        assertEquals(3, port.sessions.size)
     }
 }

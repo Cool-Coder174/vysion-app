@@ -139,6 +139,11 @@ data class InferenceStats(
     val lastDetectMs: Long? = null,
     /** Frames per second over a 5 s sliding window, measured inside [InferenceEngine.detect] (FR-N2). */
     val detectorFps: Float = 0f,
+    /**
+     * `System.nanoTime()` of the last successful [InferenceEngine.detect]; `null` until it ran. Lets a reader
+     * age [detectorFps] out (0 when no detect happened for a whole window) instead of showing a stale value.
+     */
+    val lastDetectAtNanos: Long? = null,
 )
 
 /**
@@ -152,7 +157,10 @@ interface InferenceEngine {
     val detectorInfo: StateFlow<ModelInfo?>
     val stats: StateFlow<InferenceStats>
 
-    /** Copy `.pte` files to `filesDir` if needed (A-11) and load the VLM. Call once at startup. */
+    /**
+     * Copy `.pte` files to `filesDir` if needed (A-11) and load the models. Idempotent: returns at once when
+     * already loaded. `ModeController.start()` calls it on every `onStart` (`AppGraph.stop` keeps the models).
+     */
     suspend fun warmUp()
 
     /**
@@ -173,7 +181,7 @@ interface InferenceEngine {
     /** Run the detector on one analysis frame (FR-N2). Must sustain ≥ 5 fps on the headset. */
     suspend fun detect(bitmap: Bitmap): List<Detection>
 
-    /** Unload everything. Called from `onStop`. */
+    /** Unload everything. Called once from `AppGraph.release()` (`onDestroy` when finishing), never from `onStop`. */
     suspend fun release()
 
     companion object {
@@ -424,6 +432,21 @@ interface ModePhrasebook {
     /** FR-G1: camera or microphone denied. */
     val permissionDenied: String
 
+    /**
+     * A-7 / RK-4: `CommandBus.state` became `UNAVAILABLE` (no on-device recognition); the panel buttons and
+     * pinch still work. Spoken once per `ModeController.start()`. Default blank (= not wired, skipped).
+     */
+    val voiceCommandsUnavailable: String get() = ""
+
+    /** docs/nfr.md fault model: "camera stream stops (no frame for 2 s)". Default blank (= not wired, skipped). */
+    val cameraLost: String get() = ""
+
+    /**
+     * README troubleshooting row "App says model not found": a model file is missing or failed its lockfile
+     * check. Default blank (= not wired, skipped).
+     */
+    val modelNotFound: String get() = ""
+
     /** FR-G3: "<mode> mode" on every mode change. */
     fun modeAnnounced(mode: Mode): String
 
@@ -477,6 +500,12 @@ interface PromptSet {
     /** FR-D2, P1: a follow-up question about the same frame. */
     fun followUp(question: String): String? = null
 
+    /**
+     * FR-G6 (P1): [prompt] adapted to the output [locale] (for example "Respond in Spanish." appended).
+     * The default returns [prompt] unchanged; R2's implementation decides which prompts are exempt (DOOR).
+     */
+    fun forLocale(prompt: String, locale: Locale): String = prompt
+
     /** Blank placeholder for tests and for a graph built without R2. */
     object Unwired : PromptSet {
         override val read: String = ""
@@ -502,11 +531,16 @@ data class DiagnosticsSnapshot(
     val lastVlmMs: Long? = null,
     val medianVlmMs: Long? = null,
     val detectorFps: Float? = null,
-    /** Total PSS from `ActivityManager.getProcessMemoryInfo`, sampled every second. */
+    /** Total PSS of this process from `Debug.getPss()` (not rate-limited), sampled every second. */
     val appMemoryMb: Int? = null,
     /** Read from the manifest at runtime via `PackageManager`; prints "none" on the demo build. */
     val networkPermission: String? = null,
     val measuredAtMs: Long = 0L,
+    /**
+     * INV-2 monitor: whether the detector is resident (`InferenceStats.detectorLoaded`), `null` until the
+     * detector's [ModelInfo] is known. Rendered inside the Model row ("resident" / "unloaded").
+     */
+    val detectorLoaded: Boolean? = null,
 )
 
 interface DiagnosticsSource {

@@ -60,8 +60,12 @@
             android:name="android.window.PROPERTY_XR_BOUNDARY_TYPE_RECOMMENDED"
             android:value="XR_BOUNDARY_TYPE_LARGE" />
 
+        <!-- configChanges: rotating the S25 Ultra (2D fallback) or resizing the Home Space window must not run
+             onStop/onStart (which cancels an in-flight Read and re-speaks the welcome); Compose recomposes in
+             place and the XR Session keeps its Activity. -->
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboardHidden"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

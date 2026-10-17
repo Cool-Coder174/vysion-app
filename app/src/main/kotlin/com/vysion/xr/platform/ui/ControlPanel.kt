@@ -72,7 +72,10 @@ fun ControlPanel(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(ROW_SPACING),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(BUTTON_SPACING), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(BUTTON_SPACING),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             MicButton(commands = commands, listening = listening)
             ModeButton(
                 label = stringResource(R.string.a11y_mode_read),
@@ -90,7 +93,10 @@ fun ControlPanel(
                 onClick = { commands.inject(Command.GuideMe, CommandSource.PANEL) }, // FR-N1..N3
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(BUTTON_SPACING), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(BUTTON_SPACING),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             PanelButton(
                 label = stringResource(R.string.a11y_stop_button),
                 onClick = { commands.inject(Command.Stop, CommandSource.PANEL) }, // FR-G4: same lane as "stop"

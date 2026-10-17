@@ -4,12 +4,12 @@ Read in this order if you are new: [`../README.md`](../README.md) → [`../AGENT
 
 | Document | What it holds | Read it when |
 |---|---|---|
-| [`srs/srs-extract.md`](srs/srs-extract.md) | The SRS, transcribed verbatim and structured (the PDF is beside it) | you need the original wording of anything |
+| [`srs/srs-extract.md`](srs/srs-extract.md) | The SRS, transcribed verbatim and structured; the original is [`srs/Vysion-XR-SRS-ExecuTorch-Hackathon.pdf`](srs/Vysion-XR-SRS-ExecuTorch-Hackathon.pdf) | you need the original wording of anything |
 | [`requirements.md`](requirements.md) | Rubric, scope, design rules, FR tables with **owner** and **phase** columns | picking a task; writing an FR id in a comment or PR title |
 | [`nfr.md`](nfr.md) | Numeric targets with the mechanism that measures each; the fault model | implementing timing hooks, the overlay, error handling |
 | [`architecture.md`](architecture.md) | Four layers, package map, state machine, both end-to-end flows, threading, memory, privacy boundary | before touching `ModeController`, `InferenceEngine` or `NavigationEngine` |
-| [`contracts.md`](contracts.md) | The handoff table as Kotlin signatures; who provides, who consumes, sequencing rules | before implementing or calling anything across packages |
-| [`stack.md`](stack.md) | Pinned versions with source URLs and verification status; API cheat-sheets per role; device facts | writing any Jetpack XR, CameraX, ExecuTorch, Speech or TTS call |
+| [`contracts.md`](contracts.md) | The handoff table as Kotlin signatures (including the `ModePhrasebook` / `PromptSet` seams and the `AppGraph` lifecycle); who provides, who consumes, sequencing rules; open (unmerged) contract proposals | before implementing or calling anything across packages |
+| [`stack.md`](stack.md) | Pinned versions with source URLs and verification status; API cheat-sheets per role; device facts; open device questions (§5, plus Q21 in the "Corrections found at build time" table at the bottom, which is newer than the sections above it) | writing any Jetpack XR, CameraX, ExecuTorch, Speech or TTS call |
 | [`setup.md`](setup.md) | Fresh clone → running app on the headset (target ≤ 30 min); S25 Ultra; ADB over Wi-Fi; troubleshooting | first build; onboarding a teammate |
 | [`model-plan.md`](model-plan.md) | Model table, the four prompts, asset layout, measurement protocol, RK-2 decision tree | R2 work; anything that touches a prompt |
 | [`schedule.md`](schedule.md) | Ten gates with evidence columns, merge cadence, cut rule, hour-by-hour timeline | planning the day; R5 merges |
@@ -24,4 +24,6 @@ Read in this order if you are new: [`../README.md`](../README.md) → [`../AGENT
 | [`modules/r4-voice-accessibility.md`](modules/r4-voice-accessibility.md) | R4: speech in/out, grammar, cues, earcons, panel spec, TalkBack, user testing | you are R4 |
 | [`modules/r5-integration.md`](modules/r5-integration.md) | R5: repo, scripts, diagnostics overlay, S25 build, README, benchmarks, video, pitch | you are R5 |
 
-Top-level process files: [`../plan.md`](../plan.md) (roadmap, gates, phase status), [`../executor.md`](../executor.md) (phase specs, empty until `detail F<N>`), [`../History/`](../History/) (immutable plan archive + execution log), [`../CONTRIBUTING.md`](../CONTRIBUTING.md) (branches, definition of done, review checklist).
+Top-level process files: [`../plan.md`](../plan.md) (roadmap, gates, phase status), [`../executor.md`](../executor.md) (phase specs, empty until `detail F<N>`), [`../History/`](../History/) (immutable plan archive + execution log), [`../CONTRIBUTING.md`](../CONTRIBUTING.md) (branches, definition of done, review checklist), [`../AGENTS.md`](../AGENTS.md) (operating manual for agents and humans; [`../CLAUDE.md`](../CLAUDE.md) summarizes it).
+
+Docs outside `docs/`: [`../ml/README.md`](../ml/README.md) (R2: the VLM decision, export recipes, sideload path `/sdcard/Android/data/com.vysion.xr/files/models/`, lockfile filling) and [`../app/src/main/assets/models/README.md`](../app/src/main/assets/models/README.md) (what `scripts/fetch_models.sh` puts in the APK assets).

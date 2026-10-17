@@ -120,6 +120,25 @@ class CommandGrammarTest {
     }
 
     @Test
+    fun `stop survives recognizer slips in a bare command, a similar word in a sentence is not Stop`() {
+        // FR-G4 / INV-6: in <= SAFETY_FUZZY_MAX_TOKENS tokens, 1 edit, or 2 edits keeping the "st" onset
+        for (u in listOf("stahp", "stap it", "Vysion, stahp!", "please stopp", "stahp reading")) {
+            assertEquals(u, Command.Stop, parse(u))
+        }
+        assertEquals(2, CommandGrammar.levenshtein("stop", "stahp"))
+        // the exact word works in a sentence of any length
+        assertEquals(Command.Stop, parse("please stop reading that now"))
+        // short words that share letters but not the onset are not Stop
+        for (u in listOf("so", "to", "up")) assertNull(u, parse(u))
+        assertNull(parse("leg esto", es)) // "esto" is 2 edits from "stop" but has no "st" onset
+        assertEquals(Command.Slower, parse("slow")) // 2 edits from "stop", 0 from "slow"
+        assertEquals(Command.Read, parse("lee esto", es))
+        // in a longer utterance only the exact word counts: these stay questions (FR-D2)
+        assertEquals(Command.FollowUp("is there a step ahead?"), parse("is there a step ahead?"))
+        assertEquals(Command.FollowUp("what's on the top shelf?"), parse("what's on the top shelf?"))
+    }
+
+    @Test
     fun `follow-up questions that are not commands`() {
         assertEquals(Command.FollowUp("what's on the table?"), parse("what's on the table?"))
         assertEquals(Command.FollowUp("what's on the table?"), parse("Vysion, what's on the table?"))

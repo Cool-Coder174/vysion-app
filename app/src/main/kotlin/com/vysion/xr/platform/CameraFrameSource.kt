@@ -2,6 +2,8 @@ package com.vysion.xr.platform
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.graphics.ImageFormat
+import android.graphics.PixelFormat
 import android.os.SystemClock
 import android.util.Log
 import android.util.Size
@@ -40,9 +42,11 @@ import java.util.concurrent.Executors
  *
  * **Bitmap ownership (INV-9).** A `Bitmap` returned by [captureStill] has exactly one owner, the
  * caller (`ModeController`), who `recycle()`s it. Bitmaps emitted on [analysisFrames] are owned by
- * this source: a collector may read them inside its `collect` block and must neither recycle them
- * nor keep a reference past the next emission (the real implementation reuses a 2-bitmap pool,
- * plan.md F2 task 2.1).
+ * this source and are never recycled by a collector: each frame is a FRESH `Bitmap`
+ * (`ImageProxy.toBitmap()`), reclaimed by the GC once no collector holds it. There is deliberately no
+ * reuse pool: with `conflate()` up to three emitted frames are referenced at once (the SharedFlow slot,
+ * the conflate slot, the consumer's in-flight frame, which `engine.detect` may read much later behind a
+ * VLM call), so a small pool would be repainted while still being read (plan.md F2 task 2.1).
  *
  * **Privacy (ADR-0003, INV-3).** Frames exist only in memory. The still is taken with the
  * in-memory `takePicture` overload only; there is no file-output capture, no bitmap encoding to a
@@ -75,14 +79,18 @@ class CameraFrameSource(
 
     /**
      * Edge of the square still handed to the VLM. The VLM input size is `ModelInfo.inputWidth` from
-     * R2's engine, which this constructor cannot see (see the module doc, "Contract issues");
-     * `AppGraph` or `ModeController` sets it once `vlmInfo` is known. Default per
+     * R2's engine, which this constructor cannot see; `AppGraph` collects `InferenceEngine.vlmInfo` and
+     * sets it once the VLM has loaded (r1 module doc, open issue 1, closed). Default per
      * docs/model-plan.md (Gemma 3 4B, 896, UNVERIFIED).
      */
     @Volatile
     var stillEdge: Int = DEFAULT_STILL_EDGE
 
     private val fpsMeter = FpsMeter()
+    /**
+     * The analyzer thread. Lives as long as the process: [stop] is reversible (AppGraph.stop on every onStop)
+     * and [analysis] stays bound to this executor, so it is never shut down (FrameSource has no release).
+     */
     private val analysisExecutor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
 
     /**
@@ -130,9 +138,30 @@ class CameraFrameSource(
      * provider.bindToLifecycle(lifecycleOwner, worldCameraSelector, analysis, still)
      * ```
      * where `lifecycleOwner` is a `LifecycleRegistry` this class drives from [start]/[stop] on
-     * `Dispatchers.Main` (the constructor has no Activity; `AppGraph` is Application-scoped).
+     * `Dispatchers.Main` (the constructor has no Activity; `AppGraph` is Application-scoped). Owner snippet
+     * (`LifecycleRegistry(LifecycleOwner)`, `currentState` get/set, `LifecycleOwner.lifecycle`: javap against
+     * lifecycle-runtime / lifecycle-common 2.11.0, docs/stack.md "Corrections found at build time"):
+     * ```
+     * private val owner = object : LifecycleOwner {
+     *     val registry = LifecycleRegistry(this)
+     *     override val lifecycle: Lifecycle get() = registry
+     * }
+     * // start(): withContext(Dispatchers.Main) {
+     * //     if (owner.registry.currentState == Lifecycle.State.INITIALIZED) {
+     * //         owner.registry.currentState = Lifecycle.State.CREATED
+     * //         provider.bindToLifecycle(owner, worldCameraSelector, analysis, still)   // bind once
+     * //     }
+     * //     owner.registry.currentState = Lifecycle.State.STARTED                         // frames flow
+     * // }
+     * // stop():  withContext(Dispatchers.Main) { owner.registry.currentState = Lifecycle.State.CREATED }
+     * ```
+     * Never move the registry to DESTROYED: a destroyed lifecycle cannot start again and [stop] is reversible.
      * Hour-one probe (A-1): log `CameraManager.cameraIdList` and the chosen id's characteristics
-     * under tag `vysion`; if id "0" yields nothing, take RK-1 at Sat 12:00.
+     * under tag `vysion`; if id "0" yields nothing, take RK-1 at Sat 12:00. Also log the horizontal FOV of
+     * the still after the center crop, which R3 needs for `BearingAngles` (stack.md Q3 correction):
+     * `hfov = 2·atan(SENSOR_INFO_PHYSICAL_SIZE.width / (2·LENS_INFO_AVAILABLE_FOCAL_LENGTHS[0]))`, then for the
+     * square crop of a W×H (W ≥ H) frame `hfovCrop = 2·atan((H / W)·tan(hfov / 2))`; log
+     * `vysion: still hfov=<hfovCrop> deg (A-1)`. Metadata only (INV-3).
      */
     override suspend fun start() {
         Log.w(
@@ -142,9 +171,17 @@ class CameraFrameSource(
         )
     }
 
-    /** Unbind and release the analysis executor. Never throws (the skeleton app must stop cleanly). */
+    /**
+     * Unbind the use cases (reversible: [start] rebinds). Keeps [analysisExecutor], which lives as long as
+     * the process. [stats] goes back to `null` (no frames while stopped, NFR "Honesty"). Never throws.
+     */
     override suspend fun stop() {
-        Log.w(TAG, "TODO(FR-T1) CameraFrameSource.stop: provider.unbindAll(); analysisExecutor.shutdown()")
+        _stats.value = null
+        Log.w(
+            TAG,
+            "TODO(FR-T1) CameraFrameSource.stop: lifecycleRegistry.currentState = CREATED (or provider.unbindAll()) " +
+                "on Main; keep analysisExecutor, stop is reversible (AGENTS.md §5)",
+        )
     }
 
     /**
@@ -159,10 +196,22 @@ class CameraFrameSource(
      * }
      * return CenterCrop.apply(full, stillEdge, stillEdge).also { if (it !== full) full.recycle() }
      * ```
-     * Apply `imageInfo.rotationDegrees` before cropping if the probe shows rotated stills.
+     * Rotation (docs/stack.md → R1 "Bitmap", corrected): read it inside `onCaptureSuccess`, before the
+     * `ImageProxy` closes, and rotate before cropping:
+     * ```
+     * val r = image.imageInfo.rotationDegrees
+     * val raw = image.use { it.toBitmap() }
+     * val upright = if (r == 0) raw else Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height,
+     *     Matrix().apply { postRotate(r.toFloat()) }, true).also { if (it !== raw) raw.recycle() }
+     * cont.resume(upright)
+     * ```
+     * Log once per process after the crop, metadata only (INV-3; name locals so `scripts/check_privacy.sh` §4 does not
+     * see `bitmap.` / `frame.` in the log call): `val w = upright.width; val h = upright.height`, then
+     * `Log.i(TAG, "still ${w}x$h rotation=$r -> ${stillEdge}x$stillEdge (A-1)")`. Record it in the A-1 Evidence column.
      */
     override suspend fun captureStill(): Bitmap =
-        TODO("FR-T1: ImageCapture.takePicture(mainExecutor, OnImageCapturedCallback) + CenterCrop.apply (docs/stack.md → R1 'Still')")
+        TODO("FR-T1: ImageCapture.takePicture(mainExecutor, OnImageCapturedCallback) + CenterCrop.apply " +
+            "(docs/stack.md → R1 'Still')")
 
     /** Analyzer callback: measure fps, convert, publish. Runs on [analysisExecutor]. */
     private fun onAnalysisFrame(image: ImageProxy) {
@@ -170,15 +219,18 @@ class CameraFrameSource(
             val nowNanos = SystemClock.elapsedRealtimeNanos() // H-21: monotonic clock only
             val fps = fpsMeter.onFrame(nowNanos)
             if (fps != null) {
+                // NFR Honesty / A-1 "note resolution and format": size and format are read from the frame, not
+                // typed. The id is the only one the selector admits ([worldCameraSelector] filters on it).
                 _stats.value = FrameStats(
                     cameraId = WORLD_CAMERA_ID,
                     width = frame.width,
                     height = frame.height,
-                    format = "RGBA_8888",
+                    format = imageFormatName(frame.format),
                     fps = fps,
                 )
             }
-            // docs/stack.md → R1 "Bitmap": ImageProxy.toBitmap() supports RGBA_8888; rotation via imageInfo.rotationDegrees.
+            // docs/stack.md → R1 "Bitmap": ImageProxy.toBitmap() supports RGBA_8888;
+            // rotation via imageInfo.rotationDegrees.
             _frames.tryEmit(frame.toBitmap())
         }
     }
@@ -224,6 +276,18 @@ internal class FpsMeter(private val windowNanos: Long = DEFAULT_WINDOW_NANOS) {
     }
 }
 
+/**
+ * Name of an `ImageProxy.getFormat()` value for `FrameStats.format` (A-1 evidence). CameraX reports
+ * `PixelFormat.RGBA_8888` (1) for `OUTPUT_IMAGE_FORMAT_RGBA_8888`, `ImageFormat.YUV_420_888` (35) and
+ * `ImageFormat.JPEG` (256); anything else is printed as its number, never guessed.
+ */
+internal fun imageFormatName(format: Int): String = when (format) {
+    PixelFormat.RGBA_8888 -> "RGBA_8888"
+    ImageFormat.YUV_420_888 -> "YUV_420_888"
+    ImageFormat.JPEG -> "JPEG"
+    else -> "format $format"
+}
+
 /** A crop rectangle in source pixels. */
 internal data class CropRect(val left: Int, val top: Int, val width: Int, val height: Int)
 
@@ -235,7 +299,9 @@ internal object CenterCrop {
 
     /** Largest centered rectangle of [srcW] x [srcH] with the aspect ratio of [dstW] x [dstH]. */
     fun rect(srcW: Int, srcH: Int, dstW: Int, dstH: Int): CropRect {
-        require(srcW > 0 && srcH > 0 && dstW > 0 && dstH > 0) { "sizes must be positive: $srcW x $srcH -> $dstW x $dstH" }
+        require(srcW > 0 && srcH > 0 && dstW > 0 && dstH > 0) {
+            "sizes must be positive: $srcW x $srcH -> $dstW x $dstH"
+        }
         // Integer cross-multiplication: no float drift on the aspect comparison.
         return if (srcW.toLong() * dstH >= srcH.toLong() * dstW) {
             // Source is at least as wide as the target aspect: keep the full height, trim the sides.

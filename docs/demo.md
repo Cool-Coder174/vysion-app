@@ -7,9 +7,9 @@ Source: SRS §11. The demo is **90 seconds, three modes, one airplane-mode momen
 | t | Beat | Who | Lines / actions |
 |---|---|---|---|
 | 0:00 | Problem (10 s) | speaker | "Reading a sign, understanding a room, finding the exit. Three things a headset with cameras should do without sending a single frame to a server." |
-| 0:10 | Text Reader (20 s) | wearer | Looks at a printed menu or sign, says **"Vysion, read this."** Spoken transcript plus the large-print panel on the mirror screen. Then **"in Spanish."** |
+| 0:10 | Text Reader (20 s) | wearer | Looks at a printed menu or sign, says **"Vysion, read this."** Spoken transcript plus the large-print panel on the mirror screen. Then **"in Spanish."** (P1: today it switches the voice only; the Spanish re-read needs the retained still). If A-1 failed: the wearer holds the S25 Ultra at the sign for this beat and the next (`docs/assumptions.md` A-1 row) |
 | 0:30 | Audio Description (20 s) | wearer | Turns to a cluttered table, says **"Vysion, describe."** Three sentences, hazards first. |
-| 0:50 | Navigation (25 s) | wearer | Says **"Vysion, find the door."** Spatial ping, "door, 2 o'clock, 3 meters", wearer walks, outline follows, arrival cue with handle side. |
+| 0:50 | Navigation (25 s) | wearer | Says **"Vysion, find the door."** Spatial ping, "door, 2 o'clock, 3 meters", wearer walks, outline follows, arrival cue with handle side. If A-1 or A-13 failed, this beat becomes "Vysion, guide me" toward a wall: the proximity tone and "obstacle ahead" (FR-N1), plus "wall ahead" if FR-N5 (P1) landed; no door, and no outlines when A-1 failed |
 | 1:15 | Proof (15 s) | speaker | Holds up the headset's airplane-mode status on the mirror, points at the diagnostics panel: model, backend, median ms, fps, memory, "Network permission: none." One sentence on the architecture slide. Done. |
 
 Rehearse twice before Sun 13:00. Keep the whole thing under 90 s; the recorded backup is the same script.
@@ -22,7 +22,7 @@ Rehearse twice before Sun 13:00. Keep the whole thing under 90 s; the recorded b
 | Backend | ExecuTorch runtime delegate name | `ModelInfo.backend` |
 | Last VLM latency, median of session | timing hooks around the runner call | `InferenceStats.lastVlmMs`, `InferenceStats.medianVlmMs` |
 | Detector fps, 5 s window | frame counter in `detect()` | `InferenceStats.detectorFps` |
-| App memory, MB | `ActivityManager.getProcessMemoryInfo` | `DiagnosticsSnapshot.appMemoryMb` |
+| App memory, MB | `Debug.getPss()` total PSS of the app process, every 1 s (`MemorySampler`; not rate-limited, unlike `ActivityManager.getProcessMemoryInfo`) | `DiagnosticsSnapshot.appMemoryMb` |
 | Network permission | read from the manifest at runtime, prints "none" | `DiagnosticsSnapshot.networkPermission` |
 
 A field whose value has not been measured yet renders as **"not measured"**, never as a placeholder number (NFR "Honesty").

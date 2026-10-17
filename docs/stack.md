@@ -178,7 +178,7 @@ plugins {
 
 android {
     namespace = "com.vysion.xr"
-    compileSdk = libs.versions.compileSdk.get().toInt()   // 37: Compose 1.12 + xr-compose alpha14 note
+    compileSdk = libs.versions.compileSdk.get().toInt()   // 37: Compose 1.12 + Compose for XR beta01 (docs/stack.md §1)
 
     defaultConfig {
         applicationId = "com.vysion.xr"
@@ -188,11 +188,14 @@ android {
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += listOf("arm64-v8a") }          // Galaxy XR + S25 Ultra are arm64; drops ExecuTorch's x86_64 .so
+
+        // ADR-0008 / AppGraph.kt: -PuseFakes=true wires the Fake* modules (laptop emulator, S25 Ultra without models).
+        buildConfigField("boolean", "USE_FAKES", (project.findProperty("useFakes")?.toString() ?: "false"))
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false   // if you ever enable: add compileOnly("com.android.extensions.xr:extensions-xr:1.3.0")
+            isMinifyEnabled = false   // if ever enabled: add compileOnly("com.android.extensions.xr:extensions-xr:1.3.0") (stack.md §1)
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -204,14 +207,19 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     androidResources {
-        noCompress += "pte"   // uncompressed asset -> fast AssetManager copy to filesDir (ExecuTorch loads only real file paths)
+        noCompress += "pte"   // uncompressed asset → fast copy to filesDir; ExecuTorch loads only real file paths (A-11)
     }
 
     packaging {
         resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}")
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true   // android.util.Log etc. in JVM tests of stubs
     }
 }
 
@@ -232,17 +240,20 @@ dependencies {
 
     implementation(libs.kotlinx.coroutines.android)
 
+    // R1: two camera streams (ImageAnalysis 640x480 + ImageCapture still) on camera id 0
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
 
+    // R1/R3: Jetpack XR (Compose for XR panels, SceneCore spatial audio, ARCore for Jetpack XR perception)
     implementation(libs.androidx.xr.runtime)
     implementation(libs.androidx.xr.scenecore)
     implementation(libs.androidx.xr.compose)
     implementation(libs.androidx.xr.arcore)
 
-    implementation(libs.executorch.android)   // xnnpack flavor, includes LlmModule; NO network permission in its manifest
+    // R2: ExecuTorch runtime, XNNPACK flavor, includes LlmModule. No network permission in its manifest (ADR-0003).
+    implementation(libs.executorch.android)
 
     testImplementation(libs.junit4)
     testImplementation(libs.kotlinx.coroutines.test)
@@ -290,34 +301,44 @@ after `settings.gradle.kts` exists. (The wrapper in this repo was generated from
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vysion XR manifest. Sources and verification for every entry: docs/stack.md §2.7.
+  Privacy boundary (ADR-0003): NO network permission. CI greps this file and the merged manifest.
+-->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Jetpack XR feature flag. required="false" keeps ONE APK installable on the S25 Ultra fallback (D4).
+    <!-- Jetpack XR feature flag. required="false" keeps ONE APK installable on the S25 Ultra fallback (ADR-0006).
          https://developer.android.com/develop/xr/jetpack-xr-sdk/build-immersive -->
     <uses-feature android:name="android.software.xr.api.spatial" android:required="false" />
     <uses-feature android:name="android.hardware.xr.input.hand_tracking" android:required="false" />
-    <!-- Lint PermissionImpliesUnsupportedChromeOsHardware: CAMERA implies a camera feature; mark it optional. -->
+    <!-- CAMERA implies a camera feature; declare it optional so the APK is not filtered. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
+    <!-- World-facing camera (camera id 0) and the microphone for SpeechRecognizer. Both runtime permissions,
+         requested with a spoken explanation (FR-G1, platform/Permissions.kt). -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <!-- Android XR permissions. All are "dangerous": declare here AND request at runtime.
+
+    <!-- Android XR permissions. All "dangerous": declared here AND requested at runtime.
          https://developer.android.com/develop/xr/permissions
          https://developer.android.com/reference/androidx/xr/runtime/manifest/ManifestPermission -->
-    <uses-permission android:name="android.permission.SCENE_UNDERSTANDING_COARSE" /> <!-- planes, anchors, hitTest -->
-    <uses-permission android:name="android.permission.SCENE_UNDERSTANDING_FINE" />   <!-- depth maps -->
-    <uses-permission android:name="android.permission.HAND_TRACKING" />              <!-- Hand joint poses (pinch-and-hold) -->
-    <uses-permission android:name="android.permission.HEAD_TRACKING" />              <!-- DeviceTrackingMode.SPATIAL -> ArDevice head pose -->
+    <uses-permission android:name="android.permission.SCENE_UNDERSTANDING_COARSE" /> <!-- planes, anchors, hit tests (R3) -->
+    <uses-permission android:name="android.permission.SCENE_UNDERSTANDING_FINE" />   <!-- depth maps: proximity (FR-N1) -->
+    <uses-permission android:name="android.permission.HAND_TRACKING" />              <!-- pinch-and-hold push-to-talk (FR-G2, P1) -->
+    <uses-permission android:name="android.permission.HEAD_TRACKING" />              <!-- DeviceTrackingMode.SPATIAL → head pose (FR-N3/N4) -->
 
-    <!-- THERE IS NO android.permission.INTERNET IN THIS APP.
-         The next line is a manifest-merger GUARD, not a grant: it strips INTERNET if any library ever adds it,
-         so the overlay's "Network permission: none" stays true. Delete the line if your policy is "the string
-         must not appear"; the verified build had no transitive INTERNET without it. -->
+    <!-- This app declares NO network permission (ADR-0003).
+         The next two lines are manifest-merger GUARDS, not grants: they strip the permission if a library
+         adds it, so the overlay's "Network permission: none" (FR-G5) stays true on the merged APK.
+         ACCESS_NETWORK_STATE arrives transitively from androidx.media3:media3-exoplayer (pulled in by
+         SceneCore); we never use ExoPlayer, and media3's NetworkTypeObserver catches the SecurityException
+         (verified with javap on media3-common 1.10.0, 2026-10-17). scripts/check_privacy.sh accepts only
+         the tools:node="remove" form. -->
     <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
 
-    <!-- Package visibility for the SpeechRecognizer fallback (createSpeechRecognizer, targetSdk >= 30).
-         https://developer.android.com/reference/android/speech/SpeechRecognizer#createSpeechRecognizer(android.content.Context) -->
+    <!-- Package visibility for the SpeechRecognizer fallback (createSpeechRecognizer, targetSdk ≥ 30). -->
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService" />
@@ -325,11 +346,13 @@ after `settings.gradle.kts` exists. (The wrapper in this repo was generated from
     </queries>
 
     <application
-        android:label="Vysion XR"
+        android:name=".VysionApplication"
+        android:label="@string/app_name"
         android:allowBackup="false"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
-        <!-- Launch straight into Full Space (Jetpack XR managed). Other documented value: XR_ACTIVITY_START_MODE_HOME_SPACE.
+        <!-- Launch straight into Full Space (Jetpack XR managed) with passthrough (FR-G1).
+             Other documented value: XR_ACTIVITY_START_MODE_HOME_SPACE.
              https://developer.android.com/develop/xr/jetpack-xr-sdk/build-immersive -->
         <property
             android:name="android.window.PROPERTY_XR_ACTIVITY_START_MODE"
@@ -339,8 +362,12 @@ after `settings.gradle.kts` exists. (The wrapper in this repo was generated from
             android:name="android.window.PROPERTY_XR_BOUNDARY_TYPE_RECOMMENDED"
             android:value="XR_BOUNDARY_TYPE_LARGE" />
 
+        <!-- configChanges: rotating the S25 Ultra (2D fallback) or resizing the Home Space window must not run
+             onStop/onStart (which cancels an in-flight Read and re-speaks the welcome); Compose recomposes in
+             place and the XR Session keeps its Activity. -->
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboardHidden"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -351,10 +378,14 @@ after `settings.gradle.kts` exists. (The wrapper in this repo was generated from
 </manifest>
 ```
 
-Manifest notes (verified): the merged debug APK from this manifest carried the declared permissions plus
-transitive `ACCESS_NETWORK_STATE`, `WAKE_LOCK` and `com.vysion.xr.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`,
-and **no INTERNET** (BS-AC aapt2). The overlay must therefore test for `android.permission.INTERNET`
-specifically (section 3-R5). Lint warnings you will see and may ignore: `OldTargetApi` (36 vs 37),
+Manifest notes (verified): without the second guard the merged debug APK carried the declared permissions plus
+transitive `ACCESS_NETWORK_STATE` (from `androidx.media3:media3-exoplayer`, pulled in by SceneCore), `WAKE_LOCK`
+and `com.vysion.xr.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, and no INTERNET (BS-AC aapt2). With both
+`tools:node="remove"` guards above, the merged APK keeps `WAKE_LOCK` (and the signature permission) only; any
+NET_PERMS entry (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_NETWORK_STATE`) is a bug, and
+`ManifestAudit` (overlay) and `scripts/check_privacy.sh` (CI, merged manifest) both flag the full set (see
+"Corrections found at build time"). The `configChanges` attribute keeps rotation (S25 Ultra) and Home Space
+resizes from recreating the activity. Lint warnings you will see and may ignore: `OldTargetApi` (36 vs 37),
 `MissingApplicationIcon` (add `android:icon` once a mipmap exists), `allowBackup` deprecated (use
 `dataExtractionRules` later), `ChromeOsAbiSupport` (expected with arm64-only).
 `android.permission.HEAD_TRACKING` is NOT on the /develop/xr/permissions overview page; its sources are the
@@ -363,6 +394,10 @@ specifically (section 3-R5). Lint warnings you will see and may ignore: `OldTarg
 ### 2.8 `.github/workflows/ci.yml`
 
 ```yaml
+# CI: the merge gate for the 15-minute cadence (docs/schedule.md).
+# A branch is "green" when the JVM unit tests pass, the debug APK assembles, and the privacy gate
+# is clean on the MERGED manifest (ADR-0003). Nothing here needs a device or a model file.
+# Action versions: docs/stack.md §1 (verified 2026-10-17).
 name: ci
 
 on:
@@ -373,10 +408,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
 
@@ -391,24 +430,45 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6
 
-      - name: Unit tests
-        run: ./gradlew testDebugUnitTest --no-daemon
+      - name: JVM unit tests
+        run: ./gradlew --console=plain --no-daemon testDebugUnitTest
 
       - name: Assemble debug APK
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew --console=plain --no-daemon assembleDebug
 
-      - name: Lint (report only; see stack-pins.md section 2.7 for the known warnings)
-        run: ./gradlew :app:lintDebug --no-daemon
+      - name: Privacy gate (source + merged manifest, frame persistence, network SDKs)
+        run: bash scripts/check_privacy.sh
+
+      - name: Cue placement gate (every spoken string lives in voice/Cues.kt)
+        run: if [ -x scripts/check_cues.sh ]; then bash scripts/check_cues.sh; else echo "scripts/check_cues.sh not present yet (R4)"; fi
+
+      - name: Lint (report only until docs/stack.md Q17 is closed)
+        run: ./gradlew --console=plain --no-daemon :app:lintDebug
         continue-on-error: true
 
-      - uses: actions/upload-artifact@v7
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v7
         with:
-          name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: vysion-xr-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7
+
+      - name: Upload unit test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reports
+          path: |
+            app/build/reports/tests/testDebugUnitTest
+            app/build/reports/lint-results-debug.html
+          retention-days: 7
 ```
 
-ci.yml was not executed by anyone (no runner); the local equivalent `assembleDebug testDebugUnitTest` was
-(BS researcher). Lint is `continue-on-error` because the scaffold as first built failed lint on exactly the two
+This is the repo's real `ci.yml`: unit tests, assemble, the privacy gate (after assemble, so it sees the merged
+manifest), the cue gate and a report-only lint. The GitHub required-check context for branch protection is the job
+name, `build`. ci.yml was not executed by anyone yet (no runner); the local equivalent
+`assembleDebug testDebugUnitTest` plus `scripts/check_privacy.sh` and `scripts/check_cues.sh` was. Lint is `continue-on-error` because the scaffold as first built failed lint on exactly the two
 items fixed above (D6 opt-in, camera uses-feature); once those are in, consider removing the flag.
 
 ---
@@ -969,30 +1029,30 @@ icons ≥ 48 dp, text ≥ 14 dp, 0.868 dp-to-dmm, panels at 1.75 m
 
 ### R5 — memory and permission introspection (diagnostics overlay)
 
-Sources: https://developer.android.com/reference/android/app/ActivityManager#getProcessMemoryInfo(int[]) ,
+Sources: https://developer.android.com/reference/android/os/Debug#getPss() ,
+https://developer.android.com/reference/android/app/ActivityManager#getProcessMemoryInfo(int[]) ,
 https://developer.android.com/reference/android/os/Debug.MemoryInfo , https://developer.android.com/reference/android/os/Debug ,
 https://developer.android.com/reference/android/content/pm/PackageManager#getPackageInfo(java.lang.String,%20android.content.pm.PackageManager.PackageInfoFlags) ,
 https://developer.android.com/reference/android/content/pm/PackageInfo#requestedPermissions . DV-PS + DV-AC.
 
 | Fact | Exact |
 |---|---|
-| Memory | `ActivityManager.getProcessMemoryInfo(int[] pids): Debug.MemoryInfo[]` (kB; since Q only own uid, and rate-limited: faster polling returns the previous sample → poll ≤ every ~5 s); `Debug.MemoryInfo.getTotalPss(): Int` (kB) and `getMemoryStat("summary.total-pss")` (API 23; other keys `summary.java-heap, summary.native-heap, summary.code, summary.stack, summary.graphics, summary.private-other, summary.system, summary.total-swap`) are the right "resident" numbers because PSS counts resident file-backed mmapped pages (the mmapped .pte); `Debug.getNativeHeapAllocatedSize()` (bytes) is malloc-only (model NOT in it); `Runtime.totalMemory()` is Java heap only; `Debug.getRss()` is **API 35 — absent on Galaxy XR (API 34) → guard `Build.VERSION.SDK_INT >= 35`** |
-| Permissions | `PackageManager.getPackageInfo(String, PackageManager.PackageInfoFlags.of(PackageManager.GET_PERMISSIONS.toLong()))` (API 33; `GET_PERMISSIONS = 4096`); `PackageInfo.requestedPermissions: String[]?` (null if none; only filled with GET_PERMISSIONS); `requestedPermissionsFlags` (API 16, `REQUESTED_PERMISSION_GRANTED = 2`). Test for `android.permission.INTERNET` specifically: the merged APK legitimately contains `ACCESS_NETWORK_STATE` and `WAKE_LOCK` from libraries |
+| Memory | **The app uses `Debug.getPss(): Long`** (kB, own process, reads smaps on every call, not rate-limited; `MemorySampler`, 1 Hz). `ActivityManager.getProcessMemoryInfo(int[] pids): Debug.MemoryInfo[]` (kB; since Q only own uid, and throttled: AOSP returns the cached sample for `MEMORY_INFO_THROTTLE_TIME`, 5 min by default, so the app does NOT use it); `Debug.MemoryInfo.getTotalPss(): Int` (kB) and `getMemoryStat("summary.total-pss")` (API 23; other keys `summary.java-heap, summary.native-heap, summary.code, summary.stack, summary.graphics, summary.private-other, summary.system, summary.total-swap`) are the right "resident" numbers because PSS counts resident file-backed mmapped pages (the mmapped .pte); `Debug.getNativeHeapAllocatedSize()` (bytes) is malloc-only (model NOT in it); `Runtime.totalMemory()` is Java heap only; `Debug.getRss()` is **API 35 — absent on Galaxy XR (API 34) → guard `Build.VERSION.SDK_INT >= 35`** |
+| Permissions | `PackageManager.getPackageInfo(String, PackageManager.PackageInfoFlags.of(PackageManager.GET_PERMISSIONS.toLong()))` (API 33; `GET_PERMISSIONS = 4096`); `PackageInfo.requestedPermissions: String[]?` (null if none; only filled with GET_PERMISSIONS); `requestedPermissionsFlags` (API 16, `REQUESTED_PERMISSION_GRANTED = 2`). The merged APK keeps `WAKE_LOCK` only; any NET_PERMS entry (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_NETWORK_STATE`) is a bug, so test the full set, not `INTERNET` alone (`ManifestAudit`) |
 
 ```kotlin
 class Diagnostics(private val ctx: Context) {
     private val am = ctx.getSystemService(ActivityManager::class.java)
-    fun memory(): String {                                              // call at most every ~5 s
-        val mi: Debug.MemoryInfo = am.getProcessMemoryInfo(intArrayOf(Process.myPid()))[0]
-        val pssMb = mi.totalPss / 1024
+    fun memory(): String {                                              // 1 Hz is fine: Debug.getPss() is not throttled
+        val pssMb = Debug.getPss() / 1024                               // getProcessMemoryInfo would be cached for minutes
         val rssMb = if (Build.VERSION.SDK_INT >= 35) Debug.getRss() / 1024 else -1L
         val nativeHeapMb = Debug.getNativeHeapAllocatedSize() / (1024 * 1024)
         return "PSS $pssMb MB" + (if (rssMb >= 0) " · RSS $rssMb MB" else "") + " · native heap $nativeHeapMb MB"
     }
     fun networkPermission(): String {
         val info = ctx.packageManager.getPackageInfo(ctx.packageName, PackageManager.PackageInfoFlags.of(PackageManager.GET_PERMISSIONS.toLong()))
-        val hasInternet = info.requestedPermissions?.contains(Manifest.permission.INTERNET) == true
-        return "Network permission: " + if (hasInternet) "INTERNET (BUG)" else "none"
+        val net = info.requestedPermissions.orEmpty().filter { it in NET_PERMS }   // INTERNET, ACCESS_NETWORK_STATE, …
+        return "Network permission: " + if (net.isNotEmpty()) "${net.joinToString()} (BUG)" else "none"
     }
 }
 ```
@@ -1078,3 +1138,20 @@ Append a row whenever a device run or a Gradle build proves a line above wrong. 
 | Date | Line above | What was wrong | What is right | Evidence |
 |---|---|---|---|---|
 | | | | | |
+| 2026-10-17 | §3 R3 "Head pose" (`RenderViewpoint.left/right/mono(session).state.value … fieldOfView`) | Names the property but not its type, which invites a non-existent `androidx.xr.runtime.FieldOfView` import | `fieldOfView` is `androidx.xr.runtime.math.FieldOfView(angleLeft, angleRight, angleUp, angleDown)` (four `Float`s; radians per OpenXR `XrFovf`, left/down negative, unit still UNVERIFIED on the device) | javap on the cached rc02/1.1.0-alpha01 jars (`androidx/xr/runtime/math/FieldOfView.class`; no class of that name in `androidx.xr.runtime`) |
+| 2026-10-17 | §3 R3 "Config" (`DeviceTrackingMode {DISABLED, SPATIAL} (+experimental INERTIAL)`) | Incomplete list of modes | `DeviceTrackingMode` has `DISABLED`, `SPATIAL`, `LAST_KNOWN`, `SPATIAL_LAST_KNOWN`, `INERTIAL`, `INERTIAL_LAST_KNOWN`; Vysion uses `SPATIAL` | javap on the cached rc02/1.1.0-alpha01 jars (`javap androidx.xr.runtime.DeviceTrackingMode`) |
+| 2026-10-17 | §3 R3 "Create" / "Configure" (the `Session` surface) | Omits two public members R3 needs | `Session` also exposes `coroutineScope: CoroutineScope` and `activity: Activity` (public getters) besides `config` / `configure` | javap on the cached rc02/1.1.0-alpha01 jars (`javap androidx.xr.runtime.Session`) |
+| 2026-10-17 | §1 D2 (`androidx.xr.runtime:runtime` 1.0.0-rc02: "1.1.0-alpha01's only change is `SPATIAL_API_V4`") | Not the only difference: the internal `androidx.xr.runtime.internal.XrInstanceManager` also changed (lazy native-provider init) | The public API is identical apart from `SpatialApiVersions.SPATIAL_API_V4` / `LATEST_STABLE_API_LEVEL = 4`; `Session`, `DeviceTrackingMode` and `math.FieldOfView` class files are byte-identical. The build resolves runtime **1.0.0-rc02** and both AARs are now in the Gradle cache, so the pin stands | javap on the cached rc02/1.1.0-alpha01 jars (`cmp` of the class files, `javap -p -c` diff of `XrInstanceManager`); `./gradlew :app:dependencies --configuration debugRuntimeClasspath` |
+| 2026-10-17 | §2.7 manifest (one `INTERNET` guard only) and §3-R5 "Permissions" ("test for `android.permission.INTERNET` specifically: the merged APK legitimately contains `ACCESS_NETWORK_STATE`") | `ACCESS_NETWORK_STATE` was treated as a legitimate merged permission and the overlay snippet tested `INTERNET` alone | Both `INTERNET` and `ACCESS_NETWORK_STATE` are removed with `tools:node="remove"`; the merged APK keeps `WAKE_LOCK` only; `ManifestAudit` and `scripts/check_privacy.sh` flag the full NET_PERMS set (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_NETWORK_STATE`) | `javap -c -p` of `androidx.media3.common.util.NetworkTypeObserver` in `media3-common-1.10.0.aar` (the `getActiveNetworkInfo()` call sits in a `SecurityException` handler that returns "unknown"); merged manifest `app/build/intermediates/merged_manifest/debug/processDebugMainManifest/AndroidManifest.xml` lists neither permission |
+| 2026-10-17 | §3-R5 "Memory" (`getProcessMemoryInfo` … "poll ≤ every ~5 s") | The throttle is far longer than 5 s for apps: AOSP caches the calling process's sample for `MEMORY_INFO_THROTTLE_TIME` (5 min default), so a 1 Hz overlay would freeze | `MemorySampler` uses `Debug.getPss()` (own process, not rate-limited, same total PSS) | AOSP `ActivityManagerService.getProcessMemoryInfo` (`MEMORY_INFO_THROTTLE_TIME`); `MemorySampler.kt` KDoc |
+| 2026-10-17 | §2.4 `app/build.gradle.kts`, §2.7 manifest, §2.8 `ci.yml` | The ready-to-paste copies had drifted from the repo (no `USE_FAKES` `buildConfigField` / `buildConfig = true` / `testOptions`, no `configChanges`, no privacy or cue CI steps) | §2.4, §2.7 and §2.8 now hold the repo files verbatim | `diff` against `app/build.gradle.kts`, `app/src/main/AndroidManifest.xml`, `.github/workflows/ci.yml` |
+| 2026-10-17 | §3 R3 "Hit test" / "Anchors" (`Ray` / `Pose` / `Vector3` in `androidx.xr.runtime.math`, no constructors given) and the `XrPerceptionSession` snippets (`v3()`, `toTracking()`, `toPlaneKind()`) | No constructor or type-mapping row; the snippets call bridge functions that exist nowhere | `Vector3(x: Float, y: Float, z: Float)` with `x/y/z`; `Pose(translation: Vector3 = Vector3(), rotation: Quaternion = Quaternion())` (default `Quaternion()` = (0, 0, 0, 1), identity) plus a `Pose(Vector3)` overload; `Vector2(x, y)`. `arcore.TrackingState`, `arcore.PlaneLabel` and `scenecore.SpatialCapability` are final classes with static instances, not enums, so every `when` over them needs `else`. R3 writes the bridges as private functions in `XrPerceptionSession.kt`: `Vector3.v3()`, `Vec3.toVector3()`, `TrackingState.toTracking()`, `PlaneLabel.toPlaneKind()` (code in its class KDoc) | javap on the cached runtime / arcore / scenecore 1.0.0-rc02 jars (`javap -c` of the `Pose` and `Quaternion` default constructors) |
+| 2026-10-17 | §3 R3 code block, step 1 (`speaker.error("XR session unavailable")`) and step 5 (`speaker.say(Cues.NO_DOOR)`) | Neither call exists (`Speaker` has no `error`; `Cues` has `doorNotFound`, no `NO_DOOR`), and R3 holding a `Speaker` breaks INV-4 and docs/contracts.md ("R3 never builds strings") | R3 never speaks: an unavailable session sets `SessionState.UNAVAILABLE`; a door with no hit makes `placeFromBearing` return `null` and R1 speaks `ModePhrasebook.doorNotFound`. The step 6 `pool.load(assets.openFd(…), 0)` needs an `AssetManager` (`XrPerceptionSession` must expose `internal val assets`) and should pass priority `1` (Android's documented value) | `core/Contracts.kt` (`Speaker`), `voice/Cues.kt`, docs/modules/r3-spatial-perception.md (adapted snippet) |
+| 2026-10-17 | §3 R3 "Depth" (`smoothDepthMap: FloatBuffer?` (meters)) | Does not say whether a value is the distance along the pixel's ray or along the optical axis, which changes FR-N3's off-axis door distance by up to 1/cos(angle) | still UNVERIFIED: on the first device run compare `sampleDepthAlongBearing` at ±30° against a tape measure; if the map is axial, divide by the cosine of the angle off the axis (`XrPerceptionSession.sampleDepthAlongBearing` KDoc) | none yet |
+| 2026-10-17 | §5 Q3 ("log `cameraIdList`, resolution, format, fps") | Nobody measured the camera's horizontal FOV, which R3's `BearingAngles` (left / center / right → degrees) needs; the still is center-cropped, so the full-sensor FOV is the wrong number | Q3 also logs the horizontal FOV of the cropped still (R1): `hfov = 2·atan(SENSOR_INFO_PHYSICAL_SIZE.width / (2·LENS_INFO_AVAILABLE_FOCAL_LENGTHS[0]))`, `hfovCrop = 2·atan((H/W)·tan(hfov/2))` for the square crop of a W×H frame, logged as `vysion: still hfov=<deg> deg (A-1)`. R3 then sets `BearingAngles.LEFT_DEG / RIGHT_DEG = ∓atan((2/3)·tan(hfovCrop/2))` and records it in docs/assumptions.md A-1 | `CameraFrameSource.start()` KDoc; `XrAnchorStore.kt` `BearingAngles` KDoc |
+| 2026-10-17 | §5 Q11 "If no" ("stereo-panned SoundPool from bearing") | Disagrees with docs/assumptions.md A-6, which is what the code implements | If no: `DoorBearing.pinged = false`, R1 plays the non-spatial `Earcon.PING` through the `Speaker` and the guidance period drops to 2 s (assumptions.md A-6). No stereo pan is planned | `XrNavigationEngine` (`FALLBACK_GUIDANCE_PERIOD_MS`), `ModeController.onCue`, `XrNavigationEngineTest` |
+| 2026-10-17 | §5 (missing question) | Nothing asks whether `Session.create(context = activity)` (R3, `XrPerceptionSession`) and Compose for XR's `LocalSession.current` (R1, `SpatialShell`) are the same session; the SRS says the ARCore session is "created from the Compose for XR session" | **Q21** (R3 + R1, Sat 12:00): log `System.identityHashCode` of both on the first headset run. If they differ and either misbehaves (no `scene` capabilities, no audio from an `AnchorSpace` entity), R1 hands `LocalSession.current` to `AppGraph.startPerception` and R3 configures it instead of creating its own (announced like a contract change). If no: two sessions coexist and nothing changes | docs/modules/r3-spatial-perception.md Contract issue 7, r1 page open issue 11 |
+| 2026-10-17 | §3 R1 "Provider" (`bindToLifecycle(LifecycleOwner, …)`, no owner given) | `FrameSource.start()` has no Activity, and no snippet showed where the `LifecycleOwner` comes from | An owner the source drives itself: `private val owner = object : LifecycleOwner { val registry = LifecycleRegistry(this); override val lifecycle: Lifecycle get() = registry }`; in `start()` on `Dispatchers.Main`: INITIALIZED → CREATED and `bindToLifecycle(owner, …)` once, then STARTED; in `stop()` on Main: CREATED; never DESTROYED (stop is reversible). `LifecycleRegistry(this)` enforces the main thread on state changes | javap on the cached lifecycle-runtime-android 2.11.0 (`LifecycleRegistry(LifecycleOwner)`, `getCurrentState`, `setCurrentState`) and lifecycle-common-jvm 2.11.0 (`LifecycleOwner.getLifecycle()`); `CameraFrameSource.start()` KDoc |
+| 2026-10-17 | §3 R1 "Bitmap" ("rotation via `imageInfo.rotationDegrees`") | No snippet, no log line, and nothing says the value must be read before the `ImageProxy` closes | Inside `onCaptureSuccess`: `val r = image.imageInfo.rotationDegrees; val raw = image.use { it.toBitmap() }`; if `r != 0`, `Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, Matrix().apply { postRotate(r.toFloat()) }, true)` and recycle `raw`; then `CenterCrop`. Log once `vysion: still <w>x<h> rotation=<r> -> <edge>x<edge> (A-1)` from locals (not `bitmap.` / `frame.`, which `check_privacy.sh` §4 flags in a log call) | `CameraFrameSource.captureStill()` KDoc |
+| 2026-10-17 | §3-R2 "VLM path" (`vlm.generate(PromptLibrary.READ, …)` after `prefillImages`) | Silent on Gemma 3's chat template: nobody checked whether `LlmModule`'s multimodal runner or the optimum-executorch `.pte` applies it, or where the image goes relative to the user turn | UNVERIFIED. On the first device answer (S25 Ultra or headset) A/B two forms on the same printed sign: (a) raw: `prefillImages(…)` then `generate(READ, …)`; (b) wrapped: `prefillPrompt("<start_of_turn>user\n")`, `prefillImages(…)`, then `generate(READ + "<end_of_turn>\n<start_of_turn>model\n", …)`. Keep the one that answers with only the sign's text; the wrapping lives in `ExecuTorchInferenceEngine.prefillLocked` / `generateLocked`, never in `PromptLibrary`. Replace this row's "UNVERIFIED" with the result | ml/README.md §3 "Prompt format"; `generateLocked` KDoc |
+| 2026-10-17 | §3-R2 "VLM path" (`prefillImages(rgbChwUint8 …)   // or prefillNormalizedImage(…)`) with §5's "mean=std=0.5" | Two inputs offered, no rule for picking one | UNVERIFIED. Start with `prefillImages(IntArray uint8 CHW, w, h, 3)` (the engine's KDoc), which is right if the exported `vision_encoder` normalizes internally; if the answer to a printed sign is garbage, switch to `prefillImages(FloatArray CHW, w, h, 3)` with `((v / 255) - 0.5) / 0.5` per channel. Accept when `onStats` `prompt_tokens` = `IMAGE_SOFT_TOKENS` (256 expected) + the prompt's tokens and the sign is read correctly; record the overload here | ml/README.md §3 "Image input"; `prefillLocked` KDoc |

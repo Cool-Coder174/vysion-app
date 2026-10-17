@@ -28,6 +28,7 @@ class FakeTtsPort(private val ready: Boolean = true) : TtsPort {
     val spoken = mutableListOf<Spoken>()
     val rates = mutableListOf<Float>()
     var stopCalls = 0
+    var shutdownCalls = 0
     var accept = true
     var bindable: (Locale) -> Locale? = { it }
     lateinit var listener: TtsPort.Listener
@@ -51,7 +52,9 @@ class FakeTtsPort(private val ready: Boolean = true) : TtsPort {
     }
 
     override fun setLocale(requested: Locale): Locale? = bindable(requested)
-    override fun shutdown() = Unit
+    override fun shutdown() {
+        shutdownCalls++
+    }
 
     fun start(index: Int) = listener.onStart(spoken[index].id)
     fun range(index: Int, start: Int, end: Int) = listener.onRangeStart(spoken[index].id, start, end)
@@ -246,15 +249,70 @@ class AndroidSpeakerTest {
         val port = FakeTtsPort()
         val speaker = speaker(port)
         assertEquals(Speaker.EN_US, speaker.locale.value)
-        port.bindable = { Locale.forLanguageTag("es-ES") } // es-MX missing, es-ES present
+        // es-MX missing, es-ES present; other languages bind as asked (no engine answers en-US with es-ES)
+        port.bindable = { if (it.language == "es") Locale.forLanguageTag("es-ES") else it }
         speaker.setLocale(Speaker.ES_MX)
         assertEquals("es-ES", speaker.locale.value.toLanguageTag())
         speaker.setLocale(Speaker.EN_US)
+        assertEquals(Speaker.EN_US, speaker.locale.value)
         port.bindable = { null } // no Spanish voice at all
         speaker.setLocale(Speaker.ES_MX)
         runCurrent()
         assertEquals(Speaker.EN_US, speaker.locale.value)
         assertEquals(Cues.spanishVoiceUnavailable(Speaker.EN_US), port.spoken.last().text)
+    }
+
+    @Test
+    fun `a Spanish request remembered before init falls back to en-US with the notice at init (A-8)`() = runTest {
+        val port = FakeTtsPort(ready = false)
+        val speaker = speaker(port)
+        port.bindable = { if (it.language == "es") null else it } // no offline Spanish voice
+        speaker.setLocale(Speaker.ES_MX)
+        assertEquals(Speaker.ES_MX, speaker.locale.value) // remembered, not bound yet
+        port.listener.onInit(true)
+        runCurrent()
+        assertEquals(Speaker.EN_US, speaker.locale.value)
+        assertEquals(listOf(Cues.spanishVoiceUnavailable(Speaker.EN_US)), port.spoken.map { it.text })
+        port.done(0)
+        runCurrent()
+        // a failed non-Spanish request keeps the voice in use and never says the Spanish notice
+        port.bindable = { null }
+        speaker.setLocale(Locale.forLanguageTag("en-GB"))
+        runCurrent()
+        assertEquals(Speaker.EN_US, speaker.locale.value)
+        assertEquals(1, port.spoken.size)
+    }
+
+    @Test
+    fun `release silences, shuts the port down exactly once and makes later calls no-ops`() = runTest {
+        val port = FakeTtsPort()
+        val speaker = speaker(port)
+        val contract: Speaker = speaker // AppGraph.release() calls it through the contract (decision 3)
+        var returned = 0
+        for (t in listOf("a", "b")) launch { speaker.say(t); returned++ }
+        runCurrent()
+        assertTrue(speaker.isSpeaking.value)
+        assertEquals(1, speaker.queuedCount)
+        contract.release()
+        assertFalse(speaker.isSpeaking.value)
+        assertEquals(1, port.stopCalls)
+        assertEquals(1, port.shutdownCalls)
+        runCurrent()
+        assertEquals(2, returned) // the current and the queued say both returned
+        assertEquals(0, speaker.queuedCount)
+        contract.release()
+        contract.stop()
+        contract.setRate(Speaker.SLOWER_RATE)
+        var late = false
+        launch { contract.say("late"); late = true }
+        runCurrent()
+        assertTrue(late) // returns at once instead of throwing on the closed queue
+        assertEquals(1, port.shutdownCalls)
+        assertEquals(1, port.stopCalls)
+        assertEquals(listOf("a"), port.spoken.map { it.text })
+        assertEquals(listOf(1.0f), port.rates) // only the onInit rate; nothing reached the shut-down engine
+        port.listener.onInit(true) // a late init does not wake it either
+        assertEquals(listOf(1.0f), port.rates)
     }
 
     @Test

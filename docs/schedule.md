@@ -6,26 +6,28 @@ Each gate is a merge to `main` that R5 installs and runs on the headset before a
 
 > **Re-basing the clock.** The times below are the SRS's, counted from a Sat 10:30 start. The skeleton landed on Sat Oct 17 in the early afternoon, so gates 1–2 are already past on paper. When the team actually starts, R5 writes the real start time here, shifts every gate by the same delay, and applies the cut rule (P1 first) to whatever no longer fits before the Sun 11:00 freeze, which does **not** move because judging does not move.
 >
-> Actual start: ____ · Shift applied: ____ h · Items cut: ____
+> Actual start: not recorded yet · Shift applied: not recorded yet · Items cut: none yet
+>
+> R5 fills this before the first merge (r5 page, P0 "Re-base the clock"): **Actual start** = Sat HH:MM when the team began work on the headset; **Shift** = actual start − 10:30, in hours; then write each gate's shifted time in the "Due after shift" column (gate 8, the Sun 11:00 freeze, and gates 9–10 keep their times) and list the P1 items cut to fit. **Until it is filled, the "By" column is the due time** for every gate and every module-page item (the earliest possible), and an agent says so in its PR. Shifted due time of any task = its SRS time + Shift, capped at Sun 11:00 for anything that must merge.
 
-| # | Gate (runs on the headset) | By | `plan.md` phase | Owner | Evidence (fill in when passed) |
-|---|---|---|---|---|---|
-| 1 | Camera frames + ARCore session | Sat 12:00 | F1 | R1, R3 | |
-| 2 | `FrameSource` handoff (R1); ExecuTorch runtime loads a sample `.pte` (R2) | Sat 13:00 | F2 | R1, R2 | |
-| 3 | First merge; voice in/out (R4); `ModeController` skeleton | Sat 15:00 | F3 | R4, R1, R5 | |
-| 4 | VLM answers on headset (R2) | Sat 16:00 | F4 | R2 | |
-| 5 | Text Reader e2e; `NavigationCues` (R3) | Sat 19:00 | F5 | R1, R2, R3, R4 | |
-| 6 | Describe + proximity e2e; diagnostics overlay; outlines | Sat 22:00 | F6 | all | |
-| 7 | Find the door e2e | Sun 09:00 | F7 | R2, R3, R1 | |
-| 8 | **Feature freeze; README numbers** | **Sun 11:00** | F8 | R5, R2 | |
-| 9 | Backup video recorded | Sun 12:00 | F9 | R5 | |
-| 10 | Pitch rehearsed; submit | Sun 13:00 | F9 | R5 | |
+| # | Gate (runs on the headset) | By | Due after shift | `plan.md` phase | Owner | Evidence (fill in when passed) |
+|---|---|---|---|---|---|---|
+| 1 | Camera frames + ARCore session | Sat 12:00 | not recorded yet | F1 | R1, R3 | |
+| 2 | `FrameSource` handoff (R1); ExecuTorch runtime loads a sample `.pte` (R2) | Sat 13:00 | not recorded yet | F2 | R1, R2 | |
+| 3 | First merge; voice in/out (R4); `ModeController` skeleton | Sat 15:00 | not recorded yet | F3 | R4, R1, R5 | |
+| 4 | VLM answers on headset (R2) | Sat 16:00 | not recorded yet | F4 | R2 | |
+| 5 | Text Reader e2e; `NavigationCues` (R3) | Sat 19:00 | not recorded yet | F5 | R1, R2, R3, R4 | |
+| 6 | Describe + proximity e2e; diagnostics overlay; outlines | Sat 22:00 | not recorded yet | F6 | all | |
+| 7 | Find the door e2e | Sun 09:00 | not recorded yet | F7 | R2, R3, R1 | |
+| 8 | **Feature freeze; README numbers** | **Sun 11:00** | Sun 11:00 (never moves) | F8 | R5, R2 | |
+| 9 | Backup video recorded | Sun 12:00 | unchanged | F9 | R5 | |
+| 10 | Pitch rehearsed; submit | Sun 13:00 | unchanged | F9 | R5 | |
 
 ## Merge cadence
 
 - `main` is protected. One feature branch per role: `r1/xr-platform`, `r2/ml-executorch`, `r3/perception`, `r4/voice-ux`, `r5/integration` (sub-branches per task are fine: `r3/proximity`).
 - From Sat 15:00, a **15-minute merge cadence**: R5 merges whatever is green, reinstalls on the headset, and runs the gate checklist. Nobody waits on anyone until the first merge.
-- A merge is "green" when `./gradlew assembleDebug testDebugUnitTest` passes in CI and `scripts/check_privacy.sh` is clean.
+- A merge is "green" when `./gradlew assembleDebug testDebugUnitTest` passes in CI and `scripts/check_privacy.sh` and `scripts/check_cues.sh` are clean (CI runs all three, `.github/workflows/ci.yml`).
 - Nothing merges after the Sun 11:00 freeze except README, video links and the benchmark table.
 
 ## Daily timeline (hackathon, Oct 17–18 2026)
@@ -34,6 +36,7 @@ Each gate is a merge to `main` that R5 installs and runs on the headset before a
 |---|---|
 | Sat 10:30 | R5: repo, protected `main`, headset + S25 Ultra in hand, ADB working from every laptop, judging time confirmed in writing |
 | Sat 11:00 | Assumption checks ([`docs/assumptions.md`](assumptions.md)) done by R1, R2 |
+| Sat 11:00 | R2 + Isaac: VLM path decision (`plan.md` Q6, RK-13; default option C), recorded in [`docs/model-plan.md`](model-plan.md) and the `plan.md` Replan Log; gate 4 depends on it |
 | Sat 12:00 | Gate 1 |
 | Sat 13:00 | Gate 2 |
 | Sat 14:00 | R4: offline speech recognition verified (or demoted to P1); `scripts/fetch_models.sh` works from a fresh clone |

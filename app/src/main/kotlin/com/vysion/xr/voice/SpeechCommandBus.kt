@@ -128,10 +128,12 @@ class AndroidRecognizerPort(private val app: Application) : RecognizerPort {
  *   [CommandGrammar.parse] and come out as `CommandEvent(cmd, VOICE, System.nanoTime())` (monotonic, H-21;
  *   the ≤ 1.5 s command-to-action NFR is measured from `recognizedAtNanos` by R1);
  * - [state] is [ListeningState.UNAVAILABLE] from construction when on-device recognition is absent
- *   (A-7 failed → RK-4: pinch/panel are P0; R1 says [Cues.voiceCommandsUnavailable] on seeing it).
+ *   (A-7 failed → RK-4: pinch/panel are P0; R1 speaks [Cues.voiceCommandsUnavailable] once per run, through
+ *   `ModePhrasebook.voiceCommandsUnavailable`).
  *
- * The recognition language follows [setLocale] (R1 calls it alongside `Speaker.setLocale`); both
- * languages parse regardless. Never throws from [startListening] / [stopListening].
+ * The recognition language follows [setLocale] (`CommandBus.setLocale`; R1 calls it alongside
+ * `Speaker.setLocale`) from the next session on; both languages parse regardless. [release] is terminal and
+ * idempotent. Never throws from [startListening] / [stopListening].
  */
 class SpeechCommandBus internal constructor(
     private val recognizer: RecognizerPort,
@@ -154,6 +156,8 @@ class SpeechCommandBus internal constructor(
     override val state: StateFlow<ListeningState> = _state
 
     @Volatile private var locale: Locale = Speaker.EN_US
+
+    @Volatile private var released = false
 
     private var capJob: Job? = null
 
@@ -184,6 +188,7 @@ class SpeechCommandBus internal constructor(
 
     /** FR-G2: one session per pinch or mic press. No-op while UNAVAILABLE or already LISTENING. */
     override fun startListening() {
+        if (released) return // the recognizer is destroyed
         when (_state.value) {
             ListeningState.UNAVAILABLE -> return // A-7 failed; the panel/pinch path still works through inject()
             ListeningState.LISTENING -> return // idempotent; one session at a time
@@ -214,14 +219,21 @@ class SpeechCommandBus internal constructor(
         _commands.tryEmit(CommandEvent(command, source, System.nanoTime()))
     }
 
-    /** Recognition language for the next session (FR-G6). */
+    /** FR-G6: recognition language of the next session; a session already open keeps its language. */
     override fun setLocale(locale: Locale) {
         this.locale = locale
     }
 
-    /** Destroy the recognizer; `AppGraph.release()` calls this once, from `MainActivity.onDestroy` when finishing. */
+    /**
+     * `SpeechRecognizer.destroy()` (mandatory); `AppGraph.release()` calls it from `MainActivity.onDestroy`
+     * when finishing. Terminal and idempotent: destroys once, ends an open session, and later
+     * [startListening] calls are no-ops; [inject] keeps working.
+     */
     override fun release() {
+        if (released) return
+        released = true
         capJob?.cancel()
+        if (_state.value != ListeningState.UNAVAILABLE) _state.value = ListeningState.IDLE
         recognizer.destroy()
     }
 

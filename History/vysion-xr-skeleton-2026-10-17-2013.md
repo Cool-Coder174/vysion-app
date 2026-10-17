@@ -596,3 +596,6 @@ Immutable copy of `plan.md` at creation (engineer-workflow §2). The live roadma
 | 2026-10-17T22:05Z | F0 | Gradle resolution of every pin verified (dependency report green); tree compiles; 214 tests, 7 failing; privacy gate failed on a manifest comment and a transitive ACCESS_NETWORK_STATE (media3-exoplayer) | ✗ → fixed |
 | 2026-10-17T22:20Z | F0 | Orchestrator settled the agents' contract issues (seams into core, AppGraph wiring of cues and prompts, setLocale/release, DoorBearing.pinged, reversible stop + release, network-state guard); privacy gate green | ✓ |
 | 2026-10-17T22:25Z | F0 | Finishing workflow launched: fix 7 tests → build → 3 reviews → fix → rebuild → onboarding test (FR-N3, FR-T1) → polish | … in progress |
+| 2026-10-17T23:55Z | F0 | Finishing workflow (13 agents): 7 failing tests fixed (4 test bugs, 3 code bugs incl. a restart race in ModeController); 3 reviews → 60 findings, 53 applied, 7 documented as team items; onboarding test (FR-N3, FR-T1) → 23 gaps/contradictions closed | ✓ |
+| 2026-10-17T23:58Z | Verify | Orchestrator rerun from clean: assembleDebug + testDebugUnitTest BUILD SUCCESSFUL, 236 tests, 0 failures, 0 warnings; privacy gate and cue gate pass | ✓ JVM only, no device run |
+| 2026-10-18T00:00Z | F0 | Committed to main as a checkpoint (Isaac: skeleton work goes straight to main) | ✓ |

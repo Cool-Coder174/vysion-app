@@ -10,17 +10,19 @@ import com.vysion.xr.core.InferenceStats
 import com.vysion.xr.core.ModelInfo
 import java.io.File
 import java.lang.ref.WeakReference
+import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -59,7 +61,8 @@ import org.pytorch.executorch.extension.llm.LlmModule
  * [InferenceException] ("not loaded") and the controller speaks `Cues.inferenceFailed` instead of crashing.
  *
  * Invariants: INV-1 (one model executes at a time: every runtime call is under [mutex]); INV-2 (detector not
- * resident while the VLM generates: [unloadDetectorLocked] before, reload after, both under the same mutex);
+ * resident while the VLM generates: [unloadDetectorLocked] before, lazy reload in the next [detect], both under
+ * the same mutex);
  * INV-3 (frames stay in memory: `getPixels` into an array that is dropped after the call; no log of pixels);
  * INV-8 (nothing in here calls another module; data out only); INV-9 (the `Bitmap` is the caller's; it is only
  * read, never recycled, and the FR-D2 cache holds a [WeakReference]). Clocks: `System.nanoTime()` only (H-21).
@@ -67,7 +70,9 @@ import org.pytorch.executorch.extension.llm.LlmModule
 class ExecuTorchInferenceEngine(
     private val app: Application,
     private val catalog: ModelCatalog,
-    private val scope: CoroutineScope,
+    // Kept: the constructor is part of R2's contract in AppGraph. Nothing is launched on it any more (the detector
+    // reloads lazily inside detect()), so no work can outlive release() or reload the detector after it.
+    @Suppress("unused") private val scope: CoroutineScope,
 ) : InferenceEngine {
 
     // ADR-0004: ONE mutex around all inference; INV-1/INV-2/INV-8.
@@ -89,6 +94,16 @@ class ExecuTorchInferenceEngine(
     private var detectorFile: File? = null
     private var detectorEntry: ModelCatalog.Entry? = null
 
+    /**
+     * FR-G5: metadata of the resolved files ([resolveLocked]), published on [vlmInfo] / [detectorInfo] only once
+     * the matching model has actually loaded (Contracts.kt: "`null` until the model is loaded").
+     */
+    private var vlmInfoPending: ModelInfo? = null
+    private var detectorInfoPending: ModelInfo? = null
+
+    /** `System.nanoTime()` of the last `detect ms=… fps=…` log line; the line is written at most once per second. */
+    private var lastDetectLogNanos: Long? = null
+
     /** FR-D2 / FR-T4: the frame whose image tokens are in the KV cache; identity only, never dereferenced. */
     private var prefilled: WeakReference<Bitmap>? = null
 
@@ -98,9 +113,14 @@ class ExecuTorchInferenceEngine(
     private val vlmLatency = LatencyStats(LatencyStats.DEFAULT_CAPACITY)
     private val detectorFps = FpsWindow(FpsWindow.DEFAULT_WINDOW_NANOS)
 
-    /** Resolve files via the catalog (real), publish [ModelInfo] (real), load both models (stubs). Never throws. */
+    /**
+     * Resolve files via the catalog (real), load both models (stubs), publish [ModelInfo] for what loaded. Never
+     * throws. Idempotent: `ModeController.start()` calls it on every `onStart` and `AppGraph.stop()` keeps the
+     * models, so a loaded VLM returns at once (no reload, no second `LlmModule` beside the first; RK-3).
+     */
     override suspend fun warmUp(): Unit = withContext(Dispatchers.Default) {
         mutex.withLock {
+            if (vlm != null) return@withLock // already loaded; the detector reloads lazily in detect()
             val t0 = System.nanoTime()
             resolveLocked()
             loadVlmLocked()
@@ -116,7 +136,9 @@ class ExecuTorchInferenceEngine(
     /**
      * FR-T1 / FR-D1 / FR-N3 / FR-N6. Inside the mutex: unload the detector (INV-2), prefill the image unless this
      * exact [bitmap] is already in the KV cache (FR-D2), generate with a `seqLen` of prefilled + [maxNewTokens],
-     * record the latency, then reload the detector after the call returns (same mutex, [scheduleDetectorReload]).
+     * record the latency. The detector is NOT reloaded eagerly: the next [detect] reloads it lazily
+     * ([ensureDetectorLoadedLocked]); Navigation is paused for the whole one-shot, so the first detect after
+     * `resume()` pays the load (ADR-0004 "reloaded after"), and the two door-vote calls do not churn it.
      * Watchdog: [InferenceEngine.VLM_TIMEOUT_MS]; on timeout or cancellation `LlmModule.stop()` ends the blocking
      * generate (FR-G4) and the caller gets an [InferenceException] (timeout) or the cancellation.
      */
@@ -127,11 +149,14 @@ class ExecuTorchInferenceEngine(
      * Streaming override: the runner's `LlmCallback.onResult` delivers tokens as they decode
      * (`docs/stack.md` §3-R2, verified), so the Speaker can start before generation ends (FR-T1 ≤ 6 s to the
      * first spoken word). Same mutex, same unload/reload, same timing as [describe]; the final string is not
-     * re-emitted at the end.
+     * re-emitted at the end. The channel is unbounded (in practice bounded by `seqLen` ≤ [MAX_CONTEXT_LEN]), so a
+     * slow Speaker never makes `trySend` drop a token and speak a partial sentence as if complete (SRS §3 rule 5).
      */
     override fun describeStreaming(bitmap: Bitmap, prompt: String, maxNewTokens: Int): Flow<String> = channelFlow {
-        runVlmGuarded(bitmap, prompt, maxNewTokens) { token -> trySend(token) }
-    }
+        runVlmGuarded(bitmap, prompt, maxNewTokens) { token ->
+            if (trySend(token).isFailure) throw InferenceException("token stream overflow")
+        }
+    }.buffer(Channel.UNLIMITED)
 
     /**
      * FR-N2. Inside the mutex: make sure the detector is resident (lazy reload after a VLM call), read the frame's
@@ -166,7 +191,12 @@ class ExecuTorchInferenceEngine(
                 val now = System.nanoTime()
                 val ms = (now - t0) / NANOS_PER_MS
                 val fps = detectorFps.record(now)
-                _stats.update { it.copy(lastDetectMs = ms, detectorFps = fps) }
+                _stats.update { it.copy(lastDetectMs = ms, detectorFps = fps, lastDetectAtNanos = now) }
+                val lastLog = lastDetectLogNanos
+                if (lastLog == null || now - lastLog >= NANOS_PER_SECOND) { // FR-N2 evidence line, at most 1 Hz
+                    lastDetectLogNanos = now
+                    Log.i(TAG_LATENCY, "detect ms=$ms fps=${"%.1f".format(Locale.ROOT, fps)}")
+                }
                 detections
             } catch (e: CancellationException) {
                 throw e
@@ -180,7 +210,10 @@ class ExecuTorchInferenceEngine(
         }
     }
 
-    /** Unload everything (called from `onStop` through `AppGraph.stop`). Never throws. */
+    /**
+     * Unload everything. Called once from `AppGraph.release()` (`onDestroy` when finishing); `AppGraph.stop()`
+     * (`onStop`) keeps the models. Never throws.
+     */
     override suspend fun release(): Unit = withContext(Dispatchers.Default) {
         mutex.withLock {
             val runner = vlm
@@ -238,8 +271,6 @@ class ExecuTorchInferenceEngine(
             } catch (t: Throwable) {
                 prefilled = null
                 throw InferenceException("VLM failed: ${t.message}", t)
-            } finally {
-                scheduleDetectorReload()
             }
         }
     }
@@ -288,12 +319,15 @@ class ExecuTorchInferenceEngine(
      * ```
      * The frame must already be the VLM's input size (`FrameSource.captureStill()` center-crops to it). Expected
      * size for the default option C model: 896×896 → 256 soft tokens (`// stack.md: UNVERIFIED`).
+     * Which overload (`// stack.md: UNVERIFIED`, docs/stack.md "Corrections" §3-R2 row): uint8
+     * `prefillImages(IntArray)` above if the exported `vision_encoder` normalizes internally; otherwise
+     * `prefillImages(FloatArray, w, h, 3)` with
+     * `((v / 255f) - 0.5f) / 0.5f` per channel. Decide on the first device run: `onStats` `prompt_tokens` equals
+     * [IMAGE_SOFT_TOKENS] (+ prompt) and a printed sign is read correctly; record the result in stack.md.
      */
     private fun prefillLocked(runner: LlmModule, bitmap: Bitmap): Int {
-        TODO(
-            "FR-T1: ${runner.javaClass.simpleName}.resetContext() + prefillImages(IntArray uint8 CHW, " +
-                "${bitmap.width}, ${bitmap.height}, 3) per docs/stack.md §3-R2; return the prefilled token count",
-        )
+        TODO("FR-T1: ${runner.javaClass.simpleName}.resetContext() + prefillImages(IntArray uint8 CHW, " +
+            "${bitmap.width}, ${bitmap.height}, 3) per docs/stack.md §3-R2; return the prefilled token count")
     }
 
     /**
@@ -317,7 +351,8 @@ class ExecuTorchInferenceEngine(
      * }
      * ```
      * If the chosen VLM needs a chat template, wrap [prompt] here, not in `PromptLibrary` (ADR-0001 keeps the
-     * prompt text model-independent).
+     * prompt text model-independent). `// stack.md: UNVERIFIED` whether `LlmModule`'s multimodal runner applies
+     * Gemma 3's template itself; the A/B to run on the first device answer is in ml/README.md §3 "Prompt format".
      */
     private suspend fun generateLocked(
         runner: LlmModule,
@@ -325,11 +360,9 @@ class ExecuTorchInferenceEngine(
         seqLen: Int,
         onToken: (String) -> Unit,
     ): String {
-        TODO(
-            "FR-T1: ${runner.javaClass.simpleName}.generate(prompt(${prompt.length} chars), seqLen=$seqLen, " +
-                "LlmCallback → " +
-                "onToken, echo=false) per docs/stack.md §3-R2 (LlmModule.generate(String, int, LlmCallback, boolean))",
-        )
+        TODO("FR-T1: ${runner.javaClass.simpleName}.generate(prompt(${prompt.length} chars), seqLen=$seqLen, " +
+            "LlmCallback → onToken, echo=false) per docs/stack.md §3-R2 " +
+            "(LlmModule.generate(String, int, LlmCallback, boolean))")
     }
 
     // ── Detector path ────────────────────────────────────────────────────────────────────────────────
@@ -349,49 +382,59 @@ class ExecuTorchInferenceEngine(
         inputW: Int,
         inputH: Int,
     ): Pair<FloatArray, LongArray> {
-        TODO(
-            "FR-N2: ${module.javaClass.simpleName}.forward(EValue.from(Tensor.fromBlob(chw[${chw.size}], " +
-                "longArrayOf(1, 3, $inputH, $inputW))))[0].toTensor() → (getDataAsFloatArray(), shape()) " +
-                "per docs/stack.md §3-R2",
-        )
+        TODO("FR-N2: ${module.javaClass.simpleName}.forward(EValue.from(Tensor.fromBlob(chw[${chw.size}], " +
+            "longArrayOf(1, 3, $inputH, $inputW))))[0].toTensor() → (getDataAsFloatArray(), shape()) " +
+            "per docs/stack.md §3-R2")
     }
 
     // ── Lifecycle (under the mutex) ──────────────────────────────────────────────────────────────────
 
-    /** Real: find the three artifacts through the catalog and publish their [ModelInfo]. Failures are logged only. */
+    /**
+     * Real: find the three artifacts through the catalog (which checks them against the lockfile and fails closed,
+     * plan.md Security) and prepare their [ModelInfo]. Nothing is published here: [loadVlmLocked] /
+     * [loadDetectorLocked] publish the info only after the model loaded, so the overlay never names a model that
+     * is not resident (FR-G5, NFR Honesty). Failures are logged only.
+     */
     private fun resolveLocked() {
         vlmFile = resolveOrNull(ModelCatalog.VLM)
         tokenizerFile = resolveOrNull(ModelCatalog.VLM_TOKENIZER)
         detectorFile = resolveOrNull(ModelCatalog.DETECTOR)
         detectorEntry = catalog.entry(ModelCatalog.DETECTOR)
-        // FR-G5: backend/quantization/name from the lockfile (export metadata, ADR-0002), size from the file.
-        // LlmModule exposes no metadata API; for the detector the real load replaces `backend` with
+        // FR-G5: quantization/name from the lockfile (export metadata, ADR-0002), size from the file. LlmModule
+        // exposes no metadata API; for the detector the real load replaces `backend` with
         // module.getMethodMetadata("forward").getBackends().joinToString() ("XnnpackBackend").
-        _vlmInfo.value = if (vlmFile != null) runCatching { catalog.modelInfo(ModelCatalog.VLM) }.getOrNull() else null
-        _detectorInfo.value =
-            if (detectorFile != null) runCatching { catalog.modelInfo(ModelCatalog.DETECTOR) }.getOrNull() else null
+        vlmInfoPending = vlmFile?.let { infoOrNull(ModelCatalog.VLM, it) }
+        detectorInfoPending = detectorFile?.let { infoOrNull(ModelCatalog.DETECTOR, it) }
     }
+
+    private fun infoOrNull(name: String, file: File): ModelInfo? =
+        runCatching { catalog.modelInfo(name, file) }.getOrNull()
 
     private fun resolveOrNull(name: String): File? = try {
         catalog.resolve(name).also { Log.i(TAG, "$name → ${it.absolutePath} (${it.length()} bytes)") }
     } catch (e: InferenceException) {
+        // Integrity failures (size / sha256 against the lockfile) are logged by ModelCatalog under vysion.security.
         Log.w(TAG, "$name unavailable: ${e.message}")
         null
     }
 
     /**
-     * Stub (device). Real body (`docs/stack.md` §3-R2, VERIFIED at v1.3.1):
+     * Stub (device). Idempotent: returns at once while a VLM is loaded, so a repeated [warmUp] never builds a
+     * second `LlmModule` beside a live one (keep the guard when pasting the body). Real body (`docs/stack.md`
+     * §3-R2, VERIFIED at v1.3.1), after the guard:
      * ```
      * vlm = LlmModule(LlmModuleConfig.create()
      *     .modulePath(pte.absolutePath).tokenizerPath(tok.absolutePath)
      *     .modelType(LlmModuleConfig.MODEL_TYPE_MULTIMODAL).temperature(0f)   // greedy for read-verbatim
      *     .loadMode(LlmModuleConfig.LOAD_MODE_MMAP).build()).also { it.load() } // eager; else first generate() pays it
      * _stats.update { it.copy(vlmLoaded = true) }
+     * _vlmInfo.value = vlmInfoPending                                          // FR-G5: only once it loaded
      * ```
      * A-13/Q9: only an `LlmModule`-compatible export (`token_embedding` + 2-input `text_decoder`, option C) loads;
      * the SRS Gemma 4 export fails in `MultimodalPrefiller::load()` with `Error::InvalidArgument` (18) (D5).
      */
     private fun loadVlmLocked() {
+        if (vlm != null) return // idempotent (Contracts.kt warmUp)
         val pte = vlmFile
         val tok = tokenizerFile
         if (pte == null || tok == null) {
@@ -408,17 +451,19 @@ class ExecuTorchInferenceEngine(
     }
 
     /**
-     * Stub (device). Real body (`docs/stack.md` §3-R2, VERIFIED at v1.3.1):
+     * Stub (device). Idempotent: returns at once while the detector is loaded (keep the guard when pasting the
+     * body). Real body (`docs/stack.md` §3-R2, VERIFIED at v1.3.1), after the guard:
      * ```
      * val t0 = System.nanoTime()
      * detector = Module.load(file.absolutePath, Module.LOAD_MODE_MMAP, DETECTOR_THREADS)
      * val backend = detector.getMethodMetadata("forward").getBackends().joinToString()   // "XnnpackBackend"
-     * _detectorInfo.update { it?.copy(backend = backend) }
+     * _detectorInfo.value = detectorInfoPending?.copy(backend = backend)                  // FR-G5: only once it loaded
      * _stats.update { it.copy(detectorLoaded = true) }
-     * Log.i(TAG_LATENCY, "detector load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} backend=$backend")
+     * Log.i(TAG_LATENCY, "detector load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} backend=$backend") // INV-2
      * ```
      */
     private fun loadDetectorLocked() {
+        if (detector != null) return // idempotent
         val file = detectorFile
         if (file == null) {
             Log.w(TAG, "detector not loaded: detector.pte missing (sideload or fetch_models.sh)")
@@ -432,12 +477,17 @@ class ExecuTorchInferenceEngine(
         )
     }
 
-    /** Real: `Module.close()` frees the mmap and the XNNPACK workspace (INV-2). Idempotent. */
+    /**
+     * Real: `Module.close()` frees the mmap and the XNNPACK workspace (INV-2). Idempotent. The 5 s fps window is
+     * reset so the overlay and the soak JSON read 0 while the detector is not resident, never a stale value.
+     */
     private fun unloadDetectorLocked() {
         val module = detector ?: return
         detector = null
         runCatching { module.close() }.onFailure { Log.w(TAG, "detector close failed: ${it.message}") }
-        _stats.update { it.copy(detectorLoaded = false) }
+        detectorFps.reset()
+        _stats.update { it.copy(detectorLoaded = false, detectorFps = 0f) }
+        Log.i(TAG_LATENCY, "detector unloaded (INV-2)")
     }
 
     /** Real: lazy reload before a detect() call if a VLM call unloaded the detector and the reload has not run yet. */
@@ -445,21 +495,12 @@ class ExecuTorchInferenceEngine(
         if (detector == null && detectorFile != null) loadDetectorLocked()
     }
 
-    /**
-     * Reload the detector after a VLM call without making the caller wait for it: a separate critical section
-     * on the same mutex (still INV-1/INV-2), launched on the app scope. If the scope is already cancelled
-     * (onStop), nothing runs and [release] cleans up; the next [detect] reloads lazily anyway.
-     */
-    private fun scheduleDetectorReload() {
-        scope.launch(Dispatchers.Default) {
-            mutex.withLock { ensureDetectorLoadedLocked() }
-        }
-    }
 
     companion object {
         const val TAG: String = "vysion"
         const val TAG_LATENCY: String = "vysion.latency"
         private const val NANOS_PER_MS: Long = 1_000_000L
+        private const val NANOS_PER_SECOND: Long = 1_000_000_000L
 
         /** Fallback detector input when the lockfile row has no dims; the verified yolo26 export is 640×640. */
         const val DEFAULT_DETECTOR_INPUT: Int = 640

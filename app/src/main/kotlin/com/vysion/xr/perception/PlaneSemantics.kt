@@ -11,7 +11,10 @@ import kotlin.math.abs
 object PlaneGeometry {
     private const val EPS = 1e-6f
 
-    /** Distance t > 0 along the ray to the infinite plane through [point] with [normal]; `null` if parallel or behind. */
+    /**
+     * Distance t > 0 along the ray to the infinite plane through [point] with [normal]; `null` if parallel
+     * or behind.
+     */
     fun rayPlaneDistance(origin: Vec3, dir: Vec3, point: Vec3, normal: Vec3): Float? {
         val denom = dir.dot(normal)
         if (abs(denom) < EPS) return null

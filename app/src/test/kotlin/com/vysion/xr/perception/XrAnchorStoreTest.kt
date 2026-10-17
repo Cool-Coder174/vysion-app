@@ -59,11 +59,14 @@ class XrAnchorStoreTest {
     fun `track follows the head turning and completes when the anchor stops tracking`() = runTest {
         val source = FakePerceptionSource()
         val store = store(source)
-        val id = AnchorId("door")
+        // As in production (placeFromBearing → createAnchor → track): the session knows the anchor before
+        // anyone tracks it. An id the session never created is STOPPED at once (next test).
+        val id = requireNotNull(source.createAnchor(Vec3(0f, 0f, -3f)))
         val seen = mutableListOf<RelativeTarget>()
         val job = launch { store.track(id).collect { seen += it } }
         runCurrent()
-        assertTrue(seen.isEmpty())
+        assertTrue(seen.isEmpty()) // no anchor pose and no head pose yet
+        assertFalse(job.isCompleted)
 
         source.anchorAt(id, Vec3(0f, 0f, -3f))
         source.headPose.value = head(yawDeg = 0f, nanos = 1L)
@@ -75,7 +78,8 @@ class XrAnchorStoreTest {
         assertEquals(6, seen.last().clock)
         assertFalse(seen.last().inView)
 
-        source.headPose.value = head(yawDeg = 180f, tracking = Tracking.PAUSED, nanos = 3L) // untrusted head pose: silent
+        // untrusted head pose: silent
+        source.headPose.value = head(yawDeg = 180f, tracking = Tracking.PAUSED, nanos = 3L)
         val before = seen.size
         runCurrent()
         assertEquals(before, seen.size)
@@ -92,9 +96,27 @@ class XrAnchorStoreTest {
         val seen = mutableListOf<RelativeTarget>()
         val job = launch { store.track(AnchorId("nope")).collect { seen += it } }
         runCurrent()
-        assertTrue(job.isCompleted)
+        assertTrue(job.isCompleted) // even with no head pose at all: completion depends on the anchor only
         assertTrue(seen.isEmpty())
         store.remove(AnchorId("x"))
         assertEquals(listOf(AnchorId("x")), source.detached)
+    }
+
+    @Test
+    fun `track completes when the anchor is detached even while the head pose is missing`() = runTest {
+        val source = FakePerceptionSource()
+        val store = store(source)
+        val id = requireNotNull(source.createAnchor(Vec3(0f, 0f, -3f)))
+        source.anchorAt(id, Vec3(0f, 0f, -3f))
+        val seen = mutableListOf<RelativeTarget>()
+        val job = launch { store.track(id).collect { seen += it } }
+        runCurrent()
+        assertFalse(job.isCompleted) // tracked anchor, no head pose: silent, alive
+        assertTrue(seen.isEmpty())
+
+        store.remove(id) // FR-N4 TargetLost path: detach → final STOPPED sample
+        runCurrent()
+        assertTrue(job.isCompleted)
+        assertTrue(seen.isEmpty())
     }
 }

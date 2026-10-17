@@ -313,6 +313,9 @@ object CuesPhrasebook : ModePhrasebook {
     override val holdStill: String get() = Cues.holdStill(locale())
     override val permissionExplanation: String get() = Cues.permissionExplanation(locale())
     override val permissionDenied: String get() = Cues.permissionDenied(locale())
+    override val voiceCommandsUnavailable: String get() = Cues.voiceCommandsUnavailable(locale())
+    override val cameraLost: String get() = Cues.cameraLost(locale())
+    override val modelNotFound: String get() = Cues.modelNotFound(locale())
     override fun modeAnnounced(mode: Mode): String = Cues.modeAnnouncement(mode, locale())
     override fun navigationCue(cue: NavigationCue): String? =
         if (cue == NavigationCue.Arrived) null else Cues.phrase(cue, locale())

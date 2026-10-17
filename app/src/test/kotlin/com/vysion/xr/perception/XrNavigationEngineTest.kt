@@ -28,7 +28,9 @@ class XrNavigationEngineTest {
     private class Rig(scope: TestScope) {
         val source = FakePerceptionSource()
         val frames = FakeFrameSource()
-        val inference = FakeInferenceEngine(result = listOf(Detection("person", 0.9f, NormalizedBox(0.1f, 0.1f, 0.5f, 0.9f))))
+        val inference = FakeInferenceEngine(
+            result = listOf(Detection("person", 0.9f, NormalizedBox(0.1f, 0.1f, 0.5f, 0.9f))),
+        )
         val anchors = FakeAnchorStore()
         val pinger = FakePinger()
         val clock: () -> Long = { scope.testScheduler.currentTime * 1_000_000L } // virtual ms → nanos
@@ -65,8 +67,10 @@ class XrNavigationEngineTest {
         rig.engine.stop()
         runCurrent()
         assertFalse(rig.engine.isRunning.value)
+        assertEquals("stop frees the ping SoundPool (attach recreates it)", 1, rig.pinger.releases)
         rig.engine.stop() // no-op when stopped
         assertEquals(1, rig.source.ensureStartedCalls)
+        assertEquals(1, rig.pinger.releases)
         rig.engine.start() // can start again
         runCurrent()
         assertTrue(rig.engine.isRunning.value)
@@ -191,6 +195,72 @@ class XrNavigationEngineTest {
         runCurrent()
         assertEquals(1, rig.cues.filterIsInstance<NavigationCue.DoorBearing>().size)
     }
+
+    @Test
+    fun `a short pause between ticks does not add a bearing and the cadence restarts on resume`() = runTest {
+        val rig = Rig(this)
+        runCurrent()
+        rig.engine.start()
+        runCurrent()
+        val door = AnchorId("door")
+        rig.engine.guideTo(door)
+        rig.anchors.channel(door).trySend(RelativeTarget(0f, 12, 4.0f, true))
+        advanceTimeBy(3001)
+        runCurrent()
+        assertEquals(1, rig.cues.filterIsInstance<NavigationCue.DoorBearing>().size) // t = 3 s
+
+        advanceTimeBy(1999) // t = 5 s
+        rig.engine.pause()
+        advanceTimeBy(2000) // the 6 s tick falls inside the pause: dropped
+        rig.engine.resume() // t = 7 s
+        advanceTimeBy(2999)
+        runCurrent()
+        assertEquals(1, rig.cues.filterIsInstance<NavigationCue.DoorBearing>().size) // nothing delivered late
+        advanceTimeBy(2)
+        runCurrent()
+        assertEquals(2, rig.cues.filterIsInstance<NavigationCue.DoorBearing>().size) // 3 s after resume
+        assertEquals(2, rig.pinger.pings)
+    }
+
+    @Test
+    fun `door bearing says whether the spatial ping played and falls back to every 2 s (A-6)`() = runTest {
+        val rig = Rig(this)
+        runCurrent()
+        rig.engine.start()
+        runCurrent()
+        val door = AnchorId("door")
+        rig.engine.guideTo(door)
+        // track() emits on every head or anchor pose change; one sample per step keeps the target fresh.
+        fun step(ms: Long) {
+            rig.anchors.channel(door).trySend(RelativeTarget(60f, 2, 3.0f, true))
+            advanceTimeBy(ms)
+            runCurrent()
+        }
+        step(3001)
+        // Not probed yet (null) counts as pinged: the default the contract gives.
+        assertEquals(listOf(NavigationCue.DoorBearing(2, 3.0f, true, pinged = true)), bearings(rig))
+
+        rig.pinger.playsSpatially = false // SceneCore cannot play the point source (A-6 failed)
+        step(3000) // t = 6 s
+        assertEquals(NavigationCue.DoorBearing(2, 3.0f, true, pinged = false), bearings(rig).last())
+        assertEquals(2, rig.pinger.pings) // still asked to ping every tick
+
+        step(2000) // t = 8 s: fallback cadence, every 2 s instead of 3 s
+        assertEquals(3, bearings(rig).size)
+        assertFalse(bearings(rig).last().pinged)
+
+        rig.pinger.playsSpatially = true // spatial audio works again: pinged, and back to 3 s
+        step(2000) // t = 10 s
+        assertEquals(4, bearings(rig).size)
+        assertTrue(bearings(rig).last().pinged)
+        step(2000) // t = 12 s
+        assertEquals(4, bearings(rig).size)
+        step(1000) // t = 13 s
+        assertEquals(5, bearings(rig).size)
+        assertTrue(rig.cues.none { it is NavigationCue.TargetLost })
+    }
+
+    private fun bearings(rig: Rig) = rig.cues.filterIsInstance<NavigationCue.DoorBearing>()
 
     @Test
     fun `target is lost when tracking ends or no sample arrives for two periods`() = runTest {

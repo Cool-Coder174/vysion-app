@@ -68,6 +68,18 @@ import kotlinx.coroutines.withTimeout
  * - Door vote (FR-N3, RK-6): two stills, two `describe(door)` calls, [DoorVote] allowlist parse,
  *   agreement required, else [ModePhrasebook.doorNotFound].
  * - Mode changes are announced (FR-G3) and exposed on [mode] for the panel.
+ * - "In Spanish" switches `Speaker` and `CommandBus` to `Speaker.ES_MX` together (FR-G6); nothing switches
+ *   back yet (the grammar has no "in English").
+ * - A `DoorBearing` with `pinged == false` (the SceneCore spatial ping failed, A-6) plays `Earcon.PING`
+ *   through the `Speaker` before its words.
+ * - Hazards first (SRS §3, FR-N1/FR-N5): Proximity, WallAhead and FloorEnds run on their own cue lane, so a
+ *   hazard never waits behind a guidance utterance ("door, 2 o'clock, 3 meters") before its earcon and its
+ *   interrupting words.
+ * - A-7 / RK-4: the first time `CommandBus.state` is `UNAVAILABLE` in a run, [ModePhrasebook.voiceCommandsUnavailable]
+ *   is spoken once (after the welcome), so a blind user learns that only the panel and pinch work.
+ * - FR-G6 (prompt half): every prompt goes through `PromptSet.forLocale(prompt, Speaker.locale)` before
+ *   `describe`, so after "in Spanish" the VLM is asked for Spanish output (R2 exempts DOOR).
+ * - [stop] then [start] restarts cleanly (AppGraph's reversible onStop/onStart).
  *
  * Clocks: [commandLatencyNanos] uses `System.nanoTime()` only (H-21).
  * Assumptions: A-1 (frames), A-7 (voice; the panel buttons inject the same commands when it fails).
@@ -118,27 +130,51 @@ class ModeController(
     @Volatile
     private var active: Job? = null
 
+    /** The last [stop]'s Navigation and camera teardown; the next [start] waits for it before starting the frames. */
+    private var teardown: Job? = null
+
+    /** A-7 / RK-4: [ModePhrasebook.voiceCommandsUnavailable] is spoken at most once per [start]. */
+    @Volatile
+    private var voiceUnavailableAnnounced = false
+
+    /** The welcome one-shot of the current run; the voice-unavailable notice waits for it (welcome first). */
+    @Volatile
+    private var welcomeJob: Job? = null
+
     /** FR-D3 (P1): "brief" / "detailed" choose the describe prompt variant for the next Describe. */
     @Volatile
     private var describeVariant: DescribeVariant = DescribeVariant.DEFAULT
 
-    /** Idempotent. Subscribes, starts the frame source, warms the engine up, speaks the welcome (FR-G1). */
+    /**
+     * Idempotent. Subscribes, starts the frame source, warms the engine up, speaks the welcome (FR-G1).
+     * Restartable: [stop] then [start] (headset off and on, `AppGraph.stop`/`start`) runs a fresh set of
+     * collectors in a new child scope of [scope] and speaks the welcome again.
+     */
     fun start() {
         if (runScope != null) return
         val run = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
         runScope = run
+        voiceUnavailableAnnounced = false
+        val previousTeardown = teardown
 
         // One upstream subscription, two consumers: the Stop lane must never wait behind a command (INV-6).
         val events: SharedFlow<CommandEvent> = commands.commands.shareIn(run, SharingStarted.Eagerly)
         run.launch { events.filter { it.command is Command.Stop }.collect { onStop() } }
         run.launch { events.filter { it.command !is Command.Stop }.collect { onCommand(it) } }
         run.launch { commands.state.collect { onListeningState(it) } }
-        run.launch { navigation.cues.collect { onCue(it) } }
+        // Two cue lanes on one upstream subscription: a hazard never waits behind a guidance utterance (SRS §3).
+        val cueEvents: SharedFlow<NavigationCue> = navigation.cues.shareIn(run, SharingStarted.Eagerly)
+        run.launch { cueEvents.filter { it.isHazard() }.collect { onCue(it) } }
+        run.launch { cueEvents.filter { !it.isHazard() }.collect { onCue(it) } }
         run.launch { navigation.detections.collect { overlay.showDetections(it) } } // FR-N2
-        run.launch { guarded { frames.start() } } // A-1; the real source logs a TODO until bound
+        run.launch {
+            previousTeardown?.join() // a quick off/on must not stop the camera after it was started again
+            guarded { frames.start() } // A-1; the real source logs a TODO until bound
+        }
         run.launch { guarded { engine.warmUp() } } // A-11; a failure is recorded, never a crash at launch
 
         launchOneShot(ModeState.SPEAKING) { say(phrasebook.welcome) } // FR-G1
+        welcomeJob = active
     }
 
     /** Start-path rule: nothing thrown by a module may crash the skeleton app; cancellation still propagates. */
@@ -154,7 +190,11 @@ class ModeController(
         }
     }
 
-    /** Silences, cancels the in-flight command and every collector, stops Navigation and the frames. Never throws. */
+    /**
+     * Silences, cancels the in-flight command and every collector, stops Navigation and the frames. Never
+     * throws. The mode goes back to `null` because Navigation is no longer running, so the first command
+     * after a restart announces its mode again (FR-G3).
+     */
     fun stop() {
         val run = runScope ?: return
         runScope = null
@@ -164,8 +204,9 @@ class ModeController(
         run.cancel()
         overlay.clear()
         _state.value = ModeState.IDLE
+        _mode.value = null
         // UNDISPATCHED + NonCancellable: completes even if the caller tears the graph down right after.
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        teardown = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             withContext(NonCancellable) {
                 runCatching { navigation.stop() }
                 runCatching { frames.stop() }
@@ -214,37 +255,61 @@ class ModeController(
             Command.FindDoor -> launchOneShot(ModeState.CAPTURING) { findDoor(event) } // FR-N3
             Command.Repeat -> launchOneShot(ModeState.SPEAKING) { speaker.repeatLast() } // FR-T3
             Command.Slower -> launchOneShot(ModeState.SPEAKING) { speaker.repeatLast(Speaker.SLOWER_RATE) } // FR-T3
-            Command.InSpanish -> speaker.setLocale(Speaker.ES_MX) // FR-G6; FR-T4 re-prompt needs the retained still (P1, module doc)
+            // FR-G6: voice and recognition switch together; the FR-T4 re-prompt needs the retained still (P1)
+            Command.InSpanish -> {
+                speaker.setLocale(Speaker.ES_MX)
+                commands.setLocale(Speaker.ES_MX)
+            }
             Command.Brief -> describeVariant = DescribeVariant.BRIEF // FR-D3 (P1)
             Command.Detailed -> describeVariant = DescribeVariant.DETAILED // FR-D3 (P1)
-            is Command.FollowUp -> Unit // TODO(FR-D2): re-run describe on the retained still with prompts.followUp(question) (P1)
+            // TODO(FR-D2): re-run describe on the retained still with prompts.followUp(question) (P1)
+            is Command.FollowUp -> Unit
             Command.Next -> Unit // TODO(FR-T6): capture and read again without a new command (P2)
             is Command.SelectDoor -> Unit // TODO(FR-N7): choose among door candidates (P2)
             Command.Stop -> Unit // handled on its own lane
         }
     }
 
-    /** FR-G2: the panel shows LISTENING while the bus listens, if nothing else is in progress. */
+    /**
+     * FR-G2: the panel shows LISTENING while the bus listens, if nothing else is in progress. A-7 / RK-4: the
+     * first UNAVAILABLE of a run is spoken once, after the welcome, on its own coroutine so this collector
+     * never waits for speech.
+     */
     private fun onListeningState(listening: ListeningState) {
         when (listening) {
             ListeningState.LISTENING -> _state.compareAndSet(ModeState.IDLE, ModeState.LISTENING)
             else -> _state.compareAndSet(ModeState.LISTENING, ModeState.IDLE)
         }
+        if (listening == ListeningState.UNAVAILABLE && !voiceUnavailableAnnounced) {
+            voiceUnavailableAnnounced = true
+            runScope?.launch {
+                welcomeJob?.join()
+                say(phrasebook.voiceCommandsUnavailable)
+            }
+        }
     }
 
     // ── One-shots ─────────────────────────────────────────────────────────────────────────────────
 
-    /** Sets [initialState] before the job runs, so the busy policy sees it with no race, and restores IDLE after. */
+    /**
+     * Sets [initialState] before the job runs, so the busy policy sees it with no race, and restores IDLE
+     * after. Only the current one-shot restores IDLE: a job cancelled by [stop] finishes after a quick
+     * restart has already set SPEAKING for the new welcome, and must not overwrite it.
+     */
     private fun launchOneShot(initialState: ModeState, block: suspend () -> Unit) {
         val run = runScope ?: return
         _state.value = initialState
-        active = run.launch {
+        // LAZY so `active` is assigned before the body can run on a multi-threaded dispatcher.
+        lateinit var job: Job
+        job = run.launch(start = CoroutineStart.LAZY) {
             try {
                 block()
             } finally {
-                withContext(NonCancellable) { _state.value = ModeState.IDLE }
+                withContext(NonCancellable) { if (active === job) _state.value = ModeState.IDLE }
             }
         }
+        active = job
+        job.start()
     }
 
     /**
@@ -252,12 +317,12 @@ class ModeController(
      * arrival check. Text Reader target: first spoken word ≤ 6 s after capture; Describe ≤ 8 s.
      */
     private suspend fun captureAndDescribe(mode: Mode, prompt: String, event: CommandEvent?) {
+        event?.let { markActionStarted(it) } // NFR: the state is already CAPTURING; the announcement is not latency
         announceMode(mode) // FR-G3
         val wasRunning = pauseNavigation() // ADR-0004
         var still: Bitmap? = null
         try {
             _state.value = ModeState.CAPTURING
-            event?.let { markActionStarted(it) }
             speaker.earcon(Earcon.THINKING)
             still = frames.captureStill() // INV-9: this controller owns it from here
             _state.value = ModeState.INFERRING
@@ -270,7 +335,7 @@ class ModeController(
         } catch (e: Exception) {
             speakFailure(e) // InferenceException, timeout (wrapped), anything else a module threw
         } catch (e: NotImplementedError) {
-            speakFailure(e) // skeleton stubs (TODO(FR-xx)) must not crash the app
+            speakFailure(e) // skeleton stubs (Kotlin TODO() bodies) must not crash the app
         } finally {
             withContext(NonCancellable) {
                 still?.let { release(it) } // INV-9
@@ -281,6 +346,7 @@ class ModeController(
 
     /** FR-N3 / RK-6: two stills, two answers, agreement required; then anchor and guide. */
     private suspend fun findDoor(event: CommandEvent) {
+        markActionStarted(event) // NFR: the state is already CAPTURING; the announcement is not latency
         announceMode(Mode.NAVIGATION)
         if (!ensureNavigationRunning()) {
             _state.value = ModeState.SPEAKING
@@ -292,7 +358,6 @@ class ModeController(
         var second: Bitmap? = null
         try {
             _state.value = ModeState.CAPTURING
-            markActionStarted(event)
             speaker.earcon(Earcon.THINKING)
             first = frames.captureStill()
             second = frames.captureStill()
@@ -324,8 +389,8 @@ class ModeController(
 
     /** "Guide me": Navigation mode on; proximity + outlines run in the background (FR-N1, FR-N2). */
     private suspend fun guideMe(event: CommandEvent) {
-        announceMode(Mode.NAVIGATION)
         markActionStarted(event)
+        announceMode(Mode.NAVIGATION)
         if (!ensureNavigationRunning()) say(phrasebook.navigationUnavailable) // ADR-0006 (S25 Ultra)
     }
 
@@ -346,6 +411,7 @@ class ModeController(
             }
             is NavigationCue.DoorBearing -> {
                 overlay.highlightDoor(DoorHighlight.boxFor(cue.clock, cue.inView)) // FR-N3/FR-N4
+                if (!cue.pinged) speaker.earcon(Earcon.PING) // A-6 fallback: no spatial ping, so a flat one first
                 phrasebook.navigationCue(cue)?.let { say(it) }
             }
             NavigationCue.Arrived -> {
@@ -379,7 +445,9 @@ class ModeController(
         }
         try {
             val text = try {
-                withTimeout(InferenceEngine.VLM_TIMEOUT_MS) { engine.describe(still, prompt) }
+                // FR-G6: the output language follows the voice (R2 exempts DOOR, whose allowlist is English).
+                val localized = prompts.forLocale(prompt, speaker.locale.value)
+                withTimeout(InferenceEngine.VLM_TIMEOUT_MS) { engine.describe(still, localized) }
             } catch (e: TimeoutCancellationException) {
                 throw InferenceException("VLM exceeded ${InferenceEngine.VLM_TIMEOUT_MS} ms", e)
             }
@@ -423,7 +491,10 @@ class ModeController(
         DescribeVariant.DEFAULT -> prompts.describe
     }
 
-    /** NFR latency: `recognizedAtNanos` → the state change to CAPTURING/LISTENING, monotonic (H-21). */
+    /**
+     * NFR latency: `recognizedAtNanos` → the state change to CAPTURING/LISTENING, monotonic (H-21). Called first
+     * in each one-shot ([launchOneShot] already set the state), before any mode announcement is spoken.
+     */
     private fun markActionStarted(event: CommandEvent) {
         _commandLatencyNanos.value = System.nanoTime() - event.recognizedAtNanos
     }
@@ -439,6 +510,10 @@ class ModeController(
         if (!bitmap.isRecycled) bitmap.recycle()
     }
 
+    /** SRS §3 "hazards first": these cues take the hazard lane and interrupt speech. */
+    private fun NavigationCue.isHazard(): Boolean =
+        this is NavigationCue.Proximity || this is NavigationCue.WallAhead || this is NavigationCue.FloorEnds
+
     private enum class DescribeVariant { DEFAULT, BRIEF, DETAILED }
 
     companion object {
@@ -448,9 +523,11 @@ class ModeController(
 }
 
 /**
- * FR-N3 / RK-6: the allowlist parse of the DOOR answer. Pure; unit-tested. The VLM is asked for one
- * word; anything else (two sides, prose with no side, an empty string) is `null`, and `null` never
- * agrees with anything, so the user is never guided to a wall on a guess.
+ * FR-N3 / RK-6: the allowlist parse of the DOOR answer, and the app's only door parser (plan.md Security:
+ * "anything else = NONE"; `PromptLibrary.parseDoorAnswer` is reference only). Pure; unit-tested. The VLM is
+ * asked for one word; anything else (two sides, prose with no side, an empty string, or a side word next to a
+ * negation such as "There is no door on the left") is `null`, and `null` never agrees with anything, so the
+ * user is never guided to a wall on a guess.
  */
 internal object DoorVote {
 
@@ -463,10 +540,18 @@ internal object DoorVote {
         "none" to HorizontalBearing.NONE,
     )
 
-    /** The single allowed word in [answer] (case-insensitive, punctuation ignored), or `null` if zero or several. */
+    /** "n't" splits into "t" on [NON_LETTERS], so "isn't" / "don't" count as negations too. */
+    private val NEGATIONS: Set<String> = setOf("no", "not", "nothing", "never", "without", "cannot", "t")
+
+    /**
+     * The single allowed word in [answer] (case-insensitive, punctuation ignored), or `null` if zero or several,
+     * or if a side word comes with a negation (only NONE survives a negation: "No, none.").
+     */
     fun parse(answer: String): HorizontalBearing? {
         val words = answer.lowercase().split(NON_LETTERS).filter { it.isNotEmpty() }
-        return words.mapNotNull { allowed[it] }.distinct().singleOrNull()
+        val bearing = words.mapNotNull { allowed[it] }.distinct().singleOrNull() ?: return null
+        if (bearing != HorizontalBearing.NONE && words.any { it in NEGATIONS }) return null
+        return bearing
     }
 
     /** RK-6: both answers must exist, agree and not be NONE. */
@@ -478,6 +563,11 @@ internal object DoorVote {
  * FR-N3: where to draw the door highlight from a clock-face bearing. The engine reports hours, not
  * pixels, so the highlight is a vertical band in the left, center or right third of the view (the
  * same granularity as the VLM answer). Pure; unit-tested. `null` when the door is out of view (FR-N4).
+ *
+ * R3 sets `inView` for |relative bearing| ≤ 45° (`RelativeGeometry.IN_VIEW_HALF_ANGLE_DEG`) and rounds to
+ * 30° per hour (`ClockFace`), so an in-view door is at 11, 12 or 1 o'clock (2 only at exactly +45°). 12 is
+ * the center third (±15°), 11 the left third and 1 the right third, which is where R3 places a LEFT /
+ * RIGHT answer (`BearingAngles` ±30° → 11 / 1 o'clock). 9, 10 and 2, 3 stay on their side for safety.
  */
 internal object DoorHighlight {
 
@@ -488,9 +578,9 @@ internal object DoorHighlight {
     fun boxFor(clock: Int, inView: Boolean): NormalizedBox? {
         if (!inView) return null
         val third = when (clock) {
-            11, 12, 1 -> 1 // straight ahead
-            9, 10 -> 0 // left
-            2, 3 -> 2 // right
+            12 -> 1 // straight ahead (±15°)
+            9, 10, 11 -> 0 // left
+            1, 2, 3 -> 2 // right
             else -> return null // behind the user: never in view
         }
         return NormalizedBox(

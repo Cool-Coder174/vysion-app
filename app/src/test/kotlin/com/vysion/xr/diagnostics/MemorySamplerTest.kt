@@ -14,6 +14,7 @@ class MemorySamplerTest {
         assertEquals(0, MemorySampler.kbToMb(1023))
         assertEquals(1, MemorySampler.kbToMb(1024))
         assertEquals(2_048, MemorySampler.kbToMb(2_048 * 1024 + 512))
+        assertEquals(3_500, MemorySampler.kbToMb(3_500L * 1024L + 1023L)) // Debug.getPss() returns Long kB
     }
 
     @Test

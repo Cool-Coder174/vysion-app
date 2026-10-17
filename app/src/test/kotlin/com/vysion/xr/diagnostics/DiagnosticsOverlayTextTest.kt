@@ -69,6 +69,15 @@ class DiagnosticsOverlayTextTest {
     }
 
     @Test
+    fun `the model row shows whether the detector is resident (INV-2)`() {
+        assertEquals("gemma-vlm (4-bit) · detector yolo26n (int8, resident)", DiagnosticsText.model(vlm, det, true))
+        assertEquals("gemma-vlm (4-bit) · detector yolo26n (int8, unloaded)", DiagnosticsText.model(vlm, det, false))
+        val rows = DiagnosticsText.rows(DiagnosticsSnapshot(detector = det, detectorLoaded = false)).toMap()
+        assertEquals("detector yolo26n (int8, unloaded)", rows[DiagnosticsText.LABEL_MODEL])
+        assertEquals(6, DiagnosticsText.rows(DiagnosticsSnapshot(detectorLoaded = true)).size)
+    }
+
+    @Test
     fun `fps uses one decimal and a dot regardless of locale`() {
         assertEquals("0.0 fps", DiagnosticsText.fps(0f))
         assertEquals("12.3 fps", DiagnosticsText.fps(12.34f))

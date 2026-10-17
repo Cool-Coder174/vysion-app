@@ -2,7 +2,7 @@
 
 **Read a sign, understand a room, find the door. On a headset, with every model running on the headset, without sending a single frame to a server.**
 
-Vysion XR is a native Android XR app for the Samsung Galaxy XR with three voice-driven modes: **Text Reader**, **Audio Description** and **Navigation**. A vision-language model (Gemma 4 edge, 4-bit) and a light object detector (YOLO26-n, int8) run entirely on the headset through [ExecuTorch](https://github.com/pytorch/executorch) with the XNNPACK backend. The manifest declares no network permission; the demo runs in airplane mode with a live diagnostics panel showing measured latency, memory and backend.
+Vysion XR is a native Android XR app for the Samsung Galaxy XR with three voice-driven modes: **Text Reader**, **Audio Description** and **Navigation**. A vision-language model (4-bit; the exact model is decided Sat 11:00, `plan.md` Q6, default Gemma 3 4B via optimum-executorch) and a light object detector (YOLO26-n, int8) run entirely on the headset through [ExecuTorch](https://github.com/pytorch/executorch) with the XNNPACK backend. The manifest declares no network permission; the demo runs in airplane mode with a live diagnostics panel showing measured latency, memory and backend.
 
 > **Vysion XR helps you read, understand, and move through a space. It is not validated for unassisted travel by blind users.**
 
@@ -42,7 +42,7 @@ flowchart LR
     NE[NavigationEngine]
   end
   subgraph ExecuTorch["ExecuTorch · XNNPACK"]
-    VLM[Gemma 4 edge 4-bit]
+    VLM[VLM 4-bit · plan.md Q6]
     DET[YOLO26-n int8]
   end
   subgraph Output
@@ -64,20 +64,22 @@ flowchart LR
 
 | Component | Runs where | Library |
 |---|---|---|
-| VLM (read, describe, door, arrival) | headset CPU | ExecuTorch Android AAR, multimodal runner, XNNPACK |
+| VLM (read, describe, door, arrival) | headset CPU | ExecuTorch `LlmModule` (multimodal), XNNPACK |
 | Detector (people, obstacles) | headset CPU | ExecuTorch `Module`, XNNPACK |
 | Depth, planes, anchors, hands, head pose | headset | ARCore for Jetpack XR |
 | Panels, passthrough, spatial audio | headset | Jetpack Compose for XR + SceneCore |
 | Speech in / out | headset | Android `SpeechRecognizer` (on-device) / `TextToSpeech` |
-| Network | nowhere | no `INTERNET` permission; checked in CI and printed on the overlay |
+| Network | nowhere | no network permission (`INTERNET`, `ACCESS_NETWORK_STATE` stripped from libraries); checked in CI and printed on the overlay |
 
 ## Measured numbers
 
 Protocol: 20 runs per model on the headset in airplane mode; median and p90 latency, peak memory, file size. Numbers come from the device, never from a laptop. Full tables: [`docs/benchmarks.md`](docs/benchmarks.md).
 
-| Model | Quantization | Backend | File size | Median latency | p90 latency | Peak memory |
+Latency here is the wall time of one engine call from the debug `BenchmarkReceiver` (VLM: `describe(still, READ, 60)` on a live `captureStill()` pointed at a printed sign, full generation, no TTS; without a camera the receiver falls back to a synthetic gray frame, and such a run is not reported). Capture → first spoken word is the target table below, taken from the `vysion.latency: read capture->first-word <ms> ms` line, which R1 still has to add (`docs/modules/r1-xr-platform.md`); until it exists that row stays "not measured".
+
+| Model | Quantization | Backend | File size | Median `describe` / `detect` wall time | p90 wall time | Peak memory |
 |---|---|---|---|---|---|---|
-| VLM (Gemma 4 edge multimodal) | not measured | not measured | not measured | not measured | not measured | not measured |
+| VLM (`plan.md` Q6) | not measured | not measured | not measured | not measured | not measured | not measured |
 | Detector (YOLO26-n COCO) | not measured | not measured | not measured | not measured | not measured | not measured |
 
 | Target (SRS §5) | Measured |
@@ -110,10 +112,10 @@ Detailed walkthrough and troubleshooting: [`docs/setup.md`](docs/setup.md). Ever
    echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties   # Linux: $HOME/Android/Sdk
    ./gradlew assembleDebug testDebugUnitTest
    ```
-3. **Models.** `ml/models.lock` lists every artifact with its sha256. `scripts/fetch_models.sh` downloads them into `app/src/main/assets/models/` (release builds); during development, sideload instead so the APK stays small: `scripts/push_models.sh` (or `adb push <file> /sdcard/Android/data/com.vysion.xr/files/models/`). Export recipes: [`ml/README.md`](ml/README.md). Prebuilt `.pte` files will be attached to the release tag.
+3. **Models.** `ml/models.lock` lists every artifact with its sha256. `scripts/fetch_models.sh` downloads them into `app/src/main/assets/models/` (release builds); during development, sideload instead so the multi-GB models stay out of the APK: `scripts/push_models.sh` (it also pushes `models.lock`, which the app needs to resolve sideloaded files when the APK was built without `scripts/fetch_models.sh`). Export recipes: [`ml/README.md`](ml/README.md). Prebuilt `.pte` files will be attached to the release tag.
 4. **Install on the headset** (developer mode + ADB over USB-C or Wi-Fi, see `docs/setup.md`):
    ```bash
-   scripts/install_headset.sh --logcat            # add --wifi <ip> for ADB over Wi-Fi
+   scripts/install_headset.sh --logcat            # add --wifi <ip>:<port> for ADB over Wi-Fi (port from the pairing screen)
    ```
 5. **Airplane mode on.** Every benchmark and the demo run offline; `scripts/benchmark.sh` refuses otherwise.
 6. **No headset?** `./gradlew installDebug -PuseFakes=true` wires the fake camera and fake inference engine so the app runs on an emulator or the Galaxy S25 Ultra (which also serves as the 2D fallback demo device).
@@ -161,7 +163,8 @@ plan.md         roadmap and gates (engineer-workflow); executor.md: phase specs;
 
 - An assistive aid, not a safety device. Not validated for unassisted travel by blind users.
 - English and Spanish only. No cloud, no accounts, no phone companion app.
-- Depends on third-party camera access to the world-facing camera on the Galaxy XR (assumption A-1 in [`docs/assumptions.md`](docs/assumptions.md)); if unavailable, Read and Describe run on the S25 Ultra and Navigation stays on the headset with depth and planes only.
+- Depends on third-party camera access to the world-facing camera on the Galaxy XR (assumption A-1 in [`docs/assumptions.md`](docs/assumptions.md)); if unavailable, Read and Describe run on the S25 Ultra and Navigation stays on the headset with depth and planes only (no door finding, no detector outlines).
+- "Find the door" needs both the headset camera (A-1) and the VLM on the headset (A-13). If either fails, door finding is cut from the demo and Navigation shows proximity and wall / floor cues only.
 - Door finding is a VLM one-shot with a two-frame vote; multiple doors and a fine-tuned door detector are stretch goals.
 - **VLM choice is open (decided Saturday morning).** The SRS names Gemma 4 edge through the Android multimodal runner; live verification against ExecuTorch 1.3.1 showed that export is not loadable by `LlmModule` ([`docs/stack.md`](docs/stack.md) D5). The default replacement is Gemma 3 4B via optimum-executorch; the alternative is a Kotlin port of the Gemma 4 runner. See [`docs/model-plan.md`](docs/model-plan.md).
 - Navigation outlines pause while the VLM answers a one-shot command (the detector is unloaded to keep peak memory to one model).
@@ -171,10 +174,10 @@ plan.md         roadmap and gates (engineer-workflow); executor.md: phase specs;
 | Symptom | Cause | Fix |
 |---|---|---|
 | `fetch_models.sh` exits 2 | lockfile rows still have `url: TBD` | build with `ml/export/*.sh` and run `--from <dir>`, or download the release assets |
-| App says "model not found" | no `.pte` in the external files dir or assets | `scripts/push_models.sh` (dev) or `scripts/fetch_models.sh` + reinstall |
+| App says "model not found" | no `.pte` in the external files dir or assets, no lockfile on the device, or a sideloaded file failed its size/sha256 check (`adb logcat -s vysion.security`) | `scripts/push_models.sh` (dev; also pushes `models.lock`) or `scripts/fetch_models.sh` + reinstall; re-push a truncated file |
 | Gradle: unsupported class file version | wrong JDK | use JDK 17 (`JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-17.jdk/Contents/Home` on the macOS hosts) |
 | Jetpack XR artifact not found | `google()` repository missing or version typo | compare `gradle/libs.versions.toml` with `docs/stack.md`; run `./gradlew --refresh-dependencies` |
-| No camera frames on the headset | permission not granted, or firmware does not expose camera id 0 | check logcat `vysion` for `FrameStats`; see A-1 fallback |
+| No camera frames on the headset | permission not granted, or firmware does not expose camera id 0 | check logcat `vysion` for `camera 0: <w>x<h> <format> at <fps> fps (A-1 evidence)`; see A-1 fallback |
 | Voice commands need Wi-Fi | on-device recognition unavailable | pinch-and-hold and panel buttons are the P0 path; never demo with Wi-Fi on |
 | `benchmark.sh` refuses to run | airplane mode off | `adb shell cmd connectivity airplane-mode enable` |
 

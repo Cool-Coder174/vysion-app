@@ -95,9 +95,13 @@ internal object DiagnosticsText {
     const val LABEL_MEMORY: String = "App memory"
     const val LABEL_NETWORK: String = "Network permission"
 
+    /** INV-2 residency words inside the Model row. */
+    const val RESIDENT: String = "resident"
+    const val UNLOADED: String = "unloaded"
+
     /** The six SRS §11 rows, in SRS order, as (label, value) with every `null` already turned into [NOT_MEASURED]. */
     fun rows(s: DiagnosticsSnapshot): List<Pair<String, String>> = listOf(
-        LABEL_MODEL to model(s.vlm, s.detector),
+        LABEL_MODEL to model(s.vlm, s.detector, s.detectorLoaded),
         LABEL_BACKEND to (s.backend ?: NOT_MEASURED),
         LABEL_VLM_LATENCY to latency(s.lastVlmMs, s.medianVlmMs),
         LABEL_DETECTOR_FPS to fps(s.detectorFps),
@@ -111,11 +115,20 @@ internal object DiagnosticsText {
     fun spoken(rows: List<Pair<String, String>>): String =
         (listOf(TITLE) + rows.map { (label, value) -> line(label, value) }).joinToString(". ") + "."
 
-    /** "<vlm name> (<quantization>)", then "detector <name> (<quantization>)" when known; both from ModelInfo. */
-    fun model(vlm: ModelInfo?, detector: ModelInfo?): String {
+    /**
+     * "<vlm name> (<quantization>)", then "detector <name> (<quantization>[, resident|unloaded])" when known; both
+     * from ModelInfo. The residency is the INV-2 monitor (plan.md: "detectorLoaded visible on the overlay"): it
+     * reads "unloaded" while the VLM runs (ADR-0004). It lives in the Model row so the panel keeps six SRS rows.
+     */
+    fun model(vlm: ModelInfo?, detector: ModelInfo?, detectorLoaded: Boolean? = null): String {
+        val residency = when (detectorLoaded) {
+            true -> ", $RESIDENT"
+            false -> ", $UNLOADED"
+            null -> ""
+        }
         val parts = listOfNotNull(
             vlm?.let { "${it.name} (${it.quantization})" },
-            detector?.let { "detector ${it.name} (${it.quantization})" },
+            detector?.let { "detector ${it.name} (${it.quantization}$residency)" },
         )
         return if (parts.isEmpty()) NOT_MEASURED else parts.joinToString(" · ")
     }

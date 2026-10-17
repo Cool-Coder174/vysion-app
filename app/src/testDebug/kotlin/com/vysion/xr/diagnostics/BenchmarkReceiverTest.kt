@@ -91,7 +91,13 @@ class BenchmarkReceiverTest {
             "model" to "soak",
             "samples" to listOf(
                 linkedMapOf("minute" to 0.0, "fps" to 5.5f, "pss_mb" to 2_048, "battery" to 97, "thermal" to "none"),
-                linkedMapOf("minute" to 0.08, "fps" to null, "pss_mb" to null, "battery" to null, "thermal" to "say \"hi\"\n"),
+                linkedMapOf(
+                    "minute" to 0.08,
+                    "fps" to null,
+                    "pss_mb" to null,
+                    "battery" to null,
+                    "thermal" to "say \"hi\"\n",
+                ),
             ),
         )
         assertEquals(

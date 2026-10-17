@@ -116,7 +116,9 @@ class FakeInferenceEngine(
                 hangNextDescribe = false
                 awaitCancellation() // suspends until the caller's watchdog cancels (INV-5)
             }
-            _stats.update { it.copy(detectorLoaded = false) } // INV-2 mirrored
+            // INV-2 mirrored: the detector is not resident, so its 5 s window restarts at 0 (never a stale fps).
+            detectorFps.reset()
+            _stats.update { it.copy(detectorLoaded = false, detectorFps = 0f) }
             val t0 = System.nanoTime()
             try {
                 delay(describeDelayMs)
@@ -155,7 +157,7 @@ class FakeInferenceEngine(
         val ms = (now - t0) / NANOS_PER_MS
         val fps = detectorFps.record(now)
         detectCalls++
-        _stats.update { it.copy(lastDetectMs = ms, detectorFps = fps) }
+        _stats.update { it.copy(lastDetectMs = ms, detectorFps = fps, lastDetectAtNanos = now) }
         cannedDetections
     }
 
@@ -169,7 +171,9 @@ class FakeInferenceEngine(
     }
 
     private fun answerFor(prompt: String, maxNewTokens: Int): String {
-        val full = cannedAnswers[prompt] ?: DEFAULT_FOLLOW_UP_ANSWER
+        // FR-G6: a prompt localized by PromptLibrary.forLocale keeps its canned answer.
+        val full = cannedAnswers[prompt] ?: cannedAnswers[prompt.removeSuffix(PromptLibrary.SPANISH_SUFFIX)]
+            ?: DEFAULT_FOLLOW_UP_ANSWER
         // Honor the token cap roughly (one word ≈ one token) so a 60-token cap visibly truncates long answers.
         val words = full.split(' ')
         return if (words.size <= maxNewTokens) full else words.take(maxNewTokens).joinToString(" ")

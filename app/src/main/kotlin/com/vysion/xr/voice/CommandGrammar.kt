@@ -22,7 +22,10 @@ import java.util.Locale
  * 2. every pattern is a set of key tokens; all keys must be found among the utterance tokens, in any order.
  *    A key matches a token exactly or, for keys of [MIN_FUZZY_KEY_LENGTH]+ letters, within a Levenshtein
  *    distance of 1 (4–5 letters) or 2 (6+ letters). Some short keys are exact-only and some patterns only
- *    apply to short utterances (so "door" alone does not eat "read the door sign");
+ *    apply to short utterances (so "door" alone does not eat "read the door sign"). English "stop" has its
+ *    own safety rule (FR-G4, INV-6): fuzzy only in a bare command of at most [SAFETY_FUZZY_MAX_TOKENS] tokens,
+ *    where distance 2 is allowed for a token that keeps the "st" onset ("stahp"); exact in anything longer
+ *    ("is there a step?" stays a question);
  * 3. the pattern with the most matched keys wins, then the smallest edit distance, then the language of
  *    [parse]'s `locale`, then table order (Stop is first so it is never shadowed, INV-6);
  * 4. no pattern, but the utterance ends in "?" or opens with a question word → [Command.FollowUp] (FR-D2).
@@ -43,6 +46,27 @@ object CommandGrammar {
 
     /** Distance budget per key: 1 for 4–5 letter keys, 2 for 6+ (SRS "fuzzy matching"). */
     const val MAX_EDIT_DISTANCE: Int = 2
+
+    /**
+     * A fuzzy "stop" only counts in an utterance of at most this many tokens (after the wake word and
+     * filler): a bare command, where a near-"stop" word is most likely a misheard "stop". In a longer
+     * sentence "stop" must be heard exactly ("stop reading", "please stop it now"), so a question that
+     * merely contains a similar short word ("is there a step?", "what's on the top shelf?") is not taken
+     * for Stop. A false Stop only silences (the user repeats the command); a missed Stop is the INV-6
+     * failure, which is why the bare command gets the wider budget below.
+     */
+    const val SAFETY_FUZZY_MAX_TOKENS: Int = 2
+
+    /**
+     * Distance budget for English "stop" in a bare command (FR-G4: Stop is safety-relevant, so a recognizer
+     * slip such as "stahp" must still stop). The length rule gives a 4-letter key 1 edit; Stop gets 2 when
+     * the token keeps the key's first [SAFETY_ONSET_LETTERS] letters, so short words that share only
+     * letters, not the onset ("so", "to", "slow", Spanish "esto"), are not Stop.
+     */
+    const val SAFETY_MAX_EDIT_DISTANCE: Int = 2
+
+    /** Letters a token at [SAFETY_MAX_EDIT_DISTANCE] must share with the start of "stop": the "st" onset. */
+    const val SAFETY_ONSET_LETTERS: Int = 2
 
     /**
      * @param utterance raw recognizer text, e.g. "Vysion, read this" or "¿qué hay en la mesa?".
@@ -97,6 +121,12 @@ object CommandGrammar {
         val exact: Boolean = false,
         /** Only utterances with at most this many tokens qualify. */
         val maxTokens: Int = Int.MAX_VALUE,
+        /**
+         * Safety rule (English "stop" only) instead of the length rule: in an utterance of at most
+         * [SAFETY_FUZZY_MAX_TOKENS] tokens a token within 1 edit, or within [SAFETY_MAX_EDIT_DISTANCE] when
+         * it keeps the first [SAFETY_ONSET_LETTERS] letters; in a longer utterance an exact token only.
+         */
+        val safety: Boolean = false,
     )
 
     private class Match(val pattern: Pattern, val index: Int, val distance: Int)
@@ -107,7 +137,8 @@ object CommandGrammar {
         vararg keys: String,
         exact: Boolean = false,
         maxTokens: Int = Int.MAX_VALUE,
-    ) = Pattern(command, lang, keys.toList(), exact, maxTokens)
+        safety: Boolean = false,
+    ) = Pattern(command, lang, keys.toList(), exact, maxTokens, safety)
 
     private val LEFT = Command.SelectDoor(HorizontalBearing.LEFT)
     private val CENTER = Command.SelectDoor(HorizontalBearing.CENTER)
@@ -116,7 +147,7 @@ object CommandGrammar {
     /** Table order is the last tie-breaker; Stop is first on purpose (INV-6). */
     private val PATTERNS: List<Pattern> = listOf(
         // FR-G2 stop
-        pattern(Command.Stop, Lang.EN, "stop"),
+        pattern(Command.Stop, Lang.EN, "stop", safety = true),
         pattern(Command.Stop, Lang.ES, "detente"),
         pattern(Command.Stop, Lang.ES, "basta"),
         pattern(Command.Stop, Lang.ES, "silencio"),
@@ -250,12 +281,13 @@ object CommandGrammar {
     private fun matchKeys(pattern: Pattern, tokens: List<String>): Int? {
         var total = 0
         val used = BooleanArray(tokens.size)
+        val bareCommand = tokens.size <= SAFETY_FUZZY_MAX_TOKENS
         for (key in pattern.keys) {
             var bestIndex = -1
             var bestDistance = Int.MAX_VALUE
             tokens.forEachIndexed { i, token ->
                 if (used[i]) return@forEachIndexed
-                val d = keyDistance(key, token, pattern.exact) ?: return@forEachIndexed
+                val d = keyDistance(key, token, pattern, bareCommand) ?: return@forEachIndexed
                 if (d < bestDistance) {
                     bestDistance = d
                     bestIndex = i
@@ -268,9 +300,16 @@ object CommandGrammar {
         return total
     }
 
-    private fun keyDistance(key: String, token: String, exact: Boolean): Int? {
+    private fun keyDistance(key: String, token: String, pattern: Pattern, bareCommand: Boolean): Int? {
         if (key == token) return 0
-        if (exact || key.length < MIN_FUZZY_KEY_LENGTH) return null
+        if (pattern.exact) return null
+        if (pattern.safety) {
+            if (!bareCommand) return null
+            val d = levenshtein(key, token)
+            val keepsOnset = token.startsWith(key.take(SAFETY_ONSET_LETTERS))
+            return if (d <= 1 || (d <= SAFETY_MAX_EDIT_DISTANCE && keepsOnset)) d else null
+        }
+        if (key.length < MIN_FUZZY_KEY_LENGTH) return null
         val tolerance = if (key.length <= 5) 1 else MAX_EDIT_DISTANCE
         val d = levenshtein(key, token)
         return if (d <= tolerance) d else null

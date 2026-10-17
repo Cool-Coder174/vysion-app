@@ -3,12 +3,12 @@ package com.vysion.xr.perception
 import android.app.Activity
 import android.app.Application
 import android.media.SoundPool
-import android.os.Bundle
 import android.util.Log
 import androidx.xr.arcore.Anchor
 import androidx.xr.runtime.Session
 import com.vysion.xr.core.AnchorId
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -33,7 +33,8 @@ import kotlin.math.sqrt
  *  those touches is a stub that documents the exact call from docs/stack.md → R3.
  *
  *  Owner: R3 · SRS §8 "ARCore for Jetpack XR session, depth, planes, anchors, hands" · due Sat 12:00
- *  (session, A-5) and Sat 13:00 (spatial audio, A-6).
+ *  (session, A-5); Sat 13:00 is only the A-6 probe (one ping: audible? positioned?); the spatial-audio
+ *  P0 (ping every 3 s while guiding, SpatialAudioPinger) is due Sat 21:00 and merges at gate 6.
  * ═══════════════════════════════════════════════════════════════════════════════════════════════
  */
 
@@ -187,6 +188,25 @@ data class AnchorPoseSample(
 enum class SessionState { NOT_STARTED, STARTING, RUNNING, UNAVAILABLE, STOPPED }
 
 /**
+ * When [XrPerceptionSession] opens the runtime session. Pure, tested.
+ *
+ * - `explicit` = [XrPerceptionSession.start] from `MainActivity` (after permissions, on every `onStart`):
+ *   opens unless a session is already RUNNING or STARTING, so `start()` after `stop()` reopens.
+ * - implicit = [XrPerceptionSession.ensureStarted] from [XrNavigationEngine.start] and
+ *   [XrAnchorStore.placeFromBearing]: only retries a session that came up UNAVAILABLE. `MainActivity` starts
+ *   the graph as soon as camera + microphone are granted and asks for the XR permissions afterwards, so the
+ *   first attempt can fail on a missing `SCENE_UNDERSTANDING_*` grant and nothing else would retry it. It
+ *   never opens a session that was never started or that `onStop` stopped (the next `onStart` reopens it).
+ */
+internal object SessionStartPolicy {
+    fun shouldOpen(state: SessionState, explicit: Boolean): Boolean = when (state) {
+        SessionState.RUNNING, SessionState.STARTING -> false
+        SessionState.UNAVAILABLE -> true
+        SessionState.NOT_STARTED, SessionState.STOPPED -> explicit
+    }
+}
+
+/**
  * Opaque handle to the SceneCore `Entity` parented under an anchor's `AnchorSpace`, the point at
  * which [SpatialAudioPinger] plays (stack.md R3 rows "Spatial audio" and "Entities"). `native` holds
  * the `androidx.xr.scenecore.Entity` once FR-N3 lands; it is `Any?` here so the pinger stays
@@ -250,7 +270,10 @@ internal interface PerceptionSource {
     /** `null` until `DeviceTrackingMode.SPATIAL` delivers the first pose. */
     val headPose: StateFlow<RawHeadPose?>
 
-    /** Idempotent; never throws (the skeleton app must launch, AGENTS.md §5). */
+    /**
+     * Retries a session that came up unavailable ([SessionStartPolicy]); a no-op otherwise. Idempotent;
+     * never throws (the skeleton app must launch, AGENTS.md §5).
+     */
     suspend fun ensureStarted()
 
     /**
@@ -290,12 +313,35 @@ internal interface PerceptionSource {
  * - Assumption: A-5 (depth + planes return data with `SCENE_UNDERSTANDING_*` granted; fallback RK-5),
  *   A-6 (spatial audio audible; fallback: plain earcon, see [SpatialAudioPinger]).
  *
- * Constructor matches `AppGraph`: `(Application, CoroutineScope)`. The constructor touches nothing
- * on the device; it only registers an `ActivityLifecycleCallbacks` so [start] (no-arg) can find the
- * resumed `Activity` that `Session.create` needs (see "Contract issues" in docs/modules/r3-spatial-perception.md).
+ * Constructor matches `AppGraph`: `(Application, CoroutineScope)` and touches nothing on the device.
+ *
+ * Lifecycle (`AppGraph.perception`, `MainActivity`): [start] with the Activity after permissions and on
+ * every `onStart` (`Session.create` needs that Activity as context and `LifecycleOwner`, stack.md D7);
+ * [stop] from `AppGraph.stop()` on every `onStop`. Reversible: `start` after `stop` opens a fresh run
+ * (new feeders, no anchors, no stale pose). [ensureStarted] only retries a session that came up
+ * UNAVAILABLE ([SessionStartPolicy]). [scope] is the graph scope; only `AppGraph.release()` cancels it.
  *
  * Threading (docs/architecture.md): every session API is called from [scope] (`Dispatchers.Default`);
  * `Session.create` runs under `Dispatchers.IO` (stack.md D7).
+ *
+ * Type bridges the feeder snippets below call (`v3()`, `toVector3()`, `toTracking()`, `toPlaneKind()`) do not
+ * exist yet: R3 writes them as private top-level functions in this file. `TrackingState` and `PlaneLabel`
+ * are final classes with static instances, not enums (javap, arcore rc02), so each `when` needs an `else`:
+ * ```
+ * private fun Vector3.v3(): Vec3 = Vec3(x, y, z)
+ * private fun Vec3.toVector3(): Vector3 = Vector3(x, y, z)                 // Vector3(Float, Float, Float)
+ * private fun TrackingState.toTracking(): Tracking = when (this) {
+ *     TrackingState.TRACKING -> Tracking.TRACKING; TrackingState.PAUSED -> Tracking.PAUSED; else -> Tracking.STOPPED
+ * }
+ * private fun PlaneLabel.toPlaneKind(): PlaneKind = when (this) {
+ *     PlaneLabel.WALL -> PlaneKind.WALL; PlaneLabel.FLOOR -> PlaneKind.FLOOR; PlaneLabel.CEILING -> PlaneKind.CEILING
+ *     PlaneLabel.TABLE -> PlaneKind.TABLE; else -> PlaneKind.UNKNOWN
+ * }
+ * ```
+ * `Pose(Vector3)` exists (rotation defaults to `Quaternion()` = identity), so an anchor at a point is
+ * `Pose(position.toVector3())`. Q21 (docs/modules/r3-spatial-perception.md "Contract issues" 7): check on the
+ * first device run whether `Session.create(context = activity)` returns the same object as Compose for XR's
+ * `LocalSession.current` before relying on `session.scene` here.
  */
 class XrPerceptionSession(
     private val app: Application,
@@ -338,11 +384,12 @@ class XrPerceptionSession(
      * val depth = if (stereo) Depth.left(session) else Depth.mono(session)
      * val view = if (stereo) RenderViewpoint.left(session) else RenderViewpoint.mono(session)
      * depth.state.collect { d ->
-     *     val map = d.smoothDepthMap ?: return@collect            // IllegalStateException if SMOOTH not configured
-     *     val fov = view.state.value.fieldOfView                   // angleLeft/Right/Up/Down (radians, UNVERIFIED unit)
+     *     val map = d.smoothDepthMap ?: return@collect   // IllegalStateException if SMOOTH not configured
+     *     val fov = view.state.value.fieldOfView          // angleLeft/Right/Up/Down (radians, UNVERIFIED unit)
      *     val floats = FloatArray(d.width * d.height).also { map.rewind(); map.get(it) }
      *     val conf = d.smoothConfidenceMap?.let { b -> ByteArray(floats.size).also { b.rewind(); b.get(it) } }
-     *     _depthFrames.tryEmit(DepthFrame(d.width, d.height, floats, conf, FovDeg(hDeg, vDeg), SystemClock.elapsedRealtimeNanos()))
+     *     val now = SystemClock.elapsedRealtimeNanos()
+     *     _depthFrames.tryEmit(DepthFrame(d.width, d.height, floats, conf, FovDeg(hDeg, vDeg), now))
      * }
      * ```
      * A-5 evidence line to log once from this feeder: `vysion: depth WxH, min trusted depth m` (the
@@ -358,7 +405,8 @@ class XrPerceptionSession(
      * Plane.subscribe(session).collect { set ->
      *     _planes.value = set.map { p ->
      *         val s = p.state.value
-     *         PlaneObservation(id = p.hashCode().toString(), kind = s.label.toPlaneKind(), tracking = s.trackingState.toTracking(),
+     *         PlaneObservation(id = p.hashCode().toString(), kind = s.label.toPlaneKind(),
+     *             tracking = s.trackingState.toTracking(),
      *             center = s.centerPose.translation.v3(), normal = s.centerPose.up.v3(),
      *             axisX = s.centerPose.right.v3(), axisZ = (s.centerPose.forward * -1f).v3(),
      *             polygon = s.vertices.map { Vec2(it.x, it.y) }, timestampNanos = SystemClock.elapsedRealtimeNanos())
@@ -384,7 +432,8 @@ class XrPerceptionSession(
      * ArDevice.getInstance(session).state.collect { s ->
      *     val p = s.devicePose
      *     val (yaw, pitch, roll) = HeadAngles.fromForwardUp(p.forward.v3(), p.up.v3())
-     *     _headPose.value = RawHeadPose(p.translation.v3(), yaw, pitch, roll, s.trackingState.toTracking(), SystemClock.elapsedRealtimeNanos())
+     *     _headPose.value = RawHeadPose(p.translation.v3(), yaw, pitch, roll, s.trackingState.toTracking(),
+     *         SystemClock.elapsedRealtimeNanos())
      * }
      * ```
      */
@@ -400,36 +449,55 @@ class XrPerceptionSession(
     private var nextAnchorSeq = 0
     private val lifecycle = Mutex()
 
-    /** The resumed activity, captured so the no-arg [start] can create the session (see KDoc above). */
+    /** Parent of the four feeders of the current run; cancelled by [stop] so a later [start] relaunches them. */
+    private var feeders: Job? = null
+
+    /**
+     * The Activity [start] was last given, for [ensureStarted]'s retry. Weak so a destroyed Activity is
+     * never kept alive; cleared by [stop].
+     */
     @Volatile
-    private var resumedActivity: WeakReference<Activity>? = null
+    private var activityRef: WeakReference<Activity>? = null
 
-    init {
-        app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
-            override fun onActivityResumed(activity: Activity) {
-                resumedActivity = WeakReference(activity)
+    /**
+     * Creates and configures the session (SRS R3 task 1, Sat 12:00; plan.md F1 task 1.5; A-5). Called by
+     * `MainActivity` with itself after permissions and on every `onStart`, so it is also the restart after
+     * [stop]. Idempotent while RUNNING / STARTING ([SessionStartPolicy]). Never throws: on any failure
+     * [state] becomes [SessionState.UNAVAILABLE] and the NoOp-equivalent behavior continues (R1 speaks
+     * `Cues.navigationUnavailable`, an R4 string).
+     */
+    suspend fun start(activity: Activity) {
+        lifecycle.withLock {
+            activityRef = WeakReference(activity)
+            open(activity, explicit = true)
+        }
+    }
+
+    /** Used by [XrNavigationEngine.start] and [XrAnchorStore.placeFromBearing]: retries an UNAVAILABLE session. */
+    override suspend fun ensureStarted() {
+        lifecycle.withLock {
+            val activity = activityRef?.get()
+            if (activity == null) {
+                if (_state.value != SessionState.STOPPED) {
+                    Log.w(TAG, "XrPerceptionSession.ensureStarted: start(activity) not called yet (MainActivity, D7)")
+                }
+                return
             }
-
-            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
-            override fun onActivityStarted(activity: Activity) = Unit
-            override fun onActivityPaused(activity: Activity) = Unit
-            override fun onActivityStopped(activity: Activity) = Unit
-            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
-            override fun onActivityDestroyed(activity: Activity) = Unit
-        })
+            open(activity, explicit = false)
+        }
     }
 
     /**
-     * Creates and configures the session (SRS R3 task 1, Sat 12:00; plan.md F1 task 1.5; A-5).
-     * Idempotent. Never throws: on any failure [state] becomes [SessionState.UNAVAILABLE] and the
-     * NoOp-equivalent behavior continues (R1 speaks `Cues.navigationUnavailable`, an R4 string).
+     * The device step of [start] / [ensureStarted]; runs under [lifecycle].
      *
      * Real implementation (docs/stack.md → R3; every line VERIFIED unless marked):
      * ```
-     * val result = withContext(Dispatchers.IO) { Session.create(context = activity) }   // D7: named arg, off main, never applicationContext
+     * // D7: named arg, off main, never applicationContext
+     * val result = withContext(Dispatchers.IO) { Session.create(context = activity) }
      * val s = when (result) {
      *     is SessionCreateSuccess -> result.session
-     *     else -> { _state.value = SessionState.UNAVAILABLE; return }   // UnsupportedDevice / ApkRequired / TimedOut / UnknownError
+     *     // UnsupportedDevice / ApkRequired / TimedOut / UnknownError
+     *     else -> { _state.value = SessionState.UNAVAILABLE; return }
      * }
      * val cfg = Config.Builder(s.config)
      *     .setPlaneTracking(PlaneTrackingMode.HORIZONTAL_AND_VERTICAL)   // SCENE_UNDERSTANDING_COARSE
@@ -441,46 +509,51 @@ class XrPerceptionSession(
      * try {
      *     when (s.configure(cfg)) { is SessionConfigureSuccess -> Unit; else -> /* Q5: drop modes one at a time */ }
      * } catch (e: SecurityException) { /* a permission is missing: UNAVAILABLE */ }
-     *   catch (e: UnsupportedOperationException) { /* a mode is unsupported: XrDevice.isDepthEstimationModeSupported() says which */ }
+     *   catch (e: UnsupportedOperationException) { /* a mode is unsupported: XrDevice.is…Supported() says which */ }
      * session = s; _state.value = SessionState.RUNNING
-     * scope.launch { depth feeder }; scope.launch { plane feeder }; scope.launch { hand feeder }; scope.launch { head feeder }
+     * // A-5 / A-6 probes, after SessionConfigureSuccess (import androidx.xr.scenecore.scene for `s.scene`):
+     * _spatialAudioSupported.value = s.scene.spatialCapabilities.contains(SpatialCapability.SPATIAL_AUDIO)
+     * _depthSupported.value =
+     *     XrDevice.getCurrentDevice(app).isDepthEstimationModeSupported(DepthEstimationMode.SMOOTH_ONLY)
+     * Log.i(TAG, "probe depthSmooth=${_depthSupported.value} spatialAudio=${_spatialAudioSupported.value} (A-5, A-6)")
+     * feeders = scope.launch {
+     *     launch { depth feeder }; launch { plane feeder }; launch { hand feeder }; launch { head feeder }
+     * }
      * ```
+     * [spatialAudioSupported] is the only place the A-6 capability is read; [SpatialAudioPinger.attach] copies it
+     * into `isSpatial` (all three calls VERIFIED by javap: `Scene.getSpatialCapabilities(): Set<SpatialCapability>`,
+     * `SessionExt.getScene(Session)`, `XrDevice.isDepthEstimationModeSupported(DepthEstimationMode)`).
      */
-    suspend fun start(activity: Activity) {
-        lifecycle.withLock {
-            if (_state.value == SessionState.RUNNING || _state.value == SessionState.STARTING) return
-            _state.value = SessionState.STARTING
-            Log.w(
-                TAG,
-                "TODO(FR-N1) XrPerceptionSession.start: Session.create(context = activity) on Dispatchers.IO, " +
-                    "Config.Builder(session.config).setPlaneTracking/.setDepthEstimation/.setHandTracking/" +
-                    ".setDeviceTracking/.setAnchorPersistence, session.configure(cfg), then launch the four feeders",
-            )
-            // Skeleton: no runtime session exists, so the streams stay silent and nothing is measured.
-            _state.value = SessionState.UNAVAILABLE
-        }
-    }
-
-    /** No-arg form used by [XrNavigationEngine.start] and [XrAnchorStore]: uses the resumed activity. */
-    override suspend fun ensureStarted() {
-        val activity = resumedActivity?.get()
-        if (activity == null) {
-            Log.w(TAG, "XrPerceptionSession.ensureStarted: no resumed Activity yet; Session.create needs one (D7)")
-            return
-        }
-        start(activity)
+    @Suppress("UNUSED_PARAMETER") // `activity` is the Session.create context once the TODO below lands
+    private suspend fun open(activity: Activity, explicit: Boolean) {
+        if (!SessionStartPolicy.shouldOpen(_state.value, explicit)) return
+        _state.value = SessionState.STARTING
+        Log.w(
+            TAG,
+            "TODO(FR-N1) XrPerceptionSession.start: Session.create(context = activity) on Dispatchers.IO, " +
+                "Config.Builder(session.config).setPlaneTracking/.setDepthEstimation/.setHandTracking/" +
+                ".setDeviceTracking/.setAnchorPersistence, session.configure(cfg), then launch the four feeders",
+        )
+        // Skeleton: no runtime session exists, so the streams stay silent and nothing is measured.
+        _state.value = SessionState.UNAVAILABLE
     }
 
     /**
-     * Releases every anchor and the session. The runtime session has no public `destroy` (it follows
-     * the activity lifecycle, `Session.create(..., lifecycleOwner = activity)`), so stop only detaches
-     * anchors and forgets the reference. Never throws.
+     * Ends the current run: cancels the feeders, detaches every anchor (their `track()` flows complete),
+     * forgets the session and the Activity, and clears the pose and planes so nothing stale is trusted
+     * after a restart (RK-5). The runtime session has no public `destroy` (it follows the Activity
+     * lifecycle, `Session.create(..., lifecycleOwner = activity)`). Reversible: [start] opens a new run.
+     * Never throws.
      */
     suspend fun stop() {
         lifecycle.withLock {
+            feeders?.cancel()
+            feeders = null
             detachAllAnchors()
-            Log.w(TAG, "TODO(FR-N1) XrPerceptionSession.stop: cancel the feeder jobs; the Session follows the Activity lifecycle")
             session = null
+            activityRef = null
+            _headPose.value = null
+            _planes.value = emptyList()
             _state.value = SessionState.STOPPED
         }
     }
@@ -489,10 +562,14 @@ class XrPerceptionSession(
      * FR-N3 depth sample along a bearing. Two real strategies, in order (both documented so the
      * implementer picks after the Q6 device check):
      * 1. `hitTest(session, Ray(origin = head.translation, direction = dir))` (`androidx.xr.arcore.Interaction.hitTest`,
-     *    VERIFIED) → `firstOrNull()?.hitPose?.translation`. Needs plane tracking; works without a depth map.
-     * 2. Depth map: `DepthCone.pixelForBearing(relYawDeg, relPitchDeg, frame)` →
-     *    `DepthCone.medianTrustedDepthAround(frame, x, y, radius = 3)` → `head.position + dir * depth`
-     *    (both helpers in ProximityMonitor.kt, pure, tested).
+     *    VERIFIED) → prefer the first hit whose `trackable` is a `Plane` labeled `WALL` (a door sits in a wall;
+     *    docs/stack.md §3-R3 snippet), else `firstOrNull()` → `hitPose.translation`. Needs plane tracking; works
+     *    without a depth map. `dir` = `HeadAngles.forwardForYaw(worldYawDeg).toVector3()`.
+     * 2. Depth map on the latest [DepthFrame] `f`: `relYawDeg = HeadAngles.wrapDeg(worldYawDeg - head.yawDeg)`;
+     *    `DepthCone.pixelForBearing(relYawDeg, pitchDeg, f.width, f.height, f.fov)` (`null` = off the image) →
+     *    `DepthCone.medianTrustedDepthAround(f, x, y, radius = 3)` → `head.position + dir * depth` (both helpers in
+     *    ProximityMonitor.kt, pure, tested). `// stack.md: UNVERIFIED` whether `smoothDepthMap` holds distance along
+     *    the ray or along the optical axis; if along the axis, divide by `cos` of the angle off the axis.
      */
     override suspend fun sampleDepthAlongBearing(worldYawDeg: Float, pitchDeg: Float): Vec3? {
         Log.w(
@@ -507,16 +584,23 @@ class XrPerceptionSession(
      * Real implementation (stack.md R3 "Anchors", VERIFIED):
      * ```
      * when (val r = Anchor.create(session, Pose(Vector3(position.x, position.y, position.z)))) {
-     *     is AnchorCreateSuccess -> { val id = AnchorId("door-${nextAnchorSeq++}"); nativeAnchors[id] = r.anchor
-     *         anchorPoses[id] = MutableStateFlow(null); scope.launch { r.anchor.state.collect { st -> anchorPoses[id]?.value =
-     *             AnchorPoseSample(id, st.pose.translation.v3(), st.trackingState.toTracking(), SystemClock.elapsedRealtimeNanos()) } }
-     *         id }
+     *     is AnchorCreateSuccess -> {
+     *         val id = AnchorId("door-${nextAnchorSeq++}"); nativeAnchors[id] = r.anchor
+     *         anchorPoses[id] = MutableStateFlow(null)
+     *         scope.launch { r.anchor.state.collect { st -> anchorPoses[id]?.value = AnchorPoseSample(id,
+     *             st.pose.translation.v3(), st.trackingState.toTracking(), SystemClock.elapsedRealtimeNanos()) } }
+     *         id
+     *     }
      *     else -> null   // AnchorCreateResourcesExhausted / AnchorCreateTrackingUnavailable (sealed, keep else)
      * }
      * ```
      */
     override suspend fun createAnchor(position: Vec3): AnchorId? {
-        Log.w(TAG, "TODO(FR-N3) XrPerceptionSession.createAnchor: Anchor.create(session, Pose(Vector3(x, y, z))) -> AnchorCreateSuccess")
+        Log.w(
+            TAG,
+            "TODO(FR-N3) XrPerceptionSession.createAnchor: Anchor.create(session, Pose(Vector3(x, y, z))) " +
+                "-> AnchorCreateSuccess",
+        )
         return null
     }
 
@@ -554,7 +638,11 @@ class XrPerceptionSession(
      * ```
      */
     internal fun createAnchorEntity(id: AnchorId, name: String): AnchorEntity? {
-        Log.w(TAG, "TODO(FR-N3) XrPerceptionSession.createAnchorEntity: AnchorSpace.create(session, anchor) + Entity.create(session, \"$name\") + addChild")
+        Log.w(
+            TAG,
+            "TODO(FR-N3) XrPerceptionSession.createAnchorEntity: AnchorSpace.create(session, anchor) + " +
+                "Entity.create(session, \"$name\") + addChild",
+        )
         return null
     }
 
@@ -567,13 +655,18 @@ class XrPerceptionSession(
      * Real implementation (VERIFIED signature; defaults are not recoverable from bytecode, pass all four):
      * ```
      * if (!session.scene.spatialCapabilities.contains(SpatialCapability.SPATIAL_AUDIO)) return -1   // A-6 fallback
-     * return SpatialSoundPool.play(session = session, soundPool = soundPool, soundID = soundId, params = PointSourceParams(),
-     *     entity = entity.native as Entity, volume = 1f, priority = 0, loop = 0, rate = 1f)
+     * return SpatialSoundPool.play(session = session, soundPool = soundPool, soundID = soundId,
+     *     params = PointSourceParams(), entity = entity.native as Entity,
+     *     volume = 1f, priority = 0, loop = 0, rate = 1f)
      * ```
      * Returns the SoundPool stream id, or -1 when spatial audio is unavailable.
      */
     internal fun playPointSource(entity: AnchorEntity, soundPool: SoundPool, soundId: Int): Int {
-        Log.w(TAG, "TODO(FR-N3) XrPerceptionSession.playPointSource: SpatialSoundPool.play(session, soundPool, soundID, PointSourceParams(), entity, 1f, 0, 0, 1f)")
+        Log.w(
+            TAG,
+            "TODO(FR-N3) XrPerceptionSession.playPointSource: SpatialSoundPool.play(session, soundPool, soundID, " +
+                "PointSourceParams(), entity, 1f, 0, 0, 1f)",
+        )
         return -1
     }
 

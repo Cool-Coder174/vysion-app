@@ -17,7 +17,7 @@ Five people (or agents), five modules, one integration branch, two days. The rul
 A task from a module doc (`docs/modules/r*.md`) is done when all of these hold:
 
 1. The FR id(s) it closes are in the PR title (`FR-N1: proximity cue with 2 s debounce`).
-2. `./gradlew assembleDebug testDebugUnitTest` passes and `scripts/check_privacy.sh` is clean.
+2. `./gradlew assembleDebug testDebugUnitTest` passes and `scripts/check_privacy.sh` and `scripts/check_cues.sh` are clean (the same three gates CI runs; AGENTS.md §4 step 5).
 3. It ran on the headset (or the S25 Ultra for R2 iteration) and the evidence is in the PR: a logcat line, a number, a screenshot path. "Works on my emulator" is not evidence for a P0 item.
 4. Any number it produces is measured on the device and goes to `docs/benchmarks.md`; no number is typed from memory.
 5. The checkbox in the module doc is ticked in the same PR.
@@ -47,7 +47,7 @@ A task from a module doc (`docs/modules/r*.md`) is done when all of these hold:
 ```
 r3: FR-N1: sample depth cone at 10 Hz, 2 s debounce
 
-Measured on headset: 42 ms from threshold crossing to earcon start (target ≤ 300 ms).
+Measured on headset: <N> ms from threshold crossing to earcon start (target ≤ 300 ms; logcat line in the PR).
 ```
 
 ## Running the app

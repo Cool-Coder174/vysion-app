@@ -22,9 +22,10 @@ import kotlinx.coroutines.flow.flow
  * Constructor `(Application)` per `AppGraph`.
  *
  * - [analysisFrames]: a cold flow that paints a 640x480 gradient with a dark rectangle sliding
- *   across it at 5 fps (FR-N2 floor), so `FakeInferenceEngine.detect` and the overlay have motion.
- *   Each collector gets its own 2-bitmap pool, mirroring the real source's ownership rule: the
- *   frame is valid inside `collect` only and must not be recycled by the collector (INV-9).
+ *   across it at 5 fps (FR-N2 floor). Collected only by `XrNavigationEngine`; under `-PuseFakes`
+ *   Navigation is `NoOpNavigationEngine`, so these frames are unused and the overlay stays empty.
+ *   Each frame is a fresh `Bitmap`, mirroring the real source's ownership rule: the collector never
+ *   recycles it (INV-9) and the GC reclaims it (no reuse pool, see `CameraFrameSource`'s KDoc).
  * - [captureStill]: a fresh 896x896 synthetic "sign" (gradient, a rectangle, dark text-like bars);
  *   the caller owns and recycles it (INV-9).
  * - [stats]: non-null after [start]; fps is measured by [FpsMeter] as frames are emitted, never
@@ -44,21 +45,16 @@ class FakeFrameSource(
     private val fpsMeter = FpsMeter()
 
     override val analysisFrames: Flow<Bitmap> = flow {
-        // Two bitmaps alternate (plan.md F2 2.1 "2-bitmap pool"); the collector sees one at a time.
-        val pool = arrayOf(newFrame(ANALYSIS_WIDTH, ANALYSIS_HEIGHT), newFrame(ANALYSIS_WIDTH, ANALYSIS_HEIGHT))
+        // A fresh bitmap per frame: a conflated collector may still hold the previous one (no pool to repaint).
         var index = 0
-        try {
-            while (true) {
-                val frame = pool[index % pool.size]
-                SyntheticScene.paintAnalysisFrame(frame, index)
-                val fps = fpsMeter.onFrame(SystemClock.elapsedRealtimeNanos()) // H-21: monotonic
-                if (fps != null) _stats.value = statsFor(fps)
-                emit(frame)
-                index++
-                delay(FRAME_PERIOD_MS) // 5 fps
-            }
-        } finally {
-            pool.forEach { if (!it.isRecycled) it.recycle() }
+        while (true) {
+            val frame = newFrame(ANALYSIS_WIDTH, ANALYSIS_HEIGHT)
+            SyntheticScene.paintAnalysisFrame(frame, index)
+            val fps = fpsMeter.onFrame(SystemClock.elapsedRealtimeNanos()) // H-21: monotonic
+            if (fps != null) _stats.value = statsFor(fps)
+            emit(frame)
+            index++
+            delay(FRAME_PERIOD_MS) // 5 fps
         }
     }
 
@@ -117,7 +113,13 @@ private object SyntheticScene {
         val travel = (target.width - rectWidth).coerceAtLeast(1)
         val left = (frameIndex * RECT_STEP_PX) % travel
         val top = (target.height - rectHeight) / 2
-        canvas.drawRect(left.toFloat(), top.toFloat(), (left + rectWidth).toFloat(), (top + rectHeight).toFloat(), rectPaint)
+        canvas.drawRect(
+            left.toFloat(),
+            top.toFloat(),
+            (left + rectWidth).toFloat(),
+            (top + rectHeight).toFloat(),
+            rectPaint,
+        )
     }
 
     /** A "sign": light gradient, a framed rectangle and a few black bars where text lines would be. */
@@ -135,7 +137,8 @@ private object SyntheticScene {
     }
 
     private fun drawGradient(canvas: Canvas, width: Int, height: Int, from: Int, to: Int) {
-        gradientPaint.shader = LinearGradient(0f, 0f, width.toFloat(), height.toFloat(), from, to, Shader.TileMode.CLAMP)
+        gradientPaint.shader =
+            LinearGradient(0f, 0f, width.toFloat(), height.toFloat(), from, to, Shader.TileMode.CLAMP)
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), gradientPaint)
     }
 }
