@@ -188,6 +188,14 @@ Other checks on the headset, same day:
 | Preprocessor `--max_audio_len 300` (model card) vs 30 | native heap 420 MB after load → 4.06 GB after the first clip with 300; stays ~416 MB with 30 |
 | `Module.load` without a thread count (first VAD build) | "Resetting threadpool to 3 threads" on the shared XNNPACK pool the VLM and detector set to 4; fixed by loading with 4 |
 
+## Mode behavior checked worn (Isaac, 2026-10-18, main 3493450 / 7161952)
+
+| Check | Result |
+|---|---|
+| One mode at a time: find the door, then read | detector `detect ms=` lines: 29 in Navigation, 0 from 8 to 33 s after read (10:37–10:38) |
+| Find the door with no door in view | no "can't find a door"; two VLM votes (7.9 s, 6.6 s), then the silent watch; only Navigation's "obstacle ahead" was heard (a desk within 1 m, cue every 2 s, 20–100 ms after the depth sample); Isaac: right (11:23) |
+| Read after find the door | first word 1.94 s after capture; Navigation stopped (1 detector line, before the stop); the text left the window when the voice ended; Isaac: right (11:24) |
+
 ## Thermal soak (`scripts/benchmark.sh --soak 600`)
 
 | Minute | Detector fps | PSS MB | Battery % | Thermal status |
