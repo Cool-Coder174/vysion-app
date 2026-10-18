@@ -152,4 +152,5 @@ object LibraryPromptSet : PromptSet {
     override val describeDetailed: String get() = PromptLibrary.DESCRIBE_DETAILED
     override fun followUp(question: String): String = PromptLibrary.followUp(question)
     override fun forLocale(prompt: String, locale: Locale): String = PromptLibrary.forLocale(prompt, locale)
+    override val noTextSentinel: String get() = PromptLibrary.NO_TEXT_SENTINEL
 }

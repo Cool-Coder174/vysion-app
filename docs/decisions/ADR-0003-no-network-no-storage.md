@@ -11,7 +11,7 @@
 1. The manifest never declares `android.permission.INTERNET` (or `ACCESS_NETWORK_STATE`). Both strings appear in `app/src/main` only as `tools:node="remove"` guards that strip them when a library adds them; `scripts/check_privacy.sh` fails on any other occurrence and on any network permission in the merged manifest.
 2. Camera frames exist only as in-memory `Bitmap`s owned by the active command and are recycled after use. No code path writes a frame to disk, to `MediaStore`, or to a log.
 3. No analytics, no crash reporter, no third-party SDK that has a network code path.
-4. The only files the app writes are the model files copied from `assets/models/` to `filesDir/models/`.
+4. The only files the app writes are the model files copied from `assets/models/` to `filesDir/models/`. Amended by ADR-0009: plus one "onboarding finished" boolean in SharedPreferences, nothing else.
 
 ## Alternatives rejected
 

@@ -8,6 +8,7 @@ import com.vysion.xr.core.DiagnosticsSource
 import com.vysion.xr.core.FrameSource
 import com.vysion.xr.core.HeadPoseSource
 import com.vysion.xr.core.InferenceEngine
+import com.vysion.xr.core.ModePhrasebook
 import com.vysion.xr.core.NavigationEngine
 import com.vysion.xr.core.OverlayRenderer
 import com.vysion.xr.core.PromptSet
@@ -28,6 +29,7 @@ import com.vysion.xr.platform.CameraFrameSource
 import com.vysion.xr.platform.DeviceProfile
 import com.vysion.xr.platform.FakeFrameSource
 import com.vysion.xr.platform.ModeController
+import com.vysion.xr.platform.OnboardingStore
 import com.vysion.xr.platform.PassthroughOverlayRenderer
 import com.vysion.xr.voice.AndroidSpeaker
 import com.vysion.xr.voice.CuesPhrasebook
@@ -139,6 +141,15 @@ class AppGraph(private val app: Application) {
         }
     }
 
+    /**
+     * R4's words for everything Vysion says, following `Speaker.locale` (FR-G6). Exposed for the onboarding UI,
+     * which shows and speaks the same page text (designs pages 2-8); the controller gets the same instance.
+     */
+    val phrasebook: ModePhrasebook = CuesPhrasebook.also { it.bind(speaker) }
+
+    /** First-launch onboarding completion: one boolean, the only preference the app writes (ADR-0009). */
+    val onboarding: OnboardingStore = OnboardingStore(app)
+
     // R1 — the state machine that owns every one-shot command. It speaks only through R4's phrasebook
     // and prompts only through R2's prompt set (INV-4, ADR-0005); the phrasebook follows Speaker.locale.
     val modeController: ModeController = ModeController(
@@ -151,13 +162,16 @@ class AppGraph(private val app: Application) {
         headPose = headPose,
         overlay = overlay,
         scope = scope,
-        phrasebook = CuesPhrasebook.also { it.bind(speaker) },
+        phrasebook = phrasebook,
         prompts = prompts,
     )
 
-    /** Called from `MainActivity.onStart` after permissions are granted. */
-    fun start() {
-        modeController.start()
+    /**
+     * Called from `MainActivity.onStart` after permissions are granted, and once when first-launch
+     * onboarding finishes (then with [speakWelcome] false: the last onboarding page already said it).
+     */
+    fun start(speakWelcome: Boolean = true) {
+        modeController.start(speakWelcome)
     }
 
     /**

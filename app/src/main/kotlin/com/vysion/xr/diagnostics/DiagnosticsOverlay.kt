@@ -1,6 +1,14 @@
 package com.vysion.xr.diagnostics
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
@@ -11,7 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -37,7 +44,7 @@ import java.util.Locale
  * Exactly the six SRS §11 fields, in SRS order: model and quantization · backend · last VLM latency and the
  * session median · detector fps over the 5 s window · app memory in MB · "Network permission: <value>".
  * Every `null` renders as "not measured" (NFR Honesty, INV-7); there is no sample number anywhere in this
- * file, the preview included. Monospace, ≥ 24 sp, white on black (21:1, above the 7:1 SRS floor), and one
+ * file, the preview included. Styled as the designs' second glass window (Headset 13), and one
  * `contentDescription` on the panel that reads every row so the visual has its audio twin (SRS §3 rule 1).
  *
  * Labels here are display text, not spoken cues: nothing in this file goes through `Speaker.say`
@@ -48,50 +55,62 @@ fun DiagnosticsOverlay(source: DiagnosticsSource, modifier: Modifier = Modifier)
     val snapshot by source.snapshot.collectAsState()
     val rows = DiagnosticsText.rows(snapshot)
     val description = DiagnosticsText.spoken(rows)
+    val shape = RoundedCornerShape(PanelCorner)
     Column(
+        verticalArrangement = Arrangement.spacedBy(RowGap),
         modifier = modifier
-            .background(PanelBackground)
+            .clip(shape)
+            .background(Brush.verticalGradient(listOf(GlassTop, GlassBottom)), shape)
+            .border(1.5.dp, GlassEdge, shape)
             .padding(PanelPadding)
             .semantics(mergeDescendants = true) { contentDescription = description },
     ) {
-        Text(
-            text = DiagnosticsText.TITLE,
-            color = PanelForeground,
-            fontFamily = FontFamily.Monospace,
-            fontSize = PanelFontSize,
-            fontWeight = FontWeight.Bold,
-        )
+        Text(text = DiagnosticsText.TITLE, color = Primary, fontSize = TitleSize, fontWeight = FontWeight.SemiBold)
         rows.forEach { (label, value) ->
-            Text(
-                text = DiagnosticsText.line(label, value),
-                color = PanelForeground,
-                fontFamily = FontFamily.Monospace,
-                fontSize = PanelFontSize,
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(RowGap), verticalAlignment = Alignment.Top) {
+                Text(text = label, color = Tertiary, fontSize = RowSize, modifier = Modifier.weight(1.1f))
+                Text(
+                    text = value,
+                    // The honesty rule made visible: anything not yet measured on the device stands out in yellow.
+                    color = if (value.contains(DiagnosticsText.NOT_MEASURED)) NotMeasured else Primary,
+                    fontSize = RowSize,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
     }
 }
 
-// SRS §3 rule 4 asks 7:1 for transcript text; white on black is 21:1. Sizes are layout, not measurements.
-private val PanelBackground = Color.Black
-private val PanelForeground = Color.White
-private val PanelFontSize = 24.sp
-private val PanelPadding = 16.dp
+// Designs (Headset 13): the second glass window, "Measured on device". Graphite glass like the status window;
+// white values 12:1, labels 6:1, "not measured" yellow 11.9:1 on graphite. Sizes are layout, not measurements.
+private val GlassTop = Color(0xD93A3A40)
+private val GlassBottom = Color(0xE6242428)
+private val GlassEdge = Color(0x29FFFFFF)
+private val Primary = Color.White
+private val Tertiary = Color(0xFFA1A1A8)
+private val NotMeasured = Color(0xFFFFD60A)
+private val TitleSize = 28.sp
+private val RowSize = 22.sp
+private val PanelPadding = 36.dp
+private val PanelCorner = 44.dp
+private val RowGap = 14.dp
 
 /**
  * Pure text rules for the overlay, unit-tested on the JVM (no Compose, no Android classes).
  * One place decides how a `null` renders so the honesty rule cannot drift between rows.
  */
 internal object DiagnosticsText {
-    const val TITLE: String = "Diagnostics (measured on device)"
+    const val TITLE: String = "Measured on device"
 
     /** INV-7: the one and only rendering of a `null` field. */
     const val NOT_MEASURED: String = "not measured"
 
     const val LABEL_MODEL: String = "Model"
     const val LABEL_BACKEND: String = "Backend"
-    const val LABEL_VLM_LATENCY: String = "VLM ms (last / median)"
-    const val LABEL_DETECTOR_FPS: String = "Detector fps (5 s)"
+    const val LABEL_VLM_LATENCY: String = "Last / median"
+    const val LABEL_DETECTOR_FPS: String = "Detector"
     const val LABEL_MEMORY: String = "App memory"
     const val LABEL_NETWORK: String = "Network permission"
 

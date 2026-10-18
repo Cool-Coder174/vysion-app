@@ -92,7 +92,7 @@ sequenceDiagram
   participant FS as FrameSource (R1)
   participant IE as InferenceEngine (R2)
   participant SP as Speaker (R4)
-  participant TP as TranscriptPanel (R1)
+  participant TP as StatusWindow (R1)
   U->>CB: "Vysion, read this"
   CB-->>MC: Command.Read
   MC->>SP: earcon(THINKING)

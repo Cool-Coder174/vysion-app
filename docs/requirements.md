@@ -53,7 +53,7 @@ Target: **85+/100**. Anything that earns no rubric points is cut.
 | ID | Requirement | Pri | Rubric | Owner | Phase |
 |---|---|---|---|---|---|
 | FR-T1 | On "read this", capture one world-camera frame, run the VLM with the read-verbatim prompt, and begin speaking within 6 s | P0 | UC, TI | R1 (lead; `FrameSource`, `ModeController`, the 6 s evidence), R2 (`InferenceEngine`, gate 4), R4 (`Speaker`, gate 3) | F5 |
-| FR-T2 | Show the transcript in a large-print spatial panel (48 dp+, 7:1 contrast) anchored where the user was looking | P0 | UC | R1 (lead; `TranscriptPanel`), R4 (spec) | F5 (anchoring: P1) |
+| FR-T2 | Show the transcript in a large-print spatial panel (48 dp+, 7:1 contrast) anchored where the user was looking | P0 | UC | R1 (lead; `StatusWindow` answer text, `platform/ui/HeadsetUi.kt`), R4 (spec) | F5 (anchoring: P1) |
 | FR-T3 | "Repeat" replays; "slower" replays at 0.7x rate | P1 | UC | R4 | F6 |
 | FR-T4 | "In Spanish" re-prompts the VLM on the same frame for a translation | P1 | UC | R2 (prompt), R4 (locale), R1 (`ModeController` re-prompt on the retained still) | F6 |
 | FR-T5 | If head angular velocity is high at capture, say "hold still" and retry once | P1 | UC | R3 (`HeadPoseSource`), R1 | F6 |

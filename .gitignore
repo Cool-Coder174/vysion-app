@@ -50,3 +50,8 @@ bench/out/
 *.keystore
 .env
 .env.*
+
+# ── Impeccable design tooling: comps contain photos of bystanders; never publish them ──
+.impeccable/mocks/
+.impeccable/review/
+.impeccable/build/

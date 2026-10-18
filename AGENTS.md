@@ -46,8 +46,9 @@ If you are unsure which role you are: the FR id's **Owner** column in `docs/requ
 │   │   ├── core/        Contracts.kt (every cross-module type, incl. the ModePhrasebook / PromptSet seams),
 │   │   │                Units.kt (clock-face, half-meter)
 │   │   ├── platform/    R1: CameraFrameSource, FakeFrameSource, ModeController, PassthroughOverlayRenderer,
-│   │   │                DeviceProfile, Permissions, ui/ (SpatialShell, FlatShell, ControlPanel, TranscriptPanel,
-│   │   │                OverlayCanvas)
+│   │   │                DeviceProfile, Permissions, OnboardingStore, ui/ (SpatialShell, FlatShell,
+│   │   │                Onboarding, HeadsetUi, HeadsetScreen, ShellState, OverlayCanvas, DesignPreview,
+│   │   │                theme/ tokens + icons, components/; the designs' system is recorded in DESIGN.md)
 │   │   ├── inference/   R2: ExecuTorchInferenceEngine, FakeInferenceEngine, PromptLibrary (+ LibraryPromptSet),
 │   │   │                ModelCatalog, LatencyStats, YoloPostProcessor
 │   │   ├── perception/  R3: XrPerceptionSession, XrHeadPoseSource, XrAnchorStore, XrNavigationEngine,
@@ -103,6 +104,7 @@ One package per role. A package imports from `com.vysion.xr.core` and from itsel
 | A `Bitmap` from `captureStill()` has one owner who recycles it | memory budget; INV-9 | KDoc |
 | `AppGraph.stop()` is reversible, `AppGraph.release()` is once: `start`/`stop` follow `onStart`/`onStop` and keep the scope, models and TTS (`warmUp()` is idempotent; `FrameSource.stop()` keeps its executor); `release()` (recognizer, TTS, models, scope) runs only from `onDestroy` when `isFinishing`, and a finished activity in a cached process gets a fresh graph from `VysionApplication.graph` (`AppGraph.isReleased`) | headset off and on restarts without a model reload; `SpeechRecognizer.destroy()` / `TextToSpeech.shutdown()` cannot be undone | `AppGraph`, `VysionApplication`, `MainActivity`; `docs/contracts.md` Lifecycle row |
 | New dependency only with a line in `docs/stack.md` (what for, no network path) | ADR-0003 | review |
+| UI uses the tokens and components in `platform/ui/theme` and `platform/ui/components` (Michelle Bui's designs, recorded in `DESIGN.md`); no ad-hoc colors, sizes or icons | one visual system; meaning colors have one job each | review |
 | No DI framework, no product flavors, no new Gradle modules | ADR-0006/0008 | review |
 
 ## 6. Changing a contract

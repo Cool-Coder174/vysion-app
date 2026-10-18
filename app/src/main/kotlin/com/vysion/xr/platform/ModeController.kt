@@ -57,7 +57,7 @@ import kotlinx.coroutines.withTimeout
  *   starts the frame source and warms the engine up; speaks the welcome (FR-G1).
  * - One-shot commands (Read FR-T1, Describe FR-D1, FindDoor FR-N3, arrival FR-N6): pause
  *   Navigation (ADR-0004) → THINKING earcon → `captureStill()` → `describe()` under the 15 s
- *   watchdog (INV-5) with a THINKING earcon every 4 s (NFR reliability: never silent > 10 s) →
+ *   watchdog (INV-5) with a THINKING earcon every 1.5 s (designs: never silent > 2 s) →
  *   transcript → `Speaker.say` → resume Navigation. The still is recycled in `finally` (INV-9).
  *   Any failure speaks [ModePhrasebook.inferenceFailed] and returns to IDLE.
  * - Busy policy (plan.md Q3): a non-Stop command while CAPTURING/INFERRING is answered with
@@ -148,9 +148,10 @@ class ModeController(
     /**
      * Idempotent. Subscribes, starts the frame source, warms the engine up, speaks the welcome (FR-G1).
      * Restartable: [stop] then [start] (headset off and on, `AppGraph.stop`/`start`) runs a fresh set of
-     * collectors in a new child scope of [scope] and speaks the welcome again.
+     * collectors in a new child scope of [scope] and speaks the welcome again. [speakWelcome] is false right
+     * after first-launch onboarding, whose last page already said what the welcome says.
      */
-    fun start() {
+    fun start(speakWelcome: Boolean = true) {
         if (runScope != null) return
         val run = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
         runScope = run
@@ -173,8 +174,10 @@ class ModeController(
         }
         run.launch { guarded { engine.warmUp() } } // A-11; a failure is recorded, never a crash at launch
 
-        launchOneShot(ModeState.SPEAKING) { say(phrasebook.welcome) } // FR-G1
-        welcomeJob = active
+        if (speakWelcome) {
+            launchOneShot(ModeState.SPEAKING) { say(phrasebook.welcome) } // FR-G1
+            welcomeJob = active
+        }
     }
 
     /** Start-path rule: nothing thrown by a module may crash the skeleton app; cancellation still propagates. */
@@ -517,8 +520,12 @@ class ModeController(
     private enum class DescribeVariant { DEFAULT, BRIEF, DETAILED }
 
     companion object {
-        /** docs/architecture.md: "the thinking earcon repeats every 4 s while inferring". */
-        const val THINKING_EARCON_PERIOD_MS: Long = 4_000
+        /**
+         * Michelle Bui's designs (Headset 3 · Thinking): "Never silent more than 2 seconds: soft tick plus a
+         * loading state", one soft tick every 1.5 s. Stricter than the SRS "never silent > 10 s". The Thinking
+         * panel prints this same constant, so the screen and the sound cannot disagree.
+         */
+        const val THINKING_EARCON_PERIOD_MS: Long = 1_500
     }
 }
 

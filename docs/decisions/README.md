@@ -12,3 +12,4 @@ One file per decision, numbered, never edited after acceptance (supersede with a
 | [ADR-0006](ADR-0006-single-apk-runtime-xr-check.md) | One APK for Galaxy XR and S25 Ultra with a runtime XR-capability check, not product flavors | accepted (skeleton) |
 | [ADR-0007](ADR-0007-models-fetched-not-committed.md) | Model artifacts are fetched by a script against a lockfile, never committed | accepted (skeleton) |
 | [ADR-0008](ADR-0008-no-di-framework.md) | Manual wiring in `AppGraph`; no Hilt/Koin | accepted (skeleton) |
+| [ADR-0009](ADR-0009-onboarding-flag.md) | One "onboarding finished" flag is the only preference the app writes (amends ADR-0003) | accepted (designs) |

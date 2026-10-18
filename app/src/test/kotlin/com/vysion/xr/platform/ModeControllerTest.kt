@@ -146,8 +146,9 @@ class ModeControllerTest {
             advanceTimeBy(InferenceEngine.VLM_TIMEOUT_MS - 1)
             assertEquals("still inferring one ms before the watchdog", ModeState.INFERRING, f.controller.state.value)
             assertFalse(f.speaker.said.contains(TestPhrasebook.inferenceFailed))
-            // Never silent > 10 s: a THINKING earcon every 4 s → at 4, 8 and 12 s.
-            assertEquals(thinkingAtStart + 3, f.speaker.earcons.count { it == Earcon.THINKING })
+            // Never silent > 2 s (designs, Headset 3): a THINKING tick every THINKING_EARCON_PERIOD_MS while inferring.
+            val ticks = ((InferenceEngine.VLM_TIMEOUT_MS - 1) / ModeController.THINKING_EARCON_PERIOD_MS).toInt()
+            assertEquals(thinkingAtStart + ticks, f.speaker.earcons.count { it == Earcon.THINKING })
 
             advanceTimeBy(2)
             runCurrent()

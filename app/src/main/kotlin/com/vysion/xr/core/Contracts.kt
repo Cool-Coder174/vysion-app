@@ -341,6 +341,12 @@ interface CommandBus {
     fun stopListening()
     fun inject(command: Command, source: CommandSource = CommandSource.PANEL)
 
+    /**
+     * Discard the current listening session without delivering what was heard (the toolbar's Cancel while
+     * LISTENING). The default delivers instead, for buses that cannot discard; R4's bus overrides it.
+     */
+    fun cancelListening() = stopListening()
+
     /** FR-G6: recognition language follows "in Spanish". Default no-op for buses with no recognizer. */
     fun setLocale(locale: Locale) {}
 
@@ -456,6 +462,15 @@ interface ModePhrasebook {
      */
     fun navigationCue(cue: NavigationCue): String?
 
+    /**
+     * First-launch onboarding (designs pages 2-8): each page is read aloud, so its words live in R4's
+     * `voice/Cues.kt` like every other spoken string and the UI displays the same text. Default blank.
+     */
+    fun onboarding(step: OnboardingStep): OnboardingPage = OnboardingPage(step = step, title = "", spoken = "")
+
+    /** Onboarding page 4 practice: what Vysion says so the user can try stopping it. Default blank. */
+    val stopPractice: String get() = ""
+
     /** Blank placeholder for tests and for a graph built without R4; nothing is spoken. */
     object Unwired : ModePhrasebook {
         override val welcome: String = ""
@@ -501,6 +516,12 @@ interface PromptSet {
     fun followUp(question: String): String? = null
 
     /**
+     * The exact answer the READ prompt asks the VLM to give when it sees no text ("No text found"), so the UI
+     * can show the "move closer" state instead of reading the sentinel as content. `null` = not known.
+     */
+    val noTextSentinel: String? get() = null
+
+    /**
      * FR-G6 (P1): [prompt] adapted to the output [locale] (for example "Respond in Spanish." appended).
      * The default returns [prompt] unchanged; R2's implementation decides which prompts are exempt (DOOR).
      */
@@ -514,6 +535,27 @@ interface PromptSet {
         override val arrival: String = ""
     }
 }
+
+/** The seven first-launch pages, in order (designs pages 2-8). */
+enum class OnboardingStep { WELCOME, PRIVACY, TALK, STOP, SOUNDS, SAFETY, ALL_SET }
+
+/** One row on an onboarding page: a privacy promise, a sound, or a mode with its spoken example. */
+data class OnboardingItem(val title: String, val detail: String? = null)
+
+/**
+ * The words of one onboarding page. [spoken] is what Vysion reads aloud on entering the page; the other
+ * fields are the same words laid out for the eye. [hint] is the page's call-out (a practice prompt or the
+ * cane reminder); [footnote] is the small line under the content.
+ */
+data class OnboardingPage(
+    val step: OnboardingStep,
+    val title: String,
+    val body: String? = null,
+    val items: List<OnboardingItem> = emptyList(),
+    val hint: String? = null,
+    val footnote: String? = null,
+    val spoken: String,
+)
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // R5 · Integration, Docs & Demo — provides DiagnosticsSource (the overlay reads this and nothing else)

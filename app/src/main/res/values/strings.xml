@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Only non-spoken, non-cue UI strings live here (app name, TalkBack labels for controls).
-         Every spoken sentence lives in voice/Cues.kt (SRS §8 R4). -->
+    <!-- Only non-spoken UI text lives here: the app name, TalkBack labels, button captions and the status
+         window's titles. Every sentence Vysion SPEAKS lives in voice/Cues.kt (SRS §8 R4), including the
+         onboarding copy, which the UI reads from there so screen and voice cannot drift.
+         Copy follows Michelle Bui's designs (Oct 2026). -->
     <string name="app_name">Vysion XR</string>
 
     <!-- The product sentence, verbatim (SRS §3). Shown in onboarding and the README. -->
@@ -15,4 +17,108 @@
     <string name="a11y_diagnostics_toggle">Toggle diagnostics overlay</string>
     <string name="a11y_transcript_panel">Transcript</string>
     <string name="a11y_stop_button">Stop speaking</string>
+    <string name="a11y_status_window">Vysion status</string>
+    <string name="a11y_mode_rail">Modes</string>
+    <string name="a11y_shutter_run">%1$s. Double-tap to run.</string>
+    <string name="a11y_shutter_stop">Stop speaking. Double-tap to stop.</string>
+    <string name="a11y_play_sound">Play the %1$s sound</string>
+
+    <!-- Mode rail (designs: Headset 1, gaze shows the label). -->
+    <string name="mode_read">Read</string>
+    <string name="mode_describe">Describe</string>
+    <string name="mode_navigate">Navigate</string>
+    <string name="mode_more">Diagnostics</string>
+
+    <!-- Toolbar and onboarding buttons. -->
+    <string name="action_hold_to_talk">Hold to talk</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_stop">Stop</string>
+    <string name="action_repeat">Repeat</string>
+    <string name="action_next">Next</string>
+    <string name="action_spanish">Español</string>
+    <string name="action_more_detail">More detail</string>
+    <string name="action_find_another_door">Find another door</string>
+    <string name="action_ok">OK</string>
+    <string name="action_try_again">Try again</string>
+    <string name="action_again">Again</string>
+    <string name="action_get_started">Get started</string>
+    <string name="action_back">Back</string>
+    <string name="action_allow_camera_mic">Allow camera and mic</string>
+    <string name="action_continue">Continue</string>
+    <string name="action_i_understand">I understand</string>
+    <string name="action_start">Start</string>
+    <string name="action_diagnostics">Diagnostics</string>
+
+    <!-- Status window (designs: Headset 1-12). Titles and subtitles are shown, not spoken. -->
+    <string name="status_ready">Ready</string>
+    <string name="status_ready_sub">Say “Vysion” or pinch and hold</string>
+    <string name="status_ready_body">Say “read this,” “describe,” or “find the door.”</string>
+    <string name="status_ready_foot">Say “stop” any time. Palm out also stops.</string>
+    <string name="status_listening">Listening</string>
+    <string name="status_listening_sub">Open your fingers to send</string>
+    <string name="status_thinking">Thinking</string>
+    <string name="status_thinking_sub">Soft tick every %1$s s</string>
+    <string name="status_thinking_asked">You asked: “%1$s”</string>
+    <string name="status_thinking_foot">Never silent more than 2 seconds.</string>
+    <string name="status_reading">Reading</string>
+    <string name="status_describing">Describing</string>
+    <string name="status_looking">Looking for a door</string>
+    <string name="status_looking_sub">Turn slowly</string>
+    <string name="status_looking_body">I’ll ping when I find one.</string>
+    <string name="status_looking_foot">Soft tick while looking.</string>
+    <string name="status_guiding">Guiding</string>
+    <string name="status_guiding_sub">Ping every 3 s from the door</string>
+    <string name="status_guiding_target">Door · %1$s</string>
+    <string name="status_guiding_out_of_view">Door · %1$s · out of view</string>
+    <string name="status_use_cane">Use with your cane.</string>
+    <string name="status_arrived">Arrived</string>
+    <string name="status_arrived_sub">Done chime</string>
+    <string name="status_arrived_body">You’re at the door.</string>
+    <string name="status_lost">Lost the door</string>
+    <string name="status_lost_sub">Pings paused</string>
+    <string name="status_lost_body">Turn slowly. It was last at %1$s.</string>
+    <string name="status_lost_body_unknown">Turn slowly.</string>
+    <string name="status_keep_cane">Keep using your cane.</string>
+    <string name="status_obstacle">Obstacle ahead</string>
+    <string name="status_obstacle_sub">Warning tone · cuts in</string>
+    <string name="status_obstacle_body">Stop and check with your cane.</string>
+    <string name="status_obstacle_ahead">ahead</string>
+    <string name="status_no_text">No text found</string>
+    <string name="status_no_text_sub">Move closer</string>
+    <string name="status_no_text_body">Move closer or hold it in front of you.</string>
+    <string name="status_error">That didn’t work</string>
+    <string name="status_error_sub">Low tone</string>
+    <string name="status_error_body">Say it again.</string>
+    <string name="status_error_foot">Or pinch and hold, or look at the mic and pinch.</string>
+    <string name="clock_face">%1$d o’clock</string>
+    <string name="meters_short">%1$s m</string>
+    <string name="overlay_door">door</string>
+    <string name="overlay_last_seen">last seen</string>
+
+    <!-- Onboarding chrome (the page words themselves come from voice/Cues.kt). -->
+    <string name="onboarding_reads_aloud">Vysion reads this aloud · %1$d of %2$d</string>
+    <string name="onboarding_or_say">or say</string>
+    <string name="onboarding_stop_word">“Stop”</string>
+    <string name="onboarding_heard">Heard you</string>
+
+    <!-- Diagnostics window (designs: Headset 13). -->
+    <string name="diagnostics_title">Measured on device</string>
+
+    <!-- Phone app v5 (designs page 23). -->
+    <string name="phone_tips_title">The whole screen is the button.</string>
+    <string name="phone_tip_tap">Tap anywhere</string>
+    <string name="phone_tip_tap_detail">Read what’s in front of you</string>
+    <string name="phone_tip_hold">Press and hold</string>
+    <string name="phone_tip_hold_detail">Talk to Vysion</string>
+    <string name="phone_tip_swipe">Swipe left or right</string>
+    <string name="phone_tip_swipe_detail">Change mode</string>
+    <string name="phone_tip_stop">Two-finger double-tap</string>
+    <string name="phone_tip_stop_detail">Stop talking</string>
+    <string name="phone_label_reading">Reading · swipe up to repeat</string>
+    <string name="phone_label_describing">Describing · swipe up to repeat</string>
+    <string name="phone_label_listening">Listening · let go to send</string>
+    <string name="phone_label_door">Door · %1$s</string>
+    <string name="phone_hint_describe">Tap anywhere to hear what’s here</string>
+    <string name="phone_hint_read">Tap anywhere to read what’s in front of you</string>
+    <string name="phone_hint_navigate">Tap anywhere to find the door</string>
 </resources>
