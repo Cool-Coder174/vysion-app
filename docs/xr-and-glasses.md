@@ -9,10 +9,10 @@ did not, and what a glasses target would take.
 |---|---|---|
 | Orbiters float off the panel edge, never cover its content | 20 dp gap, ≤ 50 % overlap | Rail and toolbar use `EdgeAlignment.Outside` + 20 dp (`SpatialShell.kt`) |
 | One main panel in front of the user | ~1024 × 720 dp, 32 dp corners, 1.75 m | Status window 1040 dp wide, centered in a `SpatialBox`; side windows open beside it without moving it |
-| Targets | 56 dp recommended, 48 dp minimum, 8 dp apart | Rail items 64 dp pill inside a ~102 dp item; toolbar pills 64 dp |
-| Text | ≥ 14 dp, regular weight or heavier | Body 28 sp, answers larger, rail labels 18 sp semibold |
+| Targets | 56 dp recommended, 48 dp minimum, 8 dp apart | Rail items: 56 dp pill in a ~92 dp-wide item (three items, so the rail fits the shortest window); toolbar pills 64 dp |
+| Text | ≥ 14 dp, regular weight or heavier | Body 28 sp, answers larger, rail labels 17 sp semibold |
 | Every action confirmed by sound or visuals; alternatives to gaze | | Earcons + spoken answers; every rail item has a visible label |
-| A long pinch (≥ 2 s) opens system options on Galaxy XR | | **Talk is a tap toggle**, not press-and-hold; the recognizer sends on a pause |
+| A long pinch (≥ 2 s) opens system options on Galaxy XR | | **Talk is a tap toggle** on the panel (sends on a pause); eyes-free talk is the middle-finger pinch below |
 | High contrast over passthrough | | Near-opaque graphite glass (85–96 % alpha) |
 | TalkBack structure | `heading()` on titles, live regions for updates | Titles are headings; answers are NOT live regions (the app speaks them; TalkBack would repeat them) |
 
