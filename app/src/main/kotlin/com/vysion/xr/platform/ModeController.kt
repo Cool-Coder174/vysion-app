@@ -506,22 +506,26 @@ class ModeController(
                     thinking.cancel()
                 }
             }
-            _state.value = ModeState.SPEAKING
             when (result) {
                 is WhereAmI.Found -> {
                     val prompt = prompts.whereAmI(result.surroundings)?.let { prompts.forLocale(it, speaker.locale.value) }
-                    val worded = prompt != null && speakCloudWording(prompt, event)
+                    val worded = prompt != null && speakCloudWording(prompt, event) // SPEAKING from its first sentence
                     if (!worded) {
+                        _state.value = ModeState.SPEAKING
                         val template = phrasebook.whereAmI(result)
                         showTranscript(template, TranscriptKind.WHERE_AM_I)
                         sayWhereAmI(template, event, WORDS_TEMPLATE)
                     }
                 }
                 WhereAmI.PermissionNeeded -> {
+                    _state.value = ModeState.SPEAKING
                     sayNotice(phrasebook.whereAmI(result)) // what leaves the headset, before the dialog
                     _locationPermissionRequests.tryEmit(Unit)
                 }
-                else -> sayNotice(phrasebook.whereAmI(result), event)
+                else -> {
+                    _state.value = ModeState.SPEAKING
+                    sayNotice(phrasebook.whereAmI(result), event)
+                }
             }
         } catch (e: TimeoutCancellationException) {
             speakFailure(InferenceException("where am I exceeded $WHERE_AM_I_TIMEOUT_MS ms", e))
@@ -548,6 +552,7 @@ class ModeController(
                 first = false
             }
         }
+        val thinking = launchThinkingTicker() // still INFERRING until the first sentence: never silent
         val spoken = AtomicInteger(0)
         val failure = AtomicReference<Throwable?>(null)
         val splitter = SentenceSplitter()
@@ -556,7 +561,10 @@ class ModeController(
             generated.append(segment)
             val sentence = segment.trim()
             if (sentence.isEmpty()) return
-            spoken.incrementAndGet()
+            if (spoken.incrementAndGet() == 1) {
+                thinking.cancel()
+                _state.value = ModeState.SPEAKING
+            }
             showTranscript(generated.toString().trim(), TranscriptKind.WHERE_AM_I)
             sentences.trySend(sentence)
         }
@@ -583,6 +591,7 @@ class ModeController(
         }
         collector.join()
         deadline.cancel()
+        thinking.cancel()
         sentences.close() // the speech coroutine finishes what is queued, then this scope returns
         failure.get()?.let { _lastError.value = it }
         spoken.get() > 0

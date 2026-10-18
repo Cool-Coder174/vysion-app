@@ -63,6 +63,11 @@ source and Maven, GitHub projects Isaac pointed to), plus probes run with `adb` 
 
 ## 3. "Where am I", built from free data
 
+**Status (2026-10-18):** built as FR-N9 without Overpass or Wikipedia (`MapPlaceSource`, `VectorTile`,
+`SurroundingsFinder`; ADR-0010 rows "Where am I map" / "Where am I wording"). On the headset the tile lookup takes
+0.48–0.87 s cold and 0.13 s warm, and Gemini's first words 0.76–2.49 s (smoke runs, `docs/benchmarks.md`); a live
+Wi-Fi fix still needs a wearer with Location on.
+
 Measured from this laptop (San Francisco Civic Center), 2026-10-18:
 
 | Need | Source | Result |

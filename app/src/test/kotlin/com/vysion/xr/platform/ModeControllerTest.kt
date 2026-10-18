@@ -813,7 +813,10 @@ class ModeControllerTest {
         controllerTest(places = places, engineWrapper = { WordingEngine(it) { delay(10_000); emit("Too late.") } }) { f ->
             startAndSettle(f)
             f.commands.inject(Command.WhereAmI)
-            advanceTimeBy(ModeController.WORDING_FIRST_SENTENCE_MS + 1)
+            advanceTimeBy(ModeController.WORDING_FIRST_SENTENCE_MS - 1)
+            assertEquals("still thinking while the cloud is quiet", ModeState.INFERRING, f.controller.state.value)
+            assertTrue(f.speaker.said.isEmpty())
+            advanceTimeBy(2)
             runCurrent()
             assertEquals(listOf(TestPhrasebook.whereAmI(WhereAmI.Found(SURROUNDINGS))), f.speaker.said)
             advanceUntilIdle()
