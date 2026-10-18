@@ -6,6 +6,8 @@ import com.vysion.xr.core.NavigationCue
 import com.vysion.xr.core.OnboardingItem
 import com.vysion.xr.core.OnboardingPage
 import com.vysion.xr.core.OnboardingStep
+import com.vysion.xr.core.PhoneOnboardingPage
+import com.vysion.xr.core.PhoneOnboardingStep
 import com.vysion.xr.core.Speaker
 import com.vysion.xr.core.ModePhrasebook
 import com.vysion.xr.core.Surroundings
@@ -450,6 +452,25 @@ object Cues {
     fun stopPractice(locale: Locale = Speaker.EN_US): String =
         (if (locale.language == ES) OnboardingCopy.ES_MX else OnboardingCopy.EN_US).stopPractice
 
+    /**
+     * Phone onboarding (designs "Phone v6 · End-to-end", section 1): six pages, three of them lessons; each is read aloud on
+     * entry and the screen shows the same words. `PhoneOnboardingCuesTest` checks both languages.
+     */
+    fun phoneOnboarding(step: PhoneOnboardingStep, locale: Locale = Speaker.EN_US): PhoneOnboardingPage =
+        (if (locale.language == ES) PhoneOnboardingCopy.ES_MX else PhoneOnboardingCopy.EN_US).page(step)
+
+    /** Phone lesson 3: Vysion keeps talking until the two-finger double-tap stops it, so stopping can be practiced. */
+    fun phoneStopPractice(locale: Locale = Speaker.EN_US): String =
+        (if (locale.language == ES) PhoneOnboardingCopy.ES_MX else PhoneOnboardingCopy.EN_US).stopPractice
+
+    /** Every phone onboarding string in both languages, for the phrasing test. */
+    internal fun phoneOnboardingValues(): List<String> = listOf(PhoneOnboardingCopy.EN_US, PhoneOnboardingCopy.ES_MX).flatMap { copy ->
+        PhoneOnboardingStep.entries.flatMap { step ->
+            val page = copy.page(step)
+            listOfNotNull(page.title, page.body, page.hint, page.spoken) + page.items.flatMap { listOfNotNull(it.title, it.detail) }
+        } + copy.stopPractice
+    }
+
     /** Every onboarding string in both languages, for the phrasing test. */
     internal fun onboardingValues(): List<String> = listOf(OnboardingCopy.EN_US, OnboardingCopy.ES_MX).flatMap { copy ->
         OnboardingStep.entries.flatMap { step ->
@@ -502,6 +523,8 @@ object CuesPhrasebook : ModePhrasebook {
         if (cue == NavigationCue.Arrived) null else Cues.phrase(cue, locale())
     override fun onboarding(step: OnboardingStep): OnboardingPage = Cues.onboarding(step, locale())
     override val stopPractice: String get() = Cues.stopPractice(locale())
+    override fun phoneOnboarding(step: PhoneOnboardingStep): PhoneOnboardingPage = Cues.phoneOnboarding(step, locale())
+    override val phoneStopPractice: String get() = Cues.phoneStopPractice(locale())
 }
 
 /**
@@ -642,6 +665,101 @@ private class OnboardingCopy(
             stopPractice = "Esta es una frase larga para que practiques detenerme. Extiende el pulgar y el meñique, " +
                 "y me callo de inmediato. Sigo hablando hasta que lo hagas. " +
                 "Sigo hablando hasta que lo hagas.",
+        )
+    }
+}
+
+/**
+ * The phone onboarding words for one language (designs "Phone v6 · End-to-end", section 1). As with [OnboardingCopy],
+ * [PhoneOnboardingPage.spoken] is built from the same fields the screen shows, so nothing is said that is not on screen
+ * and the reverse. The sound chips reuse the headset's six sound rows: one meaning per sound on every device.
+ */
+private class PhoneOnboardingCopy(
+    private val welcome: Pair<String, String>,
+    private val welcomeHint: String,
+    private val permissions: Pair<String, String>,
+    private val learnTap: Pair<String, String>,
+    private val learnSwipe: Pair<String, String>,
+    private val learnTalkStop: Pair<String, String>,
+    private val allSet: Pair<String, String>,
+    private val allSetSpokenTail: String,
+    private val soundRows: List<OnboardingItem>,
+    val stopPractice: String,
+) {
+    fun page(step: PhoneOnboardingStep): PhoneOnboardingPage = when (step) {
+        PhoneOnboardingStep.WELCOME -> PhoneOnboardingPage(
+            step = step, title = welcome.first, body = welcome.second, hint = welcomeHint,
+            spoken = "${welcome.first} ${welcome.second} $welcomeHint.",
+        )
+        PhoneOnboardingStep.PERMISSIONS -> PhoneOnboardingPage(
+            step = step, title = permissions.first, body = permissions.second,
+            spoken = "${permissions.first} ${permissions.second}",
+        )
+        PhoneOnboardingStep.LEARN_TAP -> PhoneOnboardingPage(
+            step = step, title = learnTap.first, body = learnTap.second,
+            spoken = "${learnTap.first} ${learnTap.second}",
+        )
+        PhoneOnboardingStep.LEARN_SWIPE -> PhoneOnboardingPage(
+            step = step, title = learnSwipe.first, body = learnSwipe.second,
+            spoken = "${learnSwipe.first} ${learnSwipe.second}",
+        )
+        PhoneOnboardingStep.LEARN_TALK_STOP -> PhoneOnboardingPage(
+            step = step, title = learnTalkStop.first, body = learnTalkStop.second,
+            spoken = "${learnTalkStop.first} ${learnTalkStop.second}",
+        )
+        PhoneOnboardingStep.ALL_SET -> PhoneOnboardingPage(
+            step = step, title = allSet.first, body = allSet.second, items = soundRows,
+            spoken = "${allSet.first} ${allSet.second} $allSetSpokenTail",
+        )
+    }
+
+    companion object {
+        val EN_US = PhoneOnboardingCopy(
+            welcome = "Hi, I’m Vysion." to "I read, describe and guide you, out loud. Everything runs on this phone.",
+            welcomeHint = "Tap anywhere to start",
+            permissions = "I need your camera and microphone." to
+                "To see what’s in front of you and hear what you ask. Camera images are never saved. " +
+                "Reading, describing and finding the door never leave this phone.",
+            learnTap = "Tap anywhere to read." to "Try it now. Point at anything with words.",
+            learnSwipe = "Swipe to switch." to "Read, Describe, Navigate. I say each one as you land on it.",
+            learnTalkStop = "Hold to talk. Two fingers to stop." to
+                "Hold anywhere and say what you need. Tap twice with two fingers to stop me talking.",
+            allSet = "You’re set." to "Six sounds tell you what’s happening. Tap one to hear it.",
+            allSetSpokenTail = "Point your phone and tap.",
+            soundRows = listOf(
+                OnboardingItem("Listening", "I’m hearing you"),
+                OnboardingItem("Thinking", "Working on it"),
+                OnboardingItem("Done", "Finished"),
+                OnboardingItem("Ping", "Where the door is"),
+                OnboardingItem("Warning", "Something is close"),
+                OnboardingItem("Error", "Say it again"),
+            ),
+            stopPractice = "This is a long sentence so you can practice stopping me. Tap twice with two fingers, " +
+                "and I go quiet right away. I keep talking until you do. I keep talking until you do.",
+        )
+
+        val ES_MX = PhoneOnboardingCopy(
+            welcome = "Hola, soy Vysion." to "Leo, describo y te guío, en voz alta. Todo funciona en este teléfono.",
+            welcomeHint = "Toca en cualquier lugar para empezar",
+            permissions = "Necesito tu cámara y tu micrófono." to
+                "Para ver lo que tienes delante y oír lo que preguntas. Las imágenes de la cámara nunca se guardan. " +
+                "Leer, describir y buscar la puerta nunca salen de este teléfono.",
+            learnTap = "Toca en cualquier lugar para leer." to "Pruébalo ahora. Apunta a algo con palabras.",
+            learnSwipe = "Desliza para cambiar." to "Leer, Describir, Navegación. Digo cada uno cuando llegas a él.",
+            learnTalkStop = "Mantén para hablar. Dos dedos para parar." to
+                "Mantén en cualquier lugar y di lo que necesitas. Toca dos veces con dos dedos para que deje de hablar.",
+            allSet = "Todo listo." to "Seis sonidos te dicen qué está pasando. Toca uno para oírlo.",
+            allSetSpokenTail = "Apunta con tu teléfono y toca.",
+            soundRows = listOf(
+                OnboardingItem("Escuchando", "Te estoy oyendo"),
+                OnboardingItem("Pensando", "Trabajando en ello"),
+                OnboardingItem("Listo", "Terminado"),
+                OnboardingItem("Ping", "Dónde está la puerta"),
+                OnboardingItem("Advertencia", "Algo está cerca"),
+                OnboardingItem("Error", "Dilo otra vez"),
+            ),
+            stopPractice = "Esta es una frase larga para que practiques detenerme. Toca dos veces con dos dedos, " +
+                "y me callo de inmediato. Sigo hablando hasta que lo hagas. Sigo hablando hasta que lo hagas.",
         )
     }
 }

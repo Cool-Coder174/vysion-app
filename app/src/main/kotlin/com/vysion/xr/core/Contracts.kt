@@ -630,6 +630,15 @@ interface ModePhrasebook {
     /** Onboarding page 4 practice: what Vysion says so the user can try stopping it. Default blank. */
     val stopPractice: String get() = ""
 
+    /**
+     * First-launch onboarding on a phone (designs "Phone v6 · End-to-end", section 1: six pages, three of them lessons
+     * that wait for the gesture they teach). Shown and read aloud like [onboarding]. Default blank.
+     */
+    fun phoneOnboarding(step: PhoneOnboardingStep): PhoneOnboardingPage = PhoneOnboardingPage(step = step, title = "", spoken = "")
+
+    /** Phone lesson 3: what Vysion says so the user can practice the two-finger double-tap that stops it. Default blank. */
+    val phoneStopPractice: String get() = ""
+
     /** Blank placeholder for tests and for a graph built without R4; nothing is spoken. */
     object Unwired : ModePhrasebook {
         override val welcome: String = ""
@@ -716,6 +725,25 @@ data class OnboardingPage(
     val items: List<OnboardingItem> = emptyList(),
     val hint: String? = null,
     val footnote: String? = null,
+    val spoken: String,
+)
+
+/**
+ * The six first-launch pages on a phone, in order (designs "Phone v6 · End-to-end", section 1). The three LEARN_* pages
+ * are lessons that wait for the gesture they teach. A device runs this flow or [OnboardingStep], never both.
+ */
+enum class PhoneOnboardingStep { WELCOME, PERMISSIONS, LEARN_TAP, LEARN_SWIPE, LEARN_TALK_STOP, ALL_SET }
+
+/**
+ * The words of one phone onboarding page. [spoken] is read aloud on entering the page and is built from the fields on
+ * screen; [hint] is the page's pill ("Tap anywhere to start"); [items] are the sound chips of the last page.
+ */
+data class PhoneOnboardingPage(
+    val step: PhoneOnboardingStep,
+    val title: String,
+    val body: String? = null,
+    val hint: String? = null,
+    val items: List<OnboardingItem> = emptyList(),
     val spoken: String,
 )
 
