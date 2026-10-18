@@ -299,6 +299,13 @@ interface HandGestureSource {
 interface AnchorStore {
     /** Sample depth along [bearing] from the current head pose and drop an anchor there. `null` if no usable depth. */
     suspend fun placeFromBearing(bearing: HorizontalBearing): AnchorId?
+
+    /**
+     * Augmented layer: an anchor where the wearer is looking (head yaw AND pitch, so a sign below eye level counts):
+     * on the depth hit, else [fallbackDistanceM] along the gaze. `null` without a tracked head. Default `null`
+     * (no XR) so other stores keep compiling.
+     */
+    suspend fun placeAtGaze(fallbackDistanceM: Float = 1.0f): AnchorId? = null
     fun track(id: AnchorId): Flow<RelativeTarget>
     suspend fun remove(id: AnchorId)
     suspend fun clear()

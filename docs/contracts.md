@@ -77,6 +77,7 @@ interface HeadPoseSource { val pose: StateFlow<HeadPose?> }
 enum class HandGesture { TALK_START, TALK_END, ACTIVATE, NEXT_PAGE, STOP }   // middle pinch hold/tap, ring tap, palm out; never index, never palm-toward-user
 interface HandGestureSource { val gestures: Flow<HandGesture> }
 // ModePhrasebook.pageFocused(mode): String = modeAnnounced(mode)   // spoken on NEXT_PAGE: page name + how to run it
+// AnchorStore.placeAtGaze(fallbackDistanceM = 1.0f): AnchorId? = null   // augmented: anchor where the wearer looks (yaw + pitch), depth hit or 1 m along the gaze
 interface AnchorStore {
     suspend fun placeFromBearing(bearing: HorizontalBearing): AnchorId?; fun track(id: AnchorId): Flow<RelativeTarget>
     suspend fun remove(id: AnchorId); suspend fun clear()
