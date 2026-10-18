@@ -71,6 +71,7 @@ import com.vysion.xr.platform.ui.theme.Ink
 import com.vysion.xr.platform.ui.theme.LocalReduceMotion
 import com.vysion.xr.platform.ui.theme.Radius
 import com.vysion.xr.platform.ui.theme.Space
+import com.vysion.xr.platform.ui.theme.Target
 import com.vysion.xr.platform.ui.theme.VysionIcons
 import com.vysion.xr.platform.ui.theme.VysionType
 import com.vysion.xr.platform.ui.theme.vysionSpring
@@ -92,7 +93,9 @@ fun StatusWindow(shell: ShellState, type: VysionType, modifier: Modifier = Modif
         modifier = modifier
             .glass(RoundedCornerShape(Radius.window))
             .semantics { contentDescription = label }
-            .padding(horizontal = 44.dp, vertical = 40.dp),
+            // The toolbar orbiter straddles the bottom edge: reserve its upper half plus a gap, or the last line of a
+            // long answer sits under the pills (headset capture, 2026-10-17).
+            .padding(start = 44.dp, end = 44.dp, top = 40.dp, bottom = TOOLBAR_OVERLAP + Space.l),
     ) {
         // Screens of the same kind (two answers, two bearings) update in place; a change of kind materializes.
         AnimatedContent(
@@ -103,6 +106,9 @@ fun StatusWindow(shell: ShellState, type: VysionType, modifier: Modifier = Modif
         ) { screen -> ScreenContent(shell, screen, type) }
     }
 }
+
+/** Upper half of the bottom toolbar (a [Target.spatial] pill inside [Space.s] of tray padding) that overlaps the window. */
+private val TOOLBAR_OVERLAP = Target.spatial / 2 + Space.s
 
 /** The kind of a screen: [AnimatedContent] animates only when this changes. */
 private enum class ScreenKey {

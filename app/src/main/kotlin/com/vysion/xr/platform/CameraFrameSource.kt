@@ -279,17 +279,13 @@ class CameraFrameSource(
             if (fps != null) {
                 // NFR Honesty / A-1 "note resolution and format": size and format are read from the frame, not
                 // typed. The id is the only one the selector admits ([worldCameraSelector] filters on it).
-                val measured = FrameStats(
+                _stats.value = FrameStats( // DiagnosticsCollector logs it once as A-1 evidence
                     cameraId = WORLD_CAMERA_ID,
                     width = frame.width,
                     height = frame.height,
                     format = imageFormatName(frame.format),
                     fps = fps,
                 )
-                if (_stats.value == null) { // A-1 evidence once per start, metadata only (INV-3)
-                    Log.i(TAG, "camera ${measured.cameraId} ${measured.width}x${measured.height} ${measured.format} fps=${"%.1f".format(measured.fps)} (A-1)")
-                }
-                _stats.value = measured
             }
             // docs/stack.md → R1 "Bitmap": ImageProxy.toBitmap() supports RGBA_8888. Converted only while a
             // collector listens (Navigation's detector): otherwise each frame would allocate a Bitmap for nobody.

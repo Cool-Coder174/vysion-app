@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
@@ -128,11 +129,17 @@ class DiagnosticsCollector internal constructor(
         emit(runCatching(auditNetworkPermission).getOrNull())
     }
 
-    /** A-1 evidence: camera id, resolution, format and fps as measured by R1's FrameSource. Metadata only. */
+    /**
+     * A-1 evidence: camera id, resolution, format and fps as measured by R1's FrameSource. Metadata only. Once per
+     * camera configuration, after the 5 s fps window has filled: fps changes on every frame, so logging each change
+     * flooded logcat at ~25 lines/s on the Galaxy XR, and the first sample (two frames) is not a rate.
+     */
     private suspend fun logCameraStats() {
         try {
-            frames.stats.filterNotNull().distinctUntilChanged().collect { s ->
-                Log.i(TAG, "camera ${s.cameraId}: ${s.width}x${s.height} ${s.format} at ${s.fps} fps (A-1 evidence)")
+            frames.stats.filterNotNull().distinctUntilChangedBy { "${it.cameraId} ${it.width}x${it.height} ${it.format}" }.collect { first ->
+                delay(CAMERA_FPS_SETTLE_MS)
+                val s = frames.stats.value ?: first
+                Log.i(TAG, "camera ${s.cameraId}: ${s.width}x${s.height} ${s.format} at ${"%.1f".format(s.fps)} fps (A-1 evidence)")
             }
         } catch (e: CancellationException) {
             throw e
@@ -142,6 +149,9 @@ class DiagnosticsCollector internal constructor(
     }
 
     companion object {
+        /** The camera fps window (`FpsMeter`, 5 s) plus a margin, before the A-1 line is logged. */
+        private const val CAMERA_FPS_SETTLE_MS: Long = 6_000
+
         private const val TAG = "vysion"
         private const val RELIABILITY_TAG = "vysion.reliability"
 

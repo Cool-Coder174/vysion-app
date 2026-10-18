@@ -15,8 +15,8 @@
 | Phase | Gate | Status |
 |---|---|---|
 | F0 Skeleton repo, docs, contracts | on `main` | **Completed** 2026-10-17: 236 JVM tests green, privacy and cue gates pass; not yet run on a device |
-| F1 Device truths: camera frames, ARCore session, ExecuTorch runtime | Sat 12:00 | Not Started |
-| F2 `FrameSource` handoff + detector on headset | Sat 13:00 | In Progress (CameraX source landed; frames not yet seen on a worn headset) |
+| F1 Device truths: camera frames, ARCore session, ExecuTorch runtime | Sat 12:00 | In Progress (camera A-1 and XR session hold; ExecuTorch runtime waits on models) |
+| F2 `FrameSource` handoff + detector on headset | Sat 13:00 | In Progress (frames verified on the headset; detector waits on models) |
 | F3 Voice in/out + `ModeController` + first merge | Sat 15:00 | In Progress (TTS verified on device; recognizer landed, untested by voice) |
 | F4 VLM answers on the headset | Sat 16:00 | Not Started |
 | F5 Text Reader e2e + `NavigationCues` + panels | Sat 19:00 | Not Started |
