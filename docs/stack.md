@@ -817,7 +817,7 @@ on-device path below (`CloudDescribeEngine`, hedge at 1 s).
 
 ```
 POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:streamGenerateContent?alt=sse
-x-goog-api-key: <GEMINI_API_KEY from local.properties, via BuildConfig>      // header, never ?key= in the URL
+x-goog-api-key: <GEMINI_API_KEY from local.properties, via BuildConfig>; X-Android-Package / X-Android-Cert      // header, never ?key= in the URL
 {"systemInstruction":{"parts":[{"text":PromptLibrary.CLOUD_SPOKEN_STYLE}]},
  "contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/jpeg","data":<base64>}},{"text":<prompt>}]}],
  "generationConfig":{"maxOutputTokens":400,"thinkingConfig":{"thinkingLevel":"minimal"}}}
@@ -827,8 +827,9 @@ x-goog-api-key: <GEMINI_API_KEY from local.properties, via BuildConfig>      // 
 Sources, read 2026-10-18: model ids https://ai.google.dev/gemini-api/docs/models (`gemini-3.6-flash` stable;
 `gemini-3.8-flash` newest stable, but its lowest thinking level is `low`); thinking levels
 https://ai.google.dev/gemini-api/docs/thinking (`minimal` allowed for 3.6 Flash and 3.5 Flash-Lite; thought tokens count
-against `maxOutputTokens`); streaming https://ai.google.dev/api/generate-content. Verified on the headset: see
-`docs/benchmarks.md` "Cloud Describe".
+against `maxOutputTokens`); streaming https://ai.google.dev/api/generate-content. Verified 2026-10-18: the key
+lists `models/gemini-3.6-flash`, `thinkingLevel: "minimal"` is accepted, and the stream is one `data:` line per chunk
+(the last chunk can carry only a `thoughtSignature` with empty text). On the headset: `docs/benchmarks.md` "Cloud Describe".
 
 ### R3 — ARCore for Jetpack XR session, config, planes, depth, anchors, hands, head + SceneCore spatial audio
 

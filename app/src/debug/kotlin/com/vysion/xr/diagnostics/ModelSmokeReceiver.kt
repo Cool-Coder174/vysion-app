@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.util.Log
 import com.vysion.xr.VysionApplication
 import com.vysion.xr.core.InferenceEngine
+import kotlinx.coroutines.flow.toList
 import org.pytorch.executorch.EValue
 import org.pytorch.executorch.Module
 import org.pytorch.executorch.Tensor
@@ -25,6 +26,11 @@ import kotlinx.coroutines.launch
  * adb logcat -s vysion.smoke vysion.latency vysion
  * ```
  *
+ * `--es model describe [--ez cloud false]` runs Describe exactly as the controller does (`describeScene` with the
+ * DESCRIBE prompt, cloud requested by default): the cloud when online and a key is built in, else the headset
+ * (ADR-0010). `vysion.latency: describe source=…` says which answered. `--es model cloud` sends the same request to
+ * the cloud only (no headset hedge) and logs its time to the first chunk, to tell a slow network from a slow model.
+ *
  * The image is a test fixture pushed by the developer, never a camera frame (ADR-0003); the receiver writes nothing
  * and is guarded by `android.permission.DUMP` like [BenchmarkReceiver]. Only file names under `files/smoke/` are
  * accepted, so the broadcast cannot point the app at another path.
@@ -38,7 +44,7 @@ class ModelSmokeReceiver : BroadcastReceiver() {
         val name = intent.getStringExtra(EXTRA_IMAGE)?.takeIf { NAME.matches(it) }
         val dir = app.getExternalFilesDir(null)?.let { File(it, DIR) }
         if (model !in MODELS || name == null || dir == null) {
-            Log.e(TAG, "rejected: model=$model image=${intent.getStringExtra(EXTRA_IMAGE)} (expected ocr|vlm|detector, a plain file name)")
+            Log.e(TAG, "rejected: model=$model image=${intent.getStringExtra(EXTRA_IMAGE)} (expected ocr|vlm|detector|describe, a plain file name)")
             return
         }
         val prompt = intent.getStringExtra(EXTRA_PROMPT) ?: DEFAULT_PROMPT
@@ -72,6 +78,22 @@ class ModelSmokeReceiver : BroadcastReceiver() {
                 val result: String = when (model) {
                     "ocr" -> engine.readText(bitmap)?.joinToString(" | ") ?: "<no OCR model loaded>"
                     "detector" -> engine.detect(bitmap).joinToString { "${it.label} ${"%.2f".format(it.confidence)}" }
+                    "cloud" -> {
+                        val cloud = com.vysion.xr.cloudDescriber(app) ?: throw IllegalStateException("no GEMINI_API_KEY built in")
+                        val jpeg = com.vysion.xr.inference.CloudJpeg.encode(bitmap)
+                        val c0 = System.nanoTime()
+                        var firstMs: Long? = null
+                        val text = StringBuilder()
+                        cloud.stream(jpeg, intent.getStringExtra(EXTRA_PROMPT) ?: graph.prompts.describe).collect {
+                            if (firstMs == null) firstMs = (System.nanoTime() - c0) / 1_000_000
+                            text.append(it)
+                        }
+                        "jpeg=${jpeg.size} B first-chunk ms=$firstMs | $text"
+                    }
+                    "describe" -> engine.describeScene(
+                        bitmap, intent.getStringExtra(EXTRA_PROMPT) ?: graph.prompts.describe,
+                        cloud = intent.getBooleanExtra(EXTRA_CLOUD, true),
+                    ).toList().joinToString("")
                     "vlm" -> if (threads > 0) {
                         com.vysion.xr.inference.SmokeVlm.describe(app, bitmap, prompt, threads)
                     } else {
@@ -129,9 +151,10 @@ class ModelSmokeReceiver : BroadcastReceiver() {
         const val EXTRA_MODEL = "model"
         const val EXTRA_IMAGE = "image"
         const val EXTRA_PROMPT = "prompt"
+        const val EXTRA_CLOUD = "cloud"
         const val DIR = "smoke"
         const val DEFAULT_PROMPT = "Describe what is in front of me in one short sentence."
-        val MODELS = setOf("ocr", "vlm", "detector", "vlm-probe", "tts")
+        val MODELS = setOf("ocr", "vlm", "detector", "vlm-probe", "tts", "describe", "cloud")
         val NAME = Regex("[A-Za-z0-9._-]{1,64}")
     }
 }

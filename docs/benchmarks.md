@@ -26,6 +26,25 @@ VLM median/p90 = wall time of `InferenceEngine.describe(still, READ, 60)` from t
 | 10 min continuous Navigation, detector ≥ 3 fps | pass | not measured | | |
 | "stop" interrupts speech | ≤ 300 ms | not measured | | |
 
+## Cloud Describe (ADR-0010 row; opt-in, network on)
+
+Debug `ModelSmokeReceiver` on the 960×960 `files/smoke/scene.png` with nobody wearing the headset (the camera needs a
+wearer, so capture → first spoken word with the cloud is **not measured**). Wi-Fi on, Galaxy XR SM-I610, 2026-10-18,
+`gemini-3.6-flash`, thinking `minimal`, free tier (project `vysion-app`, no billing). Times are from the start of
+`describeScene` (`vysion.latency: describe …`), not from capture. Runs 1–4 used an API-restricted key; runs 5–7 the
+app-restricted key in `local.properties` (with `X-Android-Package` / `X-Android-Cert`).
+
+| Run | Path | Cloud first chunk | Headset | Who answered | Note |
+|---|---|---|---|---|---|
+| 1 `--es model cloud` (cloud only) | JPEG 61 172 B | 0.96 s; whole answer 1.61 s | not started | cloud | |
+| 2 `describe`, first request after launch | hedged | none by 7.35 s | started at 1.01 s; prefill 6.09 s; first chunk 7.35 s | headset | the fallback working: a cold, slow cloud lost to the headset |
+| 3 `describe` | hedged | 1.50 s | started at 1.01 s, cancelled | cloud | the flow ends after the cancelled prefill (8.9 s); speech is still on sentence 1 then |
+| 4 `describe` | hedged | 1.17 s | started at 1.00 s, cancelled | cloud | flow ends at 8.1 s, same reason |
+| 5 `--es model cloud` (cloud only) | JPEG 61 172 B | 1.41 s; whole answer 1.86 s | not started | cloud | app-restricted key: 200 from the headset |
+| 6 `describe` | hedged | 0.90 s | never started | cloud | whole flow 1.25 s |
+| 7 `describe` | hedged | 1.15 s | started at 1.00 s, cancelled | cloud | flow ends at 8.9 s |
+| offline (airplane mode) | | | | | **not checked on the device** (JVM tests only: `CloudDescribeEngineTest`) |
+
 ## Thermal soak (`scripts/benchmark.sh --soak 600`)
 
 | Minute | Detector fps | PSS MB | Battery % | Thermal status |

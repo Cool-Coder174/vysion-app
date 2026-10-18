@@ -131,7 +131,7 @@ class AppGraph(private val app: Application) {
      */
     val inferenceEngine: InferenceEngine = CloudDescribeEngine(
         headset = if (useFakes) FakeInferenceEngine() else ExecuTorchInferenceEngine(app, modelCatalog, scope),
-        cloud = GeminiCloudDescriber.orNull(BuildConfig.GEMINI_API_KEY, app.packageName, signingCertSha1(app)),
+        cloud = cloudDescriber(app),
         isOnline = NetworkStatus(app)::isOnline,
     )
 
@@ -294,6 +294,13 @@ private suspend fun XrPerceptionSession.gazeDistanceM(): Float? = GazeGeometry.d
  * (40 upper-case hex digits, no colons). `null` if the package manager cannot tell; the cloud call then fails with 403
  * and Describe stays on the headset.
  */
+/**
+ * The Gemini client for cloud Describe (ADR-0010), or `null` without a key. Also used by the debug smoke receiver
+ * (`--es model cloud`) so its requests carry the same app restriction headers as the engine's.
+ */
+fun cloudDescriber(app: Application): GeminiCloudDescriber? =
+    GeminiCloudDescriber.orNull(BuildConfig.GEMINI_API_KEY, app.packageName, signingCertSha1(app))
+
 private fun signingCertSha1(app: Application): String? = runCatching {
     val info = app.packageManager.getPackageInfo(
         app.packageName,
