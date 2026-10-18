@@ -106,7 +106,12 @@ Ultralytics' `format=executorch` is FP32 only, so `--int8` runs its own PT2E flo
   for 300 images on an Intel MacBook in Docker.
 - **The check** (`compare_detectors.py`) runs both `.pte` files through the ExecuTorch runtime and the app's decode on
   every Open Images V7 *test* image with a door (held out from calibration), and prints recall/precision per label
-  and how many FP32 detections int8 reproduces. Results in `docs/benchmarks.md`.
+  and how many FP32 detections int8 reproduces. Results in `docs/benchmarks.md`. `--conf 0.35,0.25,0.15` prints one
+  table per floor from the same forward passes; `--b` equal to `--a` scores a single file.
+- **Other input sizes**: `--imgsz 416 --out ml/out/size416` (FP32 or `--int8`) exports the same model for a larger
+  letterbox; the lockfile row's `input_width/height` is all the app needs. Door recall vs headset time for 320–640:
+  `docs/benchmarks.md` "Detector input size vs door recall". Run one Docker job at a time: two XNNPACK jobs on the
+  Docker VM's vCPUs slowed each other several-fold (2026-10-18, a 320 forward went from ~0.3 s to over 1 s).
 
 On the headset the engine tries the build's row first (`BuildConfig.DETECTOR`: `detector-int8` by default,
 `-Pdetector=detector` for FP32 first), then `detector`: a missing, refused or unloadable `detector-int8.pte` logs `detector-int8 unavailable …` or

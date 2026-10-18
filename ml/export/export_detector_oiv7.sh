@@ -3,8 +3,9 @@
 # V7 (601 classes, including Door, Stairs, Person, Chair, Table, Waste container) to an ExecuTorch XNNPACK .pte.
 # COCO (YOLO26-n) has no door class, so "find the door" needs this model or the VLM vote.
 #
-# Runs inside a Linux container: PyTorch publishes no Intel-Mac wheels, and the container pins the exact
-# runtime pair (executorch==1.3.1, torch==2.12.0, ml/requirements.txt) whatever the laptop is.
+# Runs inside a Linux container: PyTorch publishes no Intel-Mac wheels, and the vysion-ml:1.3.1 image (built from
+# ml/export/Dockerfile if missing) pins the exact runtime pair (executorch==1.3.1, torch==2.12.0, ml/requirements.txt)
+# whatever the laptop is. Installing the wheels on every run instead sat in pip for over 20 minutes (2026-10-18).
 #
 # Facts (docs.ultralytics.com/integrations/executorch, exporter.py; research 2026-10-17):
 #   `yolo export format=executorch` exists since ultralytics 8.3.220; FP32 only; NO NMS in the graph;
@@ -14,7 +15,7 @@
 #
 # Usage:   ml/export/export_detector_oiv7.sh [--imgsz 320] [--out ml/out]
 #          ml/export/export_detector_oiv7.sh --int8 [--calib-images 300] [--imgsz 320] [--out ml/out]
-# Prereq:  Docker running. Downloads: python:3.12-slim, the CPU wheels, and yolov8n-oiv7.pt (Ultralytics release).
+# Prereq:  Docker running. Downloads: yolov8n-oiv7.pt (Ultralytics release, cached in ml/.cache/weights).
 # Output:  <out>/detector.pte, and the lockfile fields (bytes, sha256, classes map) printed at the end.
 #
 # --int8 (row detector-int8): PT2E + XNNPACKQuantizer, static int8 activations, symmetric per-channel int8 weights,
@@ -38,18 +39,18 @@ while [ $# -gt 0 ]; do
     --int8) INT8=1; shift ;;
     --calib-images) CALIB="$2"; shift 2 ;;
     --out) OUT_DIR="$2"; shift 2 ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 mkdir -p "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+IMAGE=vysion-ml:1.3.1
+docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" "$ROOT/ml/export"
+CACHE="$ROOT/ml/.cache"
+mkdir -p "$CACHE/weights"
 
 if [ "$INT8" = 1 ]; then
-  IMAGE=vysion-ml:1.3.1
-  docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" "$ROOT/ml/export"
-  CACHE="$ROOT/ml/.cache"
-  mkdir -p "$CACHE/weights"
   run() {
     docker run --rm -v "$ROOT/ml/export":/tools:ro -v "$CACHE":/data -v "$OUT_DIR":/out \
       -v "$ROOT/ml/models.lock":/lock/models.lock:ro -w /data/weights -e PYTHONUNBUFFERED=1 "$IMAGE" "$@"
@@ -67,11 +68,10 @@ if [ "$INT8" = 1 ]; then
   exit 0
 fi
 
-docker run --rm -v "$OUT_DIR":/out -e IMGSZ="$IMGSZ" python:3.12-slim bash -euo pipefail -c '
-  apt-get update -qq && apt-get install -y -qq --no-install-recommends libgl1 libglib2.0-0 >/dev/null
-  pip install -q --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu \
-      "torch==2.12.0" "executorch==1.3.1" "ultralytics==8.4.14" "opencv-python-headless<5"
+# The export lands next to the weights, so each run works on its own copy in /tmp (sizes can run in parallel).
+docker run --rm -v "$OUT_DIR":/out -v "$CACHE/weights":/weights -e IMGSZ="$IMGSZ" "$IMAGE" bash -euo pipefail -c '
   cd /tmp
+  cp /weights/yolov8n-oiv7.pt . 2>/dev/null || true   # else Ultralytics downloads it here
   yolo export model=yolov8n-oiv7.pt format=executorch imgsz="$IMGSZ"
   cp yolov8n-oiv7_executorch_model/*.pte /out/detector.pte
   python - <<PY

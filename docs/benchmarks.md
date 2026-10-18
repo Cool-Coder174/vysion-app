@@ -58,7 +58,80 @@ time per `detect()`. The larger problem is FP32's own door recall on these photo
 small or partly hidden, unlike a door in front of a wearer, so this is not the headset's recall, but it is the
 headroom question for any speed spent: a larger input or a door-specific threshold. **Shipping default: int8 since
 2026-10-18** (Isaac's call; `app/build.gradle.kts` `DETECTOR`). `detector.pte` (FP32) is the fallback when
-`detector-int8.pte` is missing, refused or will not load; `-Pdetector=detector` builds FP32-first.
+`detector-int8.pte` is missing, refused or will not load; `-Pdetector=detector` builds FP32-first. Whether int8's saved
+time buys door recall back: next section.
+
+## Detector input size vs door recall (2026-10-18)
+
+The question: int8 at 320 saved ~40 ms per `detect()`; does spending it on a larger input (or a lower door threshold)
+buy back door recall? Same model (YOLOv8n Open Images V7) exported at 416, 480 and 640
+(`export_detector_oiv7.sh --imgsz N`, FP32, and `--int8` at 416 and 480 with **100** calibration images: the first 100
+by file name of the 300-image validation set, so a first look, not the file to ship).
+
+**Latency on the headset.** Same smoke as above (960×960 `scene.png`, one warm-up broadcast, then `--ei runs 30` with its
+own untimed warm-up call; nobody wearing it; Wi-Fi on; dev runs, not the SRS §7 protocol). Each size is its own debug
+build (`-Pdetector=<row>`) whose bundled lockfile adds a test row with that size's `sha256`, `bytes` and
+`input_width/height` (the app letterboxes to the row's size; nothing else changes). Legs run back to back, each
+bracketed by the shipping `detector-int8` (320) build. Galaxy XR SM-I610, thermal status 0 before and after every leg.
+
+| Session | Leg | Row loaded | Input | Median | p90 | Min | Max |
+|---|---|---|---|---|---|---|---|
+| 09:01–09:05 | 1 | `detector-int8` | 320 int8 | 54.5 ms | 59 ms | 52 ms | 69 ms |
+| | 2 | test row | 416 FP32 | 137.0 ms | 146 ms | 127 ms | 150 ms |
+| | 3 | test row | 480 FP32 | 174.0 ms | 184 ms | 162 ms | 188 ms |
+| | 4 | test row | 640 FP32 | 299.5 ms | 304 ms | 269 ms | 308 ms |
+| | 5 | `detector-int8` | 320 int8 | 55.0 ms | 63 ms | 51 ms | 72 ms |
+| 10:09–10:12 | A | `detector-int8` | 320 int8 | 55.0 ms | 64 ms | 52 ms | 73 ms |
+| | B | test row | **416 int8** | **78.0 ms** | 92 ms | 73 ms | 106 ms |
+| | A | `detector-int8` | 320 int8 | 54.5 ms | 66 ms | 51 ms | 79 ms |
+| | C | `detector` (`-Pdetector=detector`) | 320 FP32 | 94.5 ms | 105 ms | 87 ms | 111 ms |
+| 10:23–10:25 | A | `detector-int8` | 320 int8 | 55.5 ms | 60 ms | 52 ms | 71 ms |
+| | B | test row | **480 int8** | **97.5 ms** | 114 ms | 88 ms | 118 ms |
+| | A | `detector-int8` | 320 int8 | 55.0 ms | 58 ms | 51 ms | 68 ms |
+
+The 320 int8 legs stay within 54.5–55.5 ms across the three sessions, so the sizes are comparable. Model load (mmap +
+`loadMethod`) is 11–28 ms at every size. File size barely moves with input size (FP32 14.08–14.16 MB, int8 3.74–3.77
+MB): the extra cost is activations, not weights.
+
+**Door recall vs time (laptop recall, headset time).** `compare_detectors.py` (ExecuTorch runtime in Docker, the app's
+decode) on every Open Images V7 *test* image with a door: 546 images, 787 door boxes (all downloaded this time, so the
+320 numbers differ slightly from the 544-image table above). A detection counts at IoU ≥ 0.5 with a door box. Recall %
+(hits) and precision % per confidence floor. 0.35 is what "find the door" uses today (`DoorDetections.MIN_CONFIDENCE`
+in `ModeController.kt`); 0.25 is the decode floor for every class (`YoloPostProcessor.DEFAULT_CONF_THRESHOLD`).
+
+| Input | Weights | `detect()` median on the headset | Door @ 0.35 | Door @ 0.25 | Door @ 0.15 | Door @ 0.10 |
+|---|---|---|---|---|---|---|
+| 320 | int8 (shipping) | 55 ms | 6.2% (49), P 79.0% | 9.0% (71), P 74.0% | 13.5% (106), P 63.1% | 18.6% (146), P 57.5% |
+| 320 | FP32 | 94.5 ms | 6.9% (54), P 80.6% | 9.7% (76), P 72.4% | 15.8% (124), P 62.3% | 19.4% (153), P 57.1% |
+| 416 | int8 | 78.0 ms | 9.0% (71), P 71.0% | 12.5% (98), P 65.8% | 18.6% (146), P 61.6% | 23.6% (186), P 54.7% |
+| 416 | FP32 | 137.0 ms | 8.9% (70), P 68.6% | 13.0% (102), P 64.6% | 19.2% (151), P 59.0% | 24.3% (191), P 54.3% |
+| 480 | int8 | 97.5 ms | 9.8% (77), P 71.3% | 13.1% (103), P 66.9% | 20.1% (158), P 56.2% | 24.4% (192), P 53.2% |
+| 480 | FP32 | 174.0 ms | 11.4% (90), P 71.4% | 15.0% (118), P 66.3% | 22.7% (179), P 56.3% | 28.2% (222), P 52.5% |
+| 640 | FP32 | 299.5 ms | 13.7% (108), P 73.0% | 19.2% (151), P 66.5% | 26.2% (206), P 56.6% | 32.1% (253), P 51.2% |
+
+int8 tracks FP32 closely at 416 (≤ 0.7 points of door recall at every floor; door score |FP32 − int8| median 0.032,
+p90 0.088) but loses more at 480 (1.6–3.8 points; median 0.045, p90 0.127), probably the 100-image calibration;
+re-export with the recipe's 300 images before shipping either. Person recall rises the same way (int8 at 0.25: 21.4%
+at 320, 27.2% at 416, 28.3% at 480, of 173). Every image here has a door, so "false" door boxes include unlabeled or
+loosely boxed doors; precision is a floor, not the wearer's false-alarm rate.
+
+**What it buys.** The door threshold is free; the input size costs time:
+
+- Threshold only, 320 int8: a door floor of 0.15 instead of 0.35 takes "find the door" from 6.2% to 13.5% recall at no
+  latency cost; door precision 79% → 63% (false door boxes 13 → 62 over 546 door photos).
+- **416 int8 + door floor 0.15 (recommended):** 18.6% recall at the find-the-door gate, 3× today's 6.2%, for 78 ms per
+  `detect()`: 23 ms more than today's 320 int8, still 16.5 ms faster than the 320 FP32 build that shipped until this
+  morning. Door precision 61.6% (91 false door boxes over 546 door photos, about 1 in 6 images).
+- 480 int8 + 0.15: 20.1% for 97.5 ms, i.e. about FP32-320's time; +1.5 points over 416 for +19.5 ms. Not worth it with
+  this calibration; worth one re-check after a 300-image calibration (FP32-480 reaches 22.7%).
+- 640: the best recall (26.2% at 0.15 FP32), but 299.5 ms FP32 is over the 200 ms a 5 fps Navigation loop allows
+  (NFR detector ≥ 5 fps); int8-640 was not built.
+
+What a switch needs (not done here; changing the shipping default is Isaac's call): (1) re-export int8 at 416 with 300
+calibration images and paste its `sha256`/`bytes` with `input_width/height = 416` into the `detector-int8` row (or a
+new row plus `-Pdetector=`); (2) a door-only floor: decode at 0.15 for the door class while every other class keeps
+0.25, and `DoorDetections.MIN_CONFIDENCE` 0.35 → 0.15. A 0.20 door floor was not measured. The 416 int8 file timed here:
+3,758,692 B, sha256 `dbd34378…e098e2bb54`.
 
 ## NFR targets vs measured
 

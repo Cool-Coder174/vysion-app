@@ -8,7 +8,10 @@ measured on the headset (docs/benchmarks.md).
 
 Usage (inside the vysion-ml image):
   python compare_detectors.py --a /out/detector.pte --b /out/detector-int8.pte --images /data/heldout \
-      --lock /lock/models.lock [--json /data/compare.json]
+      --lock /lock/models.lock [--conf 0.25,0.15] [--json /data/compare.json]
+
+Several --conf values print one table each from the same forward passes (decoding is cheap, the forward is not).
+--b equal to --a runs the model once per image: a single model's recall at one input size.
 """
 import argparse
 import glob
@@ -59,7 +62,8 @@ def main() -> int:
     p.add_argument("--lock", required=True, help="ml/models.lock, for the detector's class map")
     p.add_argument("--weights", default="yolov8n-oiv7.pt", help="for the Open Images name of each class id")
     p.add_argument("--imgsz", type=int, default=320)
-    p.add_argument("--conf", type=float, default=yolo_app.CONF, help="confidence floor (the app uses 0.25)")
+    p.add_argument("--conf", default=str(yolo_app.CONF),
+                   help="confidence floor(s), comma-separated (the app uses 0.25); one table each")
     p.add_argument("--json")
     a = p.parse_args()
 
@@ -68,13 +72,17 @@ def main() -> int:
     oi_to_label = {names[i]: label for i, label in class_map.items()}
     labels = json.load(open(os.path.join(a.images, "labels.json")))
 
+    confs = [float(c) for c in a.conf.split(",")]
+    same = os.path.realpath(a.a) == os.path.realpath(a.b)
     rt = Runtime.get()
-    methods = {k: rt.load_program(path).load_method("forward") for k, path in (("a", a.a), ("b", a.b))}
+    methods = {"a": rt.load_program(a.a).load_method("forward")}
+    if not same:
+        methods["b"] = rt.load_program(a.b).load_method("forward")
 
     gt = defaultdict(int)
-    hit = {k: defaultdict(int) for k in methods}
-    found = {k: defaultdict(int) for k in methods}
-    agree = defaultdict(int)  # FP32 detections the int8 model reproduces
+    hit = {c: {k: defaultdict(int) for k in ("a", "b")} for c in confs}
+    found = {c: {k: defaultdict(int) for k in ("a", "b")} for c in confs}
+    agree = {c: defaultdict(int) for c in confs}  # FP32 detections the int8 model reproduces
     door_score_err = []
     paths = sorted(glob.glob(os.path.join(a.images, "images", "*.jpg")))
     for n, path in enumerate(paths):
@@ -87,17 +95,18 @@ def main() -> int:
                 truths[oi_to_label[name]].append(box)
         for label, boxes in truths.items():
             gt[label] += len(boxes)
-        dets, raw = {}, {}
-        for k, method in methods.items():
-            raw[k] = method.execute([torch.from_numpy(chw)])[0].numpy()
-            dets[k] = yolo_app.decode(raw[k], lb, class_map, a.conf)
+        raw = {k: method.execute([torch.from_numpy(chw)])[0].numpy() for k, method in methods.items()}
+        raw.setdefault("b", raw["a"])
+        for c in confs:
+            dets = {k: yolo_app.decode(raw[k], lb, class_map, c) for k in ("a", "b")}
+            for k in ("a", "b"):
+                for label in set(class_map.values()):
+                    mine = [d for d in dets[k] if d[0] == label]
+                    found[c][k][label] += len(mine)
+                    hit[c][k][label] += match(mine, truths.get(label, []))
             for label in set(class_map.values()):
-                mine = [d for d in dets[k] if d[0] == label]
-                found[k][label] += len(mine)
-                hit[k][label] += match(mine, truths.get(label, []))
-        for label in set(class_map.values()):
-            ref = [d[2] for d in dets["a"] if d[0] == label]
-            agree[label] += match([d for d in dets["b"] if d[0] == label], ref)
+                ref = [d[2] for d in dets["a"] if d[0] == label]
+                agree[c][label] += match([d for d in dets["b"] if d[0] == label], ref)
         door = [i for i, v in class_map.items() if v == "door"]
         if door:
             sa = raw["a"][0, 4 + door[0]]
@@ -110,31 +119,33 @@ def main() -> int:
 
     rows = []
     order = ["door"] + sorted(set(class_map.values()) - {"door"})
-    print(f"\n{len(paths)} held-out images; confidence {a.conf}, match IoU {MATCH_IOU}; a = {os.path.basename(a.a)}, b = {os.path.basename(a.b)}")
-    print("| Label | GT boxes | a recall | b recall | a precision | b precision | a detections | b detections | b reproduces a |")
-    print("|---|---|---|---|---|---|---|---|---|")
 
     def pct(x, y):
         return "—" if y == 0 else f"{100 * x / y:.1f}% ({x}/{y})"
 
-    for label in order:
-        if gt[label] == 0 and found["a"][label] == 0 and found["b"][label] == 0:
-            continue
-        row = {
-            "label": label, "gt": gt[label],
-            "a_hits": hit["a"][label], "b_hits": hit["b"][label],
-            "a_dets": found["a"][label], "b_dets": found["b"][label], "b_reproduces_a": agree[label],
-        }
-        rows.append(row)
-        print(f"| {label} | {gt[label]} | {pct(hit['a'][label], gt[label])} | {pct(hit['b'][label], gt[label])} | "
-              f"{pct(hit['a'][label], found['a'][label])} | {pct(hit['b'][label], found['b'][label])} | "
-              f"{found['a'][label]} | {found['b'][label]} | {pct(agree[label], found['a'][label])} |")
+    for c in confs:
+        h, f, g = hit[c], found[c], agree[c]
+        print(f"\n{len(paths)} held-out images; input {a.imgsz}; confidence {c}, match IoU {MATCH_IOU}; "
+              f"a = {os.path.basename(a.a)}, b = {os.path.basename(a.b)}")
+        print("| Label | GT boxes | a recall | b recall | a precision | b precision | a detections | b detections | b reproduces a |")
+        print("|---|---|---|---|---|---|---|---|---|")
+        for label in order:
+            if gt[label] == 0 and f["a"][label] == 0 and f["b"][label] == 0:
+                continue
+            rows.append({
+                "conf": c, "label": label, "gt": gt[label],
+                "a_hits": h["a"][label], "b_hits": h["b"][label],
+                "a_dets": f["a"][label], "b_dets": f["b"][label], "b_reproduces_a": g[label],
+            })
+            print(f"| {label} | {gt[label]} | {pct(h['a'][label], gt[label])} | {pct(h['b'][label], gt[label])} | "
+                  f"{pct(h['a'][label], f['a'][label])} | {pct(h['b'][label], f['b'][label])} | "
+                  f"{f['a'][label]} | {f['b'][label]} | {pct(g[label], f['a'][label])} |")
     if door_score_err:
         e = np.array(door_score_err)
         print(f"\ndoor score |a - b| on anchors where a >= 0.1: median {np.median(e):.3f}, p90 {np.percentile(e, 90):.3f}, n={len(e)}")
     if a.json:
         with open(a.json, "w") as f:
-            json.dump({"images": len(paths), "rows": rows, "door_score_abs_err": door_score_err}, f)
+            json.dump({"images": len(paths), "imgsz": a.imgsz, "rows": rows, "door_score_abs_err": door_score_err}, f)
     return 0
 
 
