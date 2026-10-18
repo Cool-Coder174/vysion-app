@@ -1,22 +1,35 @@
 # Vysion XR
 
-**Read a sign, understand a room, find the door. On a headset, with every model running on the headset, without sending a single frame to a server.**
+**Read a sign, understand a room, find the door. On a headset, with every model running on the headset; by default not a single frame leaves it.**
 
-Vysion XR is a native Android XR app for the Samsung Galaxy XR with three voice-driven modes: **Text Reader**, **Audio Description** and **Navigation**. A vision-language model (4-bit; the exact model is decided Sat 11:00, `plan.md` Q6, default Gemma 3 4B via optimum-executorch) and a light object detector (YOLO26-n, int8) run entirely on the headset through [ExecuTorch](https://github.com/pytorch/executorch) with the XNNPACK backend. Everything runs without a connection, so the demo works in airplane mode; network is allowed only for optional features that have an on-device fallback (ADR-0010). A live diagnostics panel shows measured latency, memory and backend.
+Vysion XR is a native Android XR app for the Samsung Galaxy XR with three voice-driven modes: **Text Reader**, **Audio Description** and **Navigation**. Five models run on the headset through [ExecuTorch](https://github.com/pytorch/executorch) 1.4.0 with the XNNPACK backend: a vision-language model (**LFM2.5-VL-450M**, 4-bit) that describes scenes and looks for doors, an OCR model (**PP-OCRv6**, int8) that reads text, an object detector (**YOLOv8n trained on Open Images V7**, int8) that finds people, obstacles and doors, and **Whisper-tiny** with the **Silero** voice-activity detector for voice commands. Read, Describe and Find the door need no connection. Network is used only by optional features that each have an on-device fallback (ADR-0010): an opt-in cloud Describe and the "where am I" map. A live diagnostics panel shows measured latency, memory and backend.
 
 > **Vysion XR helps you read, understand, and move through a space. It is not validated for unassisted travel by blind users.**
 
 Built by a team of five at the ExecuTorch Hackathon (Hacker//Squad, San Francisco, Oct 17–18 2026).
 
-**Status: skeleton.** This repository currently contains the contracts, stubs, fakes, scripts and documentation that let five people (or five coding agents) start their modules in parallel. Nothing has run on a Galaxy XR yet; every number below says "not measured" until it is measured on the device ([`docs/benchmarks.md`](docs/benchmarks.md)). The roadmap with gates is [`plan.md`](plan.md).
+**Status: runs on the Galaxy XR.** All three modes, voice commands and the diagnostics panel run on the headset. The numbers below are measured on the device in development runs (Wi-Fi on); the formal 20-run, airplane-mode protocol has not been run yet, and anything not measured says so ([`docs/benchmarks.md`](docs/benchmarks.md)). The roadmap with gates is [`plan.md`](plan.md).
+
+## Models on the headset
+
+| Job | Model | Quantization | File size | Runs through |
+|---|---|---|---|---|
+| Describe, door check, arrival check | LFM2.5-VL-450M (Liquid AI; Software Mansion ExecuTorch export) | 8da4w (4-bit weights) | 649 MB | ExecuTorch, XNNPACK |
+| Text Reader | PP-OCRv6 small (PaddleOCR; Software Mansion export) | int8 | 24 MB | ExecuTorch, XNNPACK |
+| People, obstacles, doors (outlines, Find the door fast path) | YOLOv8n, Open Images V7 (601 classes), 320×320 | int8 (fp32 fallback) | 3.7 MB | ExecuTorch, XNNPACK |
+| Voice commands | Whisper-tiny (OpenAI) | fp32 | 231 MB | ExecuTorch, XNNPACK |
+| When someone is talking | Silero VAD 16 kHz | fp32 | 1.3 MB | ExecuTorch, XNNPACK |
+
+Sources, hashes and licences: [`ml/models.lock`](ml/models.lock). Why these models and not the SRS's Gemma 4: [`docs/model-plan.md`](docs/model-plan.md).
 
 ## What it does
 
 | Mode | Say | What happens | Output |
 |---|---|---|---|
-| Text Reader | "Vysion, read this" (or pinch-and-hold) | One world-camera frame → VLM with the read-verbatim prompt | Spoken text within 6 s; large-print transcript panel; "repeat", "slower", "in Spanish" |
+| Text Reader | "Vysion, read this" (or pinch-and-hold) | One world-camera frame → PP-OCR on the reading crosshair, then the whole frame (the VLM reads only when OCR is unavailable) | Spoken text in about 1.5 s (target 6 s); large-print transcript panel; "repeat", "slower", "in Spanish" |
 | Audio Description | "Vysion, describe" / "what's around me" | One frame → VLM with the describe prompt (3 sentences, hazards first, left to right) | Spoken within 8 s; follow-up questions reuse the same frame |
-| Navigation | "Vysion, guide me" / "find the door" | Continuous depth + planes (ARCore for Jetpack XR) + detector at ≥ 5 fps; VLM one-shot locates the door; a native anchor holds it | Spatial-audio pings from the target, "door, 2 o'clock, 3 meters", outline in passthrough, proximity warning under 1 m |
+| Navigation | "Vysion, guide me" / "find the door" | Continuous depth + planes + head pose (ARCore for Jetpack XR) + detector at about 11 fps; the detector finds the door (the VLM votes on two frames when it does not); a native anchor holds it | Spatial-audio ping from the door every 3 s, "door, 2 o'clock, 3 meters", outline in passthrough, "obstacle ahead" under 1 m, "wall ahead" |
+| Where am I (optional, network) | "Vysion, where am I" | Network location + OpenFreeMap tiles; Gemini words the answer | Nearest street, cross streets and named places with meters; offline, template sentences from tiles already in memory |
 
 Design rules (from the SRS): every visual element has an audio twin; voice first, gestures second, buttons third; clock-face bearings and meters; hazards before descriptions; "stop" interrupts anything within 300 ms; nothing is spoken that was not measured or seen.
 
@@ -28,7 +41,7 @@ Design rules (from the SRS): every visual element has an audio twin; voice first
 
 ## Architecture
 
-Four layers in one Kotlin process. Input comes from Android XR's own camera, perception and speech stacks; Control decides what to run; two ExecuTorch models answer; Output is speech first, visuals second. The three core features have no path to the network; the optional network features (ADR-0010) are side paths with on-device fallbacks. Full diagrams, flows and the state machine: [`docs/architecture.md`](docs/architecture.md).
+Four layers in one Kotlin process. Input comes from Android XR's own camera and perception stacks and an on-device speech model; Control decides what to run; ExecuTorch models answer; Output is speech first, visuals second. The three core features have no path to the network; the optional network features (ADR-0010) are side paths with on-device fallbacks. Full diagrams, flows and the state machine: [`docs/architecture.md`](docs/architecture.md).
 
 ```mermaid
 flowchart LR
@@ -42,8 +55,9 @@ flowchart LR
     NE[NavigationEngine]
   end
   subgraph ExecuTorch["ExecuTorch · XNNPACK"]
-    VLM[VLM 4-bit · plan.md Q6]
-    DET[YOLO26-n int8]
+    VLM[LFM2.5-VL-450M 4-bit]
+    OCR[PP-OCRv6 int8]
+    DET[YOLOv8n OIV7 int8]
   end
   subgraph Output
     TTS[TextToSpeech]
@@ -52,6 +66,7 @@ flowchart LR
     DX[Diagnostics]
   end
   CAM --> MC --> VLM --> MC
+  MC --> OCR --> MC
   CAM --> NE --> DET --> NE
   AR --> NE
   SR --> MC
@@ -64,8 +79,9 @@ flowchart LR
 
 | Component | Runs where | Library |
 |---|---|---|
-| VLM (read, describe, door, arrival) | headset CPU | ExecuTorch `LlmModule` (multimodal), XNNPACK |
-| Detector (people, obstacles) | headset CPU | ExecuTorch `Module`, XNNPACK |
+| VLM LFM2.5-VL-450M (describe, door vote, arrival) | headset CPU | ExecuTorch `Module` (vision encoder + decoder runner), XNNPACK |
+| OCR PP-OCRv6 (read) | headset CPU | ExecuTorch `Module`, XNNPACK |
+| Detector YOLOv8n OIV7 (people, obstacles, doors) | headset CPU | ExecuTorch `Module`, XNNPACK |
 | Depth, planes, anchors, hands, head pose | headset | ARCore for Jetpack XR |
 | Panels, passthrough, spatial audio | headset | Jetpack Compose for XR + SceneCore |
 | Speech in / out | headset | Whisper-tiny on ExecuTorch with Silero VAD (ADR-0011; Android `SpeechRecognizer` as fallback) / `TextToSpeech` |
@@ -73,24 +89,25 @@ flowchart LR
 
 ## Measured numbers
 
-Protocol: 20 runs per model on the headset in airplane mode; median and p90 latency, peak memory, file size. Numbers come from the device, never from a laptop. Full tables: [`docs/benchmarks.md`](docs/benchmarks.md).
+Measured on the Galaxy XR (SM-I610), **development runs with Wi-Fi on**, not yet the SRS protocol (20 runs per model in airplane mode). Full tables, method and every run: [`docs/benchmarks.md`](docs/benchmarks.md). Anything without a measurement says "not measured".
 
-Latency here is the wall time of one engine call from the debug `BenchmarkReceiver` (VLM: `describe(still, READ, 60)` on a live `captureStill()` pointed at a printed sign, full generation, no TTS; without a camera the receiver falls back to a synthetic gray frame, and such a run is not reported). Capture → first spoken word is the target table below, taken from the `vysion.latency: read capture->first-word <ms> ms` line, which R1 still has to add (`docs/modules/r1-xr-platform.md`); until it exists that row stays "not measured".
+| Model | Quantization | File size | Load | Time per call on the headset | Peak memory |
+|---|---|---|---|---|---|
+| LFM2.5-VL-450M | 8da4w | 649 MB | 3.4 s | 7.7–7.8 s for a 60-token answer (prefill 6.0 s, then 36 tokens/s); 3 runs | not measured |
+| PP-OCRv6 small | int8 | 24 MB | 0.2 s | 1.15 s for a 960×720 sign; 2 runs | not measured |
+| YOLOv8n OIV7 | int8 | 3.7 MB | 12 ms | 55 ms median, 70 ms p90 per `detect()` (fp32: 93 / 111 ms); 30 runs | not measured |
+| Whisper-tiny + Silero VAD | fp32 | 231 MB + 1.3 MB | 2.2 s | 1.5 s median from the end of speech to the command (English, 87 synthetic clips) | not measured |
 
-| Model | Quantization | Backend | File size | Median `describe` / `detect` wall time | p90 wall time | Peak memory |
-|---|---|---|---|---|---|---|
-| VLM (`plan.md` Q6) | not measured | not measured | not measured | not measured | not measured | not measured |
-| Detector (YOLO26-n COCO) | not measured | not measured | not measured | not measured | not measured | not measured |
-
-| Target (SRS §5) | Measured |
-|---|---|
-| Command recognized → action ≤ 1.5 s | not measured |
-| Text Reader capture → first word ≤ 6 s | not measured |
-| Audio Description capture → first word ≤ 8 s | not measured |
-| Detector ≥ 5 fps during Navigation | not measured |
-| Proximity warning ≤ 300 ms | not measured |
-| App memory with VLM loaded ≤ 4 GB | not measured |
-| 10 min Navigation without dropping below 3 fps | not measured |
+| Target (SRS §5) | Measured | |
+|---|---|---|
+| Command recognized → action ≤ 1.5 s | not measured | |
+| Text Reader capture → first word ≤ 6 s | 1.27–1.72 s (3 worn runs) | pass in dev runs |
+| Audio Description capture → first word ≤ 8 s | not measured (VLM prefill alone is 6.0 s) | |
+| Detector ≥ 5 fps during Navigation | about 11 fps live | pass in 1 dev run |
+| Proximity warning ≤ 300 ms | 16–114 ms from depth sample to cue (speech not included) | pass for the perception part |
+| App memory with VLM loaded ≤ 4 GB | not measured | |
+| 10 min Navigation without dropping below 3 fps | not measured | |
+| "stop" interrupts speech ≤ 300 ms | not measured | |
 
 ## Prompts
 
@@ -126,7 +143,7 @@ Verified live on 2026-10-17 against Maven metadata and the reference docs; sourc
 
 | Component | Version |
 |---|---|
-| ExecuTorch Android AAR `org.pytorch:executorch-android` (XNNPACK flavor, includes `LlmModule`) | **1.3.1** (PyPI `executorch==1.3.1` for exports) |
+| ExecuTorch Android AAR `org.pytorch:executorch-android` (XNNPACK flavor) | **1.4.0** (the PP-OCRv6 and LFM2.5-VL exports are 1.4.x) |
 | ARCore for Jetpack XR `androidx.xr.arcore:arcore` · SceneCore · XR runtime | **1.0.0-rc02** |
 | Jetpack Compose for XR `androidx.xr.compose:compose` | **1.0.0-beta01** |
 | CameraX | 1.6.2 |
@@ -162,11 +179,11 @@ plan.md         roadmap and gates (engineer-workflow); executor.md: phase specs;
 ## Limitations
 
 - An assistive aid, not a safety device. Not validated for unassisted travel by blind users.
-- English and Spanish only. No cloud, no accounts, no phone companion app.
+- English and Spanish only. No accounts, no phone companion app. Cloud is optional and off by default: an opt-in cloud Describe (Gemini; sends one JPEG) and the "where am I" wording; both fall back to the headset (ADR-0010). The manifest therefore declares `INTERNET`, `ACCESS_NETWORK_STATE` and location.
 - Depends on third-party camera access to the world-facing camera on the Galaxy XR (assumption A-1 in [`docs/assumptions.md`](docs/assumptions.md)); if unavailable, Read and Describe run on the S25 Ultra and Navigation stays on the headset with depth and planes only (no door finding, no detector outlines).
-- "Find the door" needs both the headset camera (A-1) and the VLM on the headset (A-13). If either fails, door finding is cut from the demo and Navigation shows proximity and wall / floor cues only.
-- Door finding is a VLM one-shot with a two-frame vote; multiple doors and a fine-tuned door detector are stretch goals.
-- **VLM choice is open (decided Saturday morning).** The SRS names Gemma 4 edge through the Android multimodal runner; live verification against ExecuTorch 1.3.1 showed that export is not loadable by `LlmModule` ([`docs/stack.md`](docs/stack.md) D5). The default replacement is Gemma 3 4B via optimum-executorch; the alternative is a Kotlin port of the Gemma 4 runner. See [`docs/model-plan.md`](docs/model-plan.md).
+- Door finding uses the detector first, then a two-frame VLM vote. On Open Images test photos the detector finds about 1 door in 10 at the app's threshold (doors there are often small or partly hidden; [`docs/benchmarks.md`](docs/benchmarks.md)), so it works best with a clear door a few meters ahead. Multiple doors are a stretch goal.
+- While walking, the door marker can drift slightly; "floor ends" and "keep guiding with the door out of view" are not yet tested on the device.
+- **The VLM is LFM2.5-VL-450M, not the SRS's Gemma 4.** The Gemma 4 export does not load in ExecuTorch's `LlmModule` ([`docs/stack.md`](docs/stack.md) D5), and a 450M model leaves memory for the other four models; see [`docs/model-plan.md`](docs/model-plan.md). On the headset the VLM needs about 6 s before its first word (prefill), so Describe is slower than Read.
 - Navigation outlines pause while the VLM answers a one-shot command (the detector is unloaded to keep peak memory to one model).
 
 ## Troubleshooting
