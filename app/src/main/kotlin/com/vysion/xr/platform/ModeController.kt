@@ -300,6 +300,7 @@ class ModeController(
                 captureAndDescribe(Mode.TEXT_READER, prompts.read, event)
             }
             is Command.SelectDoor -> Unit // TODO(FR-N7): choose among door candidates (P2)
+            is Command.CloudDescribe -> Unit // TODO(FR-D1): ADR-0010 cloud toggle, wired in the next commit
             Command.Stop -> Unit // handled on its own lane
         }
     }

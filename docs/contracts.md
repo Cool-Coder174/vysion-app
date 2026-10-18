@@ -57,6 +57,8 @@ interface InferenceEngine {
     suspend fun warmUp()                                         // idempotent; ModeController.start() calls it on every onStart
     suspend fun describe(bitmap: Bitmap, prompt: String, maxNewTokens: Int = DEFAULT_MAX_NEW_TOKENS): String   // throws InferenceException
     fun describeStreaming(bitmap: Bitmap, prompt: String, maxNewTokens: Int = DEFAULT_MAX_NEW_TOKENS): Flow<String>   // default wraps describe
+    fun describeScene(bitmap: Bitmap, prompt: String, cloud: Boolean, maxNewTokens: Int = DEFAULT_MAX_NEW_TOKENS): Flow<String>   // FR-D1 + ADR-0010: cloud when on + online, else/on error/slower = describeStreaming; default = describeStreaming
+    val cloudDescribeAvailable: Boolean get() = false   // ADR-0010: a cloud key is built in
     suspend fun detect(bitmap: Bitmap): List<Detection>
     suspend fun readText(bitmap: Bitmap): List<String>? = null   // FR-T1 OCR fast path: lines in reading order, [] = no text, null = no OCR model (use describe + READ)
     suspend fun readTextIn(bitmap: Bitmap, region: NormalizedBox): List<String>? = null   // reading crosshair: only the text inside region (cropped before detection); null = regions unsupported, read the whole frame
@@ -79,6 +81,7 @@ enum class HandGesture { TALK_START, TALK_END, ACTIVATE, NEXT_PAGE, STOP }   // 
 interface HandGestureSource { val gestures: Flow<HandGesture> }
 // ModePhrasebook.pageFocused(mode): String = modeAnnounced(mode)   // spoken on NEXT_PAGE: page name + how to run it
 // ModePhrasebook.readingWholeView: String = ""   // reading crosshair found nothing: spoken before the whole view is read
+// ModePhrasebook.cloudDescribe(on): String = "" · cloudDescribeUnavailable: String = ""   // ADR-0010: "cloud on/off" confirmation (says where photos go); no key built in
 // AnchorStore.placeAtGaze(fallbackDistanceM = 1.0f): AnchorId? = null   // augmented: anchor where the wearer looks (yaw + pitch), depth hit or 1 m along the gaze
 interface AnchorStore {
     suspend fun placeFromBearing(bearing: HorizontalBearing): AnchorId?; fun track(id: AnchorId): Flow<RelativeTarget>
@@ -91,7 +94,7 @@ interface NavigationEngine {
 }
 
 // R4
-sealed interface Command { Read · Describe · GuideMe · FindDoor · Stop · Repeat · Slower · InSpanish · Next · Brief · Detailed · FollowUp(val question: String) · SelectDoor(val side: HorizontalBearing) }
+sealed interface Command { Read · Describe · GuideMe · FindDoor · Stop · Repeat · Slower · InSpanish · Next · Brief · Detailed · FollowUp(val question: String) · SelectDoor(val side: HorizontalBearing) · CloudDescribe(val on: Boolean) }
 enum class ListeningState { IDLE, LISTENING, PROCESSING, UNAVAILABLE }
 enum class CommandSource { VOICE, PINCH, PANEL, TEST }
 data class CommandEvent(val command: Command, val source: CommandSource, val recognizedAtNanos: Long)
