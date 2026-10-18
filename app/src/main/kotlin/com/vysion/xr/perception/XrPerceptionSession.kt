@@ -637,6 +637,40 @@ class XrPerceptionSession(
         else -> Tracking.STOPPED
     }
 
+    // TEMP-DEBUG (test only, remove before the demo): place an anchor straight ahead and log its distance every second.
+    private var debugAnchorJob: Job? = null
+    val debugLive = MutableStateFlow<String?>(null)
+    var debugLastAnchor: AnchorId? = null
+
+    suspend fun debugPlaceAnchorAhead(): String {
+        val head = _headPose.value ?: return "no head pose yet"
+        val point = sampleDepthAlongBearing(head.yawDeg, head.pitchDeg) ?: return "no trusted depth ahead"
+        val id = createAnchor(point) ?: return "anchor refused"
+        debugLastAnchor = id
+        val start = sqrt(
+            (point.x - head.position.x).let { it * it } + (point.y - head.position.y).let { it * it } +
+                (point.z - head.position.z).let { it * it },
+        )
+        debugAnchorJob?.cancel()
+        debugAnchorJob = scope.launch {
+            while (true) {
+                val a = anchorPoses[id]?.value
+                val h = _headPose.value
+                if (a != null && h != null) {
+                    val dx = a.position.x - h.position.x
+                    val dy = a.position.y - h.position.y
+                    val dz = a.position.z - h.position.z
+                    val d = sqrt(dx * dx + dy * dy + dz * dz)
+                    debugLive.value = "marker %.2f m away (${a.tracking})".format(d)
+                    Log.i(TAG, "DEBUG anchor ${id.value}: %.2f m away, tracking=${a.tracking}".format(d))
+                }
+                kotlinx.coroutines.delay(1_000)
+            }
+        }
+        Log.i(TAG, "DEBUG anchor ${id.value} placed %.2f m ahead".format(start))
+        return "marker placed %.2f m ahead".format(start)
+    }
+
     /** No-arg form used by [XrNavigationEngine.start] and [XrAnchorStore]: uses the resumed activity. */
     override suspend fun ensureStarted() {
         val activity = resumedActivity?.get()
