@@ -190,17 +190,25 @@ object YoloPostProcessor {
         iouThreshold: Float = DEFAULT_IOU_THRESHOLD,
         maxDetections: Int = DEFAULT_MAX_DETECTIONS,
         classNames: List<String> = COCO_CLASSES,
+        onlyClasses: Map<Int, String>? = null,
     ): List<Detection> {
-        val candidates = when (layout) {
+        val keep = onlyClasses?.keys?.sorted()?.toIntArray()
+        val decoded = when (layout) {
             OutputLayout.XYXY_CONF_CLS_ROWS -> decodeRows(data, shape, confThreshold)
-            OutputLayout.CXCYWH_SCORES_COLUMNS -> decodeColumns(data, shape, confThreshold)
+                .let { rows -> if (keep == null) rows else rows.filter { it.classId in onlyClasses } }
+            OutputLayout.CXCYWH_SCORES_COLUMNS -> decodeColumns(data, shape, confThreshold, keep)
         }
+        // Ids that share a label ("Person", "Man", "Woman" → "person") are one class for NMS, so one body gets one box.
+        val canonical = onlyClasses?.entries?.groupBy({ it.value }, { it.key })?.values
+            ?.flatMap { ids -> ids.map { it to ids.min() } }?.toMap()
+        val candidates = if (canonical == null) decoded else decoded.map { c -> c.copy(classId = canonical[c.classId] ?: c.classId) }
         return nms(candidates, iouThreshold)
             .asSequence()
             .take(maxDetections)
             .mapNotNull { c ->
                 lb.toNormalized(c.x1, c.y1, c.x2, c.y2)?.let { box ->
-                    Detection(label = labelFor(c.classId, classNames), confidence = c.score.coerceIn(0f, 1f), box = box)
+                    val label = onlyClasses?.get(c.classId) ?: labelFor(c.classId, classNames)
+                    Detection(label = label, confidence = c.score.coerceIn(0f, 1f), box = box)
                 }
             }
             .toList()
@@ -223,22 +231,33 @@ object YoloPostProcessor {
         return out
     }
 
-    /** [OutputLayout.CXCYWH_SCORES_COLUMNS]: `[1, 4 + nc, N]`, best class per anchor. */
-    internal fun decodeColumns(data: FloatArray, shape: LongArray, confThreshold: Float): List<Candidate> {
+    /**
+     * [OutputLayout.CXCYWH_SCORES_COLUMNS]: `[1, 4 + nc, N]`, best class per anchor, among [onlyClassIds] when given
+     * (a 601-class Open Images model is asked only about door, stairs, people and furniture, so a door is not lost
+     * to "Door handle" on the same anchor, and 590 class rows are never read).
+     */
+    internal fun decodeColumns(
+        data: FloatArray,
+        shape: LongArray,
+        confThreshold: Float,
+        onlyClassIds: IntArray? = null,
+    ): List<Candidate> {
         require(shape.size == 3 && shape[0] == 1L) { "expected [1, 4+nc, N], got ${shape.toList()}" }
         val channels = shape[1].toInt()
         val n = shape[2].toInt()
         require(channels > 4) { "expected 4 box channels + ≥ 1 class, got $channels" }
         require(data.size >= channels * n) { "data has ${data.size} floats, shape needs ${channels * n}" }
         val out = ArrayList<Candidate>()
+        val classIds = onlyClassIds?.filter { it in 0 until channels - 4 }?.toIntArray()
+            ?: IntArray(channels - 4) { it }
         for (i in 0 until n) {
             var best = -1
             var bestScore = -1f
-            for (c in 4 until channels) {
-                val s = data[c * n + i]
+            for (cls in classIds) {
+                val s = data[(cls + 4) * n + i]
                 if (s > bestScore) {
                     bestScore = s
-                    best = c - 4
+                    best = cls
                 }
             }
             if (bestScore < confThreshold) continue

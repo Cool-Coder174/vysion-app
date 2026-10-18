@@ -46,6 +46,12 @@ class FakeInferenceEngine(
     /** Next [describe] suspends forever (cancellable), then resets. For the 15 s watchdog test (INV-5). */
     var hangNextDescribe: Boolean = false
 
+    /** What [readText] returns: `null` (the default) plays "no OCR model", so Read goes through [describe]. */
+    var cannedText: List<String>? = null
+
+    /** Calls to [readText], for the OCR-first tests. */
+    var readTextCalls: Int = 0
+
     /** Keyed by prompt text. Defaults cover every `PromptLibrary` prompt; others get [DEFAULT_FOLLOW_UP_ANSWER]. */
     val cannedAnswers: MutableMap<String, String> = linkedMapOf(
         PromptLibrary.READ to "EXIT. Push bar to open. Alarm will sound.",
@@ -159,6 +165,11 @@ class FakeInferenceEngine(
         detectCalls++
         _stats.update { it.copy(lastDetectMs = ms, detectorFps = fps, lastDetectAtNanos = now) }
         cannedDetections
+    }
+
+    override suspend fun readText(bitmap: Bitmap): List<String>? = mutex.withLock {
+        readTextCalls++
+        cannedText
     }
 
     override suspend fun release() {

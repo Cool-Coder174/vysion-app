@@ -67,6 +67,38 @@ class ModelCatalog(private val app: Application) {
         val inputHeight: Int = 0,
         val export: String = "",
         val sourceModel: String = "",
+        /**
+         * Detector class names in id order (optional `classes` array). Empty means COCO80: a model exported with
+         * other classes (Open Images, or open-vocabulary prompts such as "door") names them here, so its labels are
+         * right without a code change.
+         */
+        val classes: List<String> = emptyList(),
+        /**
+         * The object form of `classes` (`{"164": "door", "489": "stairs"}`): only these class ids are decoded and
+         * every other is dropped. For large label sets (Open Images, 601) where Navigation needs a dozen.
+         */
+        val classMap: Map<Int, String> = emptyMap(),
+        /** Detector output layout: `"rows"` (default; `[1, N, 6]` post-NMS) or `"columns"` (`[1, 4 + nc, N]`, NMS here). */
+        val outputLayout: String = "",
+        /**
+         * VLM chat format, from the model card (optional). [chatBeforeImage] is prefilled before the image;
+         * [chatTemplate] wraps the prompt after it and must contain `{prompt}`. Both empty: the raw prompt, which
+         * suits exports whose runner applies the template itself.
+         */
+        val chatBeforeImage: String = "",
+        val chatTemplate: String = "",
+        /**
+         * VLM image normalization (optional, per channel RGB). Empty: the image goes in as uint8 0..255
+         * (`prefillImages(int[])`, for encoders that normalize inside the graph); else `(v / 255 - mean) / std` as
+         * float (`prefillImages(float[])`).
+         */
+        val imageMean: List<Float> = emptyList(),
+        val imageStd: List<Float> = emptyList(),
+        /**
+         * `"float_0_255"`: raw pixel values as float (`prefillImages(float[])`), for encoders that rescale and
+         * normalize inside the graph but take float input (LFM2.5-VL). Otherwise empty and [imageMean] decides.
+         */
+        val imageFormat: String = "",
     ) {
         val hasSha256: Boolean get() = sha256.isNotBlank() && !sha256.equals(TBD, ignoreCase = true)
         val hasBytes: Boolean get() = bytes > 0L
@@ -245,6 +277,8 @@ class ModelCatalog(private val app: Application) {
         const val VLM: String = "vlm"
         const val VLM_TOKENIZER: String = "vlm-tokenizer"
         const val DETECTOR: String = "detector"
+        const val OCR: String = "ocr"
+        const val OCR_CHARSET: String = "ocr-charset"
 
         /**
          * Parse the lockfile text. Rows without `name` and `dest` are skipped; other fields default.
@@ -270,6 +304,18 @@ class ModelCatalog(private val app: Application) {
                     inputHeight = obj.num("input_height").toInt(),
                     export = obj.str("export") ?: "",
                     sourceModel = obj.str("source_model") ?: "",
+                    classes = (obj["classes"] as? List<*>).orEmpty().filterIsInstance<String>(),
+                    classMap = (obj["classes"] as? Map<*, *>).orEmpty().mapNotNull { (k, v) ->
+                        val id = (k as? String)?.toIntOrNull() ?: return@mapNotNull null
+                        val label = (v as? String)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                        id to label
+                    }.toMap(),
+                    outputLayout = obj.str("output_layout") ?: "",
+                    chatBeforeImage = obj["chat_before_image"] as? String ?: "",
+                    chatTemplate = obj["chat_template"] as? String ?: "",
+                    imageMean = (obj["image_mean"] as? List<*>).orEmpty().filterIsInstance<Number>().map { it.toFloat() },
+                    imageStd = (obj["image_std"] as? List<*>).orEmpty().filterIsInstance<Number>().map { it.toFloat() },
+                    imageFormat = obj.str("image_format") ?: "",
                 )
             }
         }

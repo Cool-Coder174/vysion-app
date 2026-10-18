@@ -8,6 +8,7 @@ import com.vysion.xr.core.CommandBus
 import com.vysion.xr.core.CommandEvent
 import com.vysion.xr.core.CommandSource
 import com.vysion.xr.core.Detection
+import com.vysion.xr.core.NormalizedBox
 import com.vysion.xr.core.Earcon
 import com.vysion.xr.core.FrameSource
 import com.vysion.xr.core.FrameStats
@@ -103,6 +104,35 @@ class ModeControllerTest {
         assertEquals(1, f.frames.captures)
         assertTrue("thinking earcon before capture", f.speaker.earcons.contains(Earcon.THINKING))
         assertNotNull("command→action latency measured", f.controller.commandLatencyNanos.value)
+    }
+
+    @Test
+    fun `read uses the OCR lines when an OCR model is loaded and never asks the VLM`() = controllerTest { f ->
+        startAndSettle(f)
+        f.engine.cannedText = listOf("Meeting rooms", "Floor 2")
+        val describesBefore = f.engine.describeCalls
+        f.commands.inject(Command.Read)
+        advanceUntilIdle()
+
+        assertEquals("Meeting rooms\nFloor 2", f.controller.transcript.value)
+        assertEquals(listOf(TestPhrasebook.modeAnnounced(Mode.TEXT_READER), "Meeting rooms\nFloor 2"), f.speaker.said)
+        assertEquals(1, f.engine.readTextCalls)
+        assertEquals(describesBefore, f.engine.describeCalls)
+        assertEquals(ModeState.IDLE, f.controller.state.value)
+    }
+
+    @Test
+    fun `read with OCR that finds no text shows the no-text sentinel, and describe never runs OCR`() = controllerTest { f ->
+        startAndSettle(f)
+        f.engine.cannedText = emptyList()
+        f.commands.inject(Command.Read)
+        advanceUntilIdle()
+        assertEquals(TestPrompts.noTextSentinel, f.controller.transcript.value)
+
+        f.commands.inject(Command.Describe)
+        advanceUntilIdle()
+        assertEquals(1, f.engine.readTextCalls)
+        assertEquals(DESCRIBE_ANSWER, f.controller.transcript.value)
     }
 
     @Test
@@ -252,6 +282,21 @@ class ModeControllerTest {
         assertTrue("navigation started for the mode", f.navigation.isRunning.value)
         assertEquals("paused once around the VLM (ADR-0004)", 1, f.navigation.pauseCount)
         assertEquals("resumed once after", 1, f.navigation.resumeCount)
+        assertEquals(ModeState.IDLE, f.controller.state.value)
+    }
+
+    @Test
+    fun `a detector that sees a door in both stills places the anchor without asking the VLM`() = controllerTest { f ->
+        startAndSettle(f)
+        f.engine.cannedDetections = listOf(Detection("door", 0.8f, NormalizedBox(0.70f, 0.10f, 0.90f, 0.95f)))
+        val describesBefore = f.engine.describeCalls
+        f.commands.inject(Command.FindDoor)
+        advanceUntilIdle()
+
+        assertEquals(listOf(HorizontalBearing.RIGHT), f.anchors.placed)
+        assertEquals(listOf(f.anchors.lastId), f.navigation.guided)
+        assertEquals("no VLM generation for the door", describesBefore, f.engine.describeCalls)
+        assertEquals(1, f.navigation.resumeCount)
         assertEquals(ModeState.IDLE, f.controller.state.value)
     }
 
@@ -602,6 +647,17 @@ class DoorVoteTest {
     }
 
     @Test
+    fun `door detections pick the most confident door and report its third`() {
+        fun door(left: Float, right: Float, conf: Float = 0.8f) = Detection("Door", conf, NormalizedBox(left, 0.1f, right, 0.9f))
+        assertEquals(HorizontalBearing.LEFT, DoorDetections.bearing(listOf(door(0.05f, 0.25f))))
+        assertEquals(HorizontalBearing.CENTER, DoorDetections.bearing(listOf(door(0.40f, 0.60f))))
+        assertEquals(HorizontalBearing.RIGHT, DoorDetections.bearing(listOf(door(0.70f, 0.95f, 0.5f), door(0.05f, 0.2f, 0.4f))))
+        assertEquals(HorizontalBearing.NONE, DoorDetections.bearing(listOf(door(0.4f, 0.6f, 0.2f)))) // below threshold
+        val chair = Detection("chair", 0.9f, NormalizedBox(0.4f, 0.4f, 0.6f, 0.9f))
+        assertEquals(HorizontalBearing.NONE, DoorDetections.bearing(listOf(chair))) // COCO has no door class
+    }
+
+    @Test
     fun `agree needs two identical non-none answers`() {
         assertEquals(HorizontalBearing.RIGHT, DoorVote.agree(HorizontalBearing.RIGHT, HorizontalBearing.RIGHT))
         assertNull(DoorVote.agree(HorizontalBearing.LEFT, HorizontalBearing.RIGHT))
@@ -858,6 +914,7 @@ private object TestPhrasebook : ModePhrasebook {
 /** Test tokens, not prompts: the real text lives in inference/PromptLibrary.kt (R2). */
 private object TestPrompts : PromptSet {
     override val read = "<prompt:read>"
+    override val noTextSentinel = "<prompt:noTextSentinel>"
     override val describe = "<prompt:describe>"
     override val door = "<prompt:door>"
     override val arrival = "<prompt:arrival>"

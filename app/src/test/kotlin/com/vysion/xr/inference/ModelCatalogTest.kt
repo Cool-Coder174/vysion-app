@@ -70,8 +70,36 @@ class ModelCatalogTest {
         val repoLock = File("../ml/models.lock")
         if (!repoLock.isFile) return // running outside the repo layout
         val entries = ModelCatalog.parse(repoLock.readText())
-        assertEquals(setOf("vlm", "vlm-tokenizer", "detector"), entries.map { it.name }.toSet())
+        assertEquals(setOf("vlm", "vlm-tokenizer", "detector", "ocr", "ocr-charset"), entries.map { it.name }.toSet())
         assertTrue(entries.first { it.name == "detector" }.dest.endsWith(".pte"))
+        val vlm = entries.first { it.name == "vlm" }
+        assertTrue("{prompt}" in vlm.chatTemplate)
+        assertEquals(512, vlm.inputWidth)
+    }
+
+    @Test
+    fun `parse reads detector classes and the VLM chat format and normalization`() {
+        val rows = ModelCatalog.parse(
+            """{"models": [
+              {"name": "detector", "dest": "detector.pte", "classes": ["door", "stairs", "person"]},
+              {"name": "vlm", "dest": "vlm.pte", "chat_before_image": "<|im_start|>User:",
+               "chat_template": "{prompt}<end_of_utterance>\nAssistant:", "image_mean": [0.5, 0.5, 0.5], "image_std": [0.5, 0.5, 0.5]}
+            ]}""",
+        )
+        assertEquals(listOf("door", "stairs", "person"), rows[0].classes)
+        val oiv7 = ModelCatalog.parse("""{"models": [{"name": "detector", "dest": "d.pte", "output_layout": "columns",
+            "classes": {"164": "door", "489": "stairs", "x": "bad"}}]}""").single()
+        assertEquals(mapOf(164 to "door", 489 to "stairs"), oiv7.classMap)
+        assertEquals("columns", oiv7.outputLayout)
+        assertTrue(oiv7.classes.isEmpty())
+        assertTrue(rows[0].chatTemplate.isEmpty())
+        assertEquals("<|im_start|>User:", rows[1].chatBeforeImage)
+        assertEquals("{prompt}<end_of_utterance>\nAssistant:", rows[1].chatTemplate)
+        assertEquals(listOf(0.5f, 0.5f, 0.5f), rows[1].imageMean)
+        assertEquals(listOf(0.5f, 0.5f, 0.5f), rows[1].imageStd)
+        val lfm = ModelCatalog.parse("""{"models": [{"name": "vlm", "dest": "vlm.pte", "image_format": "float_0_255"}]}""").single()
+        assertEquals("float_0_255", lfm.imageFormat)
+        assertTrue(rows[1].classes.isEmpty())
     }
 
     @Test

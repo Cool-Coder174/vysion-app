@@ -5,6 +5,7 @@ import com.vysion.xr.core.AnchorStore
 import com.vysion.xr.core.Command
 import com.vysion.xr.core.CommandBus
 import com.vysion.xr.core.CommandEvent
+import com.vysion.xr.core.Detection
 import com.vysion.xr.core.Earcon
 import com.vysion.xr.core.FrameSource
 import com.vysion.xr.core.HeadPoseSource
@@ -331,7 +332,13 @@ class ModeController(
             speaker.earcon(Earcon.THINKING)
             still = frames.captureStill() // INV-9: this controller owns it from here
             _state.value = ModeState.INFERRING
-            val text = inferWithWatchdog(still, prompt)
+            // FR-T1: an OCR model reads in well under a second; the VLM reads only when none is loaded.
+            val lines = if (mode == Mode.TEXT_READER && prompt == prompts.read) engine.readText(still) else null
+            val text = when {
+                lines == null -> inferWithWatchdog(still, prompt)
+                lines.isEmpty() -> prompts.noTextSentinel ?: inferWithWatchdog(still, prompt)
+                else -> lines.joinToString("\n")
+            }
             _transcript.value = text // FR-T2
             _state.value = ModeState.SPEAKING
             say(text)
@@ -367,9 +374,17 @@ class ModeController(
             first = frames.captureStill()
             second = frames.captureStill()
             _state.value = ModeState.INFERRING
-            val a = DoorVote.parse(inferWithWatchdog(first, prompts.door))
-            val b = DoorVote.parse(inferWithWatchdog(second, prompts.door))
-            val bearing = DoorVote.agree(a, b)
+            // Fast path: a detector that knows "door" answers in well under a second; the VLM vote (two
+            // generations) runs only when it saw no door or is not loaded, and only if a VLM is loaded at all.
+            val fromDetector = doorFromDetector(first, second)
+            val bearing = when {
+                fromDetector.bearing != null -> fromDetector.bearing
+                fromDetector.ran && !engine.stats.value.vlmLoaded -> null
+                else -> DoorVote.agree(
+                    DoorVote.parse(inferWithWatchdog(first, prompts.door)),
+                    DoorVote.parse(inferWithWatchdog(second, prompts.door)),
+                )
+            }
             _state.value = ModeState.SPEAKING
             val anchor = bearing?.let { anchors.placeFromBearing(it) }
             if (anchor == null) {
@@ -390,6 +405,20 @@ class ModeController(
                 if (wasRunning) navigation.resume()
             }
         }
+    }
+
+    /** What the detector said about two stills: [ran] false when it is not loaded or failed. */
+    private class DetectorDoor(val ran: Boolean, val bearing: HorizontalBearing?)
+
+    /** FR-N3 fast path: both stills must show a door in the same third (RK-6, as for the VLM vote). */
+    private suspend fun doorFromDetector(first: Bitmap, second: Bitmap): DetectorDoor = try {
+        val a = DoorDetections.bearing(engine.detect(first))
+        val b = DoorDetections.bearing(engine.detect(second))
+        DetectorDoor(ran = true, bearing = DoorVote.agree(a, b))
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: InferenceException) {
+        DetectorDoor(ran = false, bearing = null) // no detector: the VLM vote decides
     }
 
     /** "Guide me": Navigation mode on; proximity + outlines run in the background (FR-N1, FR-N2). */
@@ -566,6 +595,30 @@ internal object DoorVote {
     /** RK-6: both answers must exist, agree and not be NONE. */
     fun agree(first: HorizontalBearing?, second: HorizontalBearing?): HorizontalBearing? =
         if (first != null && first == second && first != HorizontalBearing.NONE) first else null
+}
+
+/**
+ * FR-N3 fast path: the most confident "door" box in a detector's output, as the third of the frame its center falls
+ * in (the same granularity as the VLM's answer and `AnchorStore.placeFromBearing`). [HorizontalBearing.NONE] when
+ * there is no door at [MIN_CONFIDENCE] or above, which is always the case for a COCO detector (COCO has no door
+ * class): the lockfile's `classes` must name one. Pure; unit-tested.
+ */
+internal object DoorDetections {
+    const val LABEL: String = "door"
+    const val MIN_CONFIDENCE: Float = 0.35f
+
+    fun bearing(detections: List<Detection>): HorizontalBearing {
+        val door = detections
+            .filter { it.label.equals(LABEL, ignoreCase = true) && it.confidence >= MIN_CONFIDENCE }
+            .maxByOrNull { it.confidence }
+            ?: return HorizontalBearing.NONE
+        val centerX = (door.box.left + door.box.right) / 2f
+        return when {
+            centerX < 1f / 3f -> HorizontalBearing.LEFT
+            centerX > 2f / 3f -> HorizontalBearing.RIGHT
+            else -> HorizontalBearing.CENTER
+        }
+    }
 }
 
 /**

@@ -80,6 +80,44 @@ class YoloPostProcessorTest {
     }
 
     @Test
+    fun `decode with a class map reads only the named classes and labels from the map`() {
+        val lb = Letterbox.compute(640, 640, 640, 640)
+        val n = 2
+        val data = FloatArray(7 * n) // [1, 4 + 3 classes, 2 anchors]
+        fun set(c: Int, i: Int, v: Float) {
+            data[c * n + i] = v
+        }
+        // anchor 0: a door (class 1, 0.6) whose best class overall is "door handle" (class 2, 0.9)
+        set(0, 0, 320f); set(1, 0, 320f); set(2, 0, 200f); set(3, 0, 400f); set(4, 0, 0.05f); set(5, 0, 0.6f); set(6, 0, 0.9f)
+        // anchor 1: only class 2 (not in the map) → dropped
+        set(0, 1, 100f); set(1, 1, 100f); set(2, 1, 40f); set(3, 1, 40f); set(4, 1, 0.0f); set(5, 1, 0.1f); set(6, 1, 0.95f)
+        val out = YoloPostProcessor.decode(
+            data, longArrayOf(1, 7, 2), OutputLayout.CXCYWH_SCORES_COLUMNS, lb, onlyClasses = mapOf(1 to "door"),
+        )
+        assertEquals(1, out.size)
+        assertEquals("door", out[0].label)
+        assertEquals(0.6f, out[0].confidence, eps)
+    }
+
+    @Test
+    fun `ids that share a label are merged by NMS`() {
+        val lb = Letterbox.compute(640, 640, 640, 640)
+        val n = 2
+        val data = FloatArray(6 * n) // [1, 4 + 2 classes, 2 anchors]: the same body as "person" and as "man"
+        fun set(c: Int, i: Int, v: Float) {
+            data[c * n + i] = v
+        }
+        set(0, 0, 320f); set(1, 0, 320f); set(2, 0, 100f); set(3, 0, 300f); set(4, 0, 0.7f); set(5, 0, 0.1f)
+        set(0, 1, 322f); set(1, 1, 318f); set(2, 1, 100f); set(3, 1, 300f); set(4, 1, 0.1f); set(5, 1, 0.8f)
+        val out = YoloPostProcessor.decode(
+            data, longArrayOf(1, 6, 2), OutputLayout.CXCYWH_SCORES_COLUMNS, lb, onlyClasses = mapOf(0 to "person", 1 to "person"),
+        )
+        assertEquals(1, out.size)
+        assertEquals("person", out[0].label)
+        assertEquals(0.8f, out[0].confidence, eps)
+    }
+
+    @Test
     fun `decode the raw column layout picks the best class and applies NMS`() {
         val lb = Letterbox.compute(640, 640, 640, 640)
         // [1, 4 + 2 classes, 3 anchors]: anchors 0 and 1 overlap heavily as class 1; anchor 2 is class 0.

@@ -19,7 +19,7 @@ import org.junit.Test
 /**
  * The fake is what R1's `ModeController` tests and the emulator run against, so its behaviors are pinned here:
  * canned answers per prompt, two boxes, stats on every call, `failNextDescribe`, and a cancellable
- * `hangNextDescribe` for the 15 s watchdog (INV-5). Also the pure `seqLenBudget` of the real engine.
+ * `hangNextDescribe` for the 15 s watchdog (INV-5).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class FakeInferenceEngineTest {
@@ -146,20 +146,6 @@ class FakeInferenceEngineTest {
         assertEquals(3, chunks.size)
         assertEquals("EXIT. ", chunks[0])
         assertEquals("EXIT. Push bar to open. Alarm will sound.", chunks.joinToString(""))
-    }
-
-    @Test
-    fun `seqLen budget is prefilled plus new tokens, clamped to the context`() {
-        assertEquals(316, ExecuTorchInferenceEngine.seqLenBudget(256, 60, 1024))
-        assertEquals(1024, ExecuTorchInferenceEngine.seqLenBudget(1000, 60, 1024))
-        assertEquals(1024, ExecuTorchInferenceEngine.seqLenBudget(1024, 60, 1024)) // never below prefilled + 1, capped
-        assertEquals(61, ExecuTorchInferenceEngine.seqLenBudget(0, 61, 1024))
-        try {
-            ExecuTorchInferenceEngine.seqLenBudget(10, 0, 1024)
-            fail("expected IllegalArgumentException")
-        } catch (expected: IllegalArgumentException) {
-            // ok
-        }
     }
 }
 

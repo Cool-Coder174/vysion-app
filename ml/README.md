@@ -6,6 +6,19 @@ Pins: the Android AAR is `org.pytorch:executorch-android:1.3.1` (`gradle/libs.ve
 
 Tags on commands below: **VERIFIED** = the flag set was checked against the ExecuTorch repository at tag v1.3.1 or PyPI metadata (`docs/stack.md` §3-R2 and the PyPI checks dated 2026-10-17 in `ml/requirements.txt`); **UNVERIFIED** = named in `docs/stack.md` without a verifier, or an inference by R2. Nothing in this file has run on a Galaxy XR yet; numbers marked *estimated* are not measurements and never go on the overlay or in the README table (NFR Honesty).
 
+## What runs today (2026-10-17, device-verified on the Galaxy XR)
+
+| Row | File | Source | On the headset |
+|---|---|---|---|
+| `ocr` + `ocr-charset` | `ocr.pte`, `ocr-charset.json` | PP-OCRv6 small, prebuilt by Software Mansion (Apache-2.0), URL in `models.lock` | loads 0.2 s; read a 960×720 test sign exactly in 1.1 s |
+| `detector` | `detector.pte` | YOLOv8n Open Images V7 (Door 164, Stairs 489, people, furniture): `ml/export/export_detector_oiv7.sh` | loads; `[1, 605, 2100]` decoded as columns + Kotlin NMS |
+| `vlm` + `vlm-tokenizer` | `vlm.pte`, `vlm-tokenizer.json` | LFM2.5-VL-450M, prebuilt by Software Mansion v0.11.0 (LFM Open License v1.0) | loads 1 s; needs the padded-embedding runner (`docs/stack.md` Corrections) |
+
+Exports run in Docker on any laptop (PyTorch has no Intel-Mac wheels): `docker build -t vysion-ml:1.3.1 ml/export`, then
+`ml/export/export_detector_oiv7.sh`. `python /tools/inspect_pte.py <file>` inside that image prints every method's shapes.
+Check a model on the headset with nobody wearing it (debug builds): push a test image to `files/smoke/` and
+`adb shell am broadcast -a com.vysion.xr.SMOKE -n com.vysion.xr/.diagnostics.ModelSmokeReceiver --es model ocr|vlm|detector --es image sign.png`.
+
 ## 0. The VLM decision you must make first (Sat 11:00, plan.md Q6, RK-13)
 
 The SRS says "Gemma 4 edge multimodal … `examples/models/gemma4` … Android multimodal runner". Research on 2026-10-17 (`docs/stack.md` D5) showed the export exists and works, **but the Android `LlmModule(MODEL_TYPE_MULTIMODAL, …)` cannot load it** (the gemma4 `.pte` has no `token_embedding` method and a 3-input `text_decoder`; `MultimodalPrefiller::load()` fails with `Error::InvalidArgument` = 18; no gemma4 code exists in the Android JNI at 1.3.1, 1.5.1 or main). The SRS fallback "SmolVLM-500M via the Qualcomm VLM example" has no runnable example at v1.3.1 either.

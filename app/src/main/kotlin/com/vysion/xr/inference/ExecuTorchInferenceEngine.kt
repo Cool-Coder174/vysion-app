@@ -24,11 +24,18 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.pytorch.executorch.EValue
 import org.pytorch.executorch.Module
+import org.pytorch.executorch.Tensor
+import org.pytorch.executorch.extension.llm.LlmCallback
 import org.pytorch.executorch.extension.llm.LlmModule
+import org.pytorch.executorch.extension.llm.LlmModuleConfig
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * The one [InferenceEngine] (ADR-0004): both models, one [Mutex], detector unloaded while the VLM generates.
@@ -50,14 +57,14 @@ import org.pytorch.executorch.extension.llm.LlmModule
  *   through `Module.load(path, LOAD_MODE_MMAP, numThreads)`, `forward(EValue.from(Tensor.fromBlob(chw,
  *   longArrayOf(1, 3, h, w))))[0].toTensor()`, `getMethodMetadata("forward").getBackends()`, `close()`.
  *   `seqLen` is an absolute position budget (prefilled tokens + new tokens); `maxNewTokens` is not forwarded in
- *   1.3.1, so the contract's `maxNewTokens` becomes [seqLenBudget].
+ *   1.3.1, so [generateLocked] counts streamed chunks with [TokenCap] and calls the lock-free `stop()`.
  * - Assumptions: A-3 (the Maven AAR has `LlmModule` + XNNPACK), A-13 / Q9 (the chosen VLM `.pte` loads with
  *   `MODEL_TYPE_MULTIMODAL` and answers on the headset; the SRS Gemma 4 export does NOT, `docs/stack.md` D5),
  *   A-15 / Q20 (multi-GB `.pte` in the external files dir loads with mmap), Q7 (detector loads on the 1.3.1 AAR).
  *
- * Skeleton status: the mutex, the unload/reload order, the timing, the stats and the catalog resolution are real;
- * every call into the ExecuTorch runtime is a stub (a logged `TODO` line for `Unit` stubs, a throwing one for
- * value stubs) that is never reached while no model is loaded, so [describe] and [detect] throw
+ * Status: every runtime call is real (ExecuTorch 1.3.1 AAR, signatures checked with `javap`). Model-specific facts
+ * come from the lockfile row, not from code: the detector's `classes`, the VLM's `chat_before_image` /
+ * `chat_template` and `image_mean` / `image_std`. With no model files, [describe] and [detect] throw
  * [InferenceException] ("not loaded") and the controller speaks `Cues.inferenceFailed` instead of crashing.
  *
  * Invariants: INV-1 (one model executes at a time: every runtime call is under [mutex]); INV-2 (detector not
@@ -93,6 +100,13 @@ class ExecuTorchInferenceEngine(
     private var tokenizerFile: File? = null
     private var detectorFile: File? = null
     private var detectorEntry: ModelCatalog.Entry? = null
+    private var vlmEntry: ModelCatalog.Entry? = null
+    private var ocr: Module? = null
+    private var ocrFile: File? = null
+    private var ocrCharsetFile: File? = null
+
+    /** OCR characters in recognizer order, without the CTC blank (`ocr-charset.json`, a JSON array of strings). */
+    private var ocrCharset: List<String>? = null
 
     /**
      * FR-G5: metadata of the resolved files ([resolveLocked]), published on [vlmInfo] / [detectorInfo] only once
@@ -107,9 +121,6 @@ class ExecuTorchInferenceEngine(
     /** FR-D2 / FR-T4: the frame whose image tokens are in the KV cache; identity only, never dereferenced. */
     private var prefilled: WeakReference<Bitmap>? = null
 
-    /** Tokens already in the context (image soft tokens + prior turns); base of the `seqLen` budget. */
-    private var prefilledTokens: Int = 0
-
     private val vlmLatency = LatencyStats(LatencyStats.DEFAULT_CAPACITY)
     private val detectorFps = FpsWindow(FpsWindow.DEFAULT_WINDOW_NANOS)
 
@@ -123,12 +134,13 @@ class ExecuTorchInferenceEngine(
             if (vlm != null) return@withLock // already loaded; the detector reloads lazily in detect()
             val t0 = System.nanoTime()
             resolveLocked()
+            loadOcrLocked() // small and fast: Read works before the multi-GB VLM finishes loading
             loadVlmLocked()
             loadDetectorLocked()
             Log.i(
                 TAG_LATENCY,
                 "warmUp ms=${(System.nanoTime() - t0) / NANOS_PER_MS} " +
-                    "vlmLoaded=${vlm != null} detectorLoaded=${detector != null}",
+                    "vlmLoaded=${vlm != null} detectorLoaded=${detector != null} ocrLoaded=${ocr != null}",
             )
         }
     }
@@ -149,7 +161,7 @@ class ExecuTorchInferenceEngine(
      * Streaming override: the runner's `LlmCallback.onResult` delivers tokens as they decode
      * (`docs/stack.md` §3-R2, verified), so the Speaker can start before generation ends (FR-T1 ≤ 6 s to the
      * first spoken word). Same mutex, same unload/reload, same timing as [describe]; the final string is not
-     * re-emitted at the end. The channel is unbounded (in practice bounded by `seqLen` ≤ [MAX_CONTEXT_LEN]), so a
+     * re-emitted at the end. The channel is unbounded (in practice bounded by [TokenCap] at `maxNewTokens`), so a
      * slow Speaker never makes `trySend` drop a token and speak a partial sentence as if complete (SRS §3 rule 5).
      */
     override fun describeStreaming(bitmap: Bitmap, prompt: String, maxNewTokens: Int): Flow<String> = channelFlow {
@@ -168,7 +180,7 @@ class ExecuTorchInferenceEngine(
         mutex.withLock {
             ensureDetectorLoadedLocked()
             val module = detector ?: throw InferenceException(
-                "detector not loaded (${detectorFile?.name ?: ModelCatalog.DETECTOR}); see the FR-N2 TODO in logcat",
+                "detector not loaded (${detectorFile?.name ?: ModelCatalog.DETECTOR}); sideload detector.pte (ml/README.md)",
             )
             if (bitmap.isRecycled) throw InferenceException("detect(): bitmap already recycled (INV-9)")
             val t0 = System.nanoTime()
@@ -182,11 +194,18 @@ class ExecuTorchInferenceEngine(
                 val lb = YoloPostProcessor.Letterbox.compute(w, h, inputW, inputH)
                 val chw = YoloPostProcessor.letterboxToChw(argb, w, h, lb)
                 val (data, shape) = forwardDetector(module, chw, inputW, inputH)
+                val entry = detectorEntry
                 val detections = YoloPostProcessor.decode(
                     data = data,
                     shape = shape,
-                    layout = YoloPostProcessor.OutputLayout.XYXY_CONF_CLS_ROWS,
+                    layout = if (entry?.outputLayout.equals("columns", ignoreCase = true)) {
+                        YoloPostProcessor.OutputLayout.CXCYWH_SCORES_COLUMNS
+                    } else {
+                        YoloPostProcessor.OutputLayout.XYXY_CONF_CLS_ROWS
+                    },
                     lb = lb,
+                    classNames = entry?.classes?.takeIf { it.isNotEmpty() } ?: YoloPostProcessor.COCO_CLASSES,
+                    onlyClasses = entry?.classMap?.takeIf { it.isNotEmpty() },
                 )
                 val now = System.nanoTime()
                 val ms = (now - t0) / NANOS_PER_MS
@@ -211,6 +230,67 @@ class ExecuTorchInferenceEngine(
     }
 
     /**
+     * FR-T1 fast path: PP-OCRv6 `detect` on the whole frame, then `recognize` on each text box (a very wide line in
+     * pieces), greedy CTC, lines in reading order. `null` when no OCR model is loaded (the controller reads with the
+     * VLM). At most [OCR_MAX_BOXES] boxes, the most confident first, so a busy scene cannot stall the reader. Pixels
+     * stay in local arrays (INV-3); the [bitmap] is only read (INV-9).
+     */
+    override suspend fun readText(bitmap: Bitmap): List<String>? = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            val module = ocr ?: return@withLock null
+            val charset = ocrCharset ?: return@withLock null
+            if (bitmap.isRecycled) throw InferenceException("readText(): bitmap already recycled (INV-9)")
+            val t0 = System.nanoTime()
+            try {
+                val w = bitmap.width
+                val h = bitmap.height
+                val argb = IntArray(w * h)
+                bitmap.getPixels(argb, 0, w, 0, 0, w, h)
+                val recMaxWidth = Ocr.REC_MAX_WIDTH
+                val det = OcrPipeline.detInput(argb, w, h, Ocr.DET_MAX_SIDE, Ocr.DET_MULTIPLE)
+                val probs = module.execute(
+                    "detect",
+                    EValue.from(Tensor.fromBlob(det.chw, longArrayOf(1, 3, det.height.toLong(), det.width.toLong()))),
+                ).first().toTensor().dataAsFloatArray
+                val boxes = OcrPipeline.boxes(probs, det.width, det.height, det.scaleX, det.scaleY, w, h)
+                    .filter { it.width >= MIN_TEXT_SIDE && it.height >= MIN_TEXT_SIDE }
+                    .take(OCR_MAX_BOXES)
+                val read = boxes.mapNotNull { box ->
+                    val text = StringBuilder()
+                    var weighted = 0f
+                    for (piece in OcrPipeline.split(box, Ocr.REC_HEIGHT, recMaxWidth)) {
+                        val rec = OcrPipeline.recInput(argb, w, h, piece, Ocr.REC_HEIGHT, recMaxWidth, Ocr.REC_STRIDE)
+                        val out = module.execute(
+                            "recognize",
+                            EValue.from(Tensor.fromBlob(rec.chw, longArrayOf(1, 3, rec.height.toLong(), rec.width.toLong()))),
+                        ).first().toTensor()
+                        val shape = out.shape()
+                        val (chunk, conf) = OcrPipeline.ctcGreedy(
+                            out.dataAsFloatArray, shape[1].toInt(), shape[2].toInt(), charset,
+                        )
+                        text.append(chunk)
+                        weighted += conf * chunk.length
+                    }
+                    val line = text.toString().trim()
+                    val confidence = if (text.isEmpty()) 0f else weighted / text.length
+                    if (line.isNotEmpty() && confidence >= Ocr.MIN_LINE_CONFIDENCE) box to line else null
+                }
+                val lines = OcrPipeline.readingOrder(read) { it.first }.map { row -> row.joinToString(" ") { it.second } }
+                Log.i(
+                    TAG_LATENCY,
+                    "ocr ms=${(System.nanoTime() - t0) / NANOS_PER_MS} input=${det.width}x${det.height} " +
+                        "boxes=${boxes.size} lines=${lines.size}",
+                )
+                lines
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                throw InferenceException("OCR failed: ${t.message}", t)
+            }
+        }
+    }
+
+    /**
      * Unload everything. Called once from `AppGraph.release()` (`onDestroy` when finishing); `AppGraph.stop()`
      * (`onStop`) keeps the models. Never throws.
      */
@@ -223,8 +303,9 @@ class ExecuTorchInferenceEngine(
                 runCatching { runner.close() }.onFailure { Log.w(TAG, "vlm close failed: ${it.message}") }
             }
             unloadDetectorLocked()
+            ocr?.let { module -> runCatching { module.close() } }
+            ocr = null
             prefilled = null
-            prefilledTokens = 0
             detectorFps.reset()
             _stats.update { it.copy(vlmLoaded = false, detectorLoaded = false, detectorFps = 0f) }
             _vlmInfo.value = null
@@ -275,7 +356,7 @@ class ExecuTorchInferenceEngine(
         }
     }
 
-    /** Real preconditions and cache logic; the runtime calls are in [prefillLocked] / [generateLocked]. */
+    /** Preconditions and the FR-D2 prefill cache; the runtime calls are in [prefillLocked] / [generateLocked]. */
     private suspend fun runVlmLocked(
         bitmap: Bitmap,
         prompt: String,
@@ -283,108 +364,116 @@ class ExecuTorchInferenceEngine(
         onToken: (String) -> Unit,
     ): String {
         val runner = vlm ?: throw InferenceException(
-            "VLM not loaded (${vlmFile?.name ?: ModelCatalog.VLM}); warmUp() left it unloaded, " +
-                "see the FR-T1 TODO in logcat",
+            "VLM not loaded (${vlmFile?.name ?: ModelCatalog.VLM}); sideload vlm.pte + vlm-tokenizer.json (ml/README.md)",
         )
         if (bitmap.isRecycled) throw InferenceException("describe(): bitmap already recycled (INV-9)")
         require(maxNewTokens > 0) { "maxNewTokens must be positive: $maxNewTokens" }
-        val sameFrame = prefilled?.get() === bitmap
-        if (!sameFrame) {
-            // New frame: fresh context, then image tokens into the KV cache (RK-2 "prefill once").
-            prefilledTokens = prefillLocked(runner, bitmap)
+        if (prefilled?.get() !== bitmap) {
+            // New frame: fresh context, then its image tokens into the KV cache (RK-2 "prefill once").
+            prefillLocked(runner, bitmap)
             prefilled = WeakReference(bitmap)
         }
-        val seqLen = seqLenBudget(prefilledTokens, maxNewTokens, MAX_CONTEXT_LEN)
-        val text = generateLocked(runner, prompt, seqLen, onToken)
-        // The answer's tokens now sit in the KV cache too (FR-D2 follow-ups continue the same context).
-        prefilledTokens = seqLen
-        return text
+        // The answer's tokens stay in the KV cache, so an FR-D2 follow-up on the same frame continues this context.
+        return generateLocked(runner, prompt, maxNewTokens, onToken)
     }
 
     /**
-     * Stub (device): reset the context and prefill one frame; returns the number of tokens now in the context.
-     * Real body (`docs/stack.md` §3-R2, VERIFIED):
-     * ```
-     * runner.resetContext()
-     * val w = bitmap.width; val h = bitmap.height
-     * val argb = IntArray(w * h); bitmap.getPixels(argb, 0, w, 0, 0, w, h)
-     * val chw = IntArray(3 * w * h)          // uint8 0..255, CHW, RGB (prefillImages(int[]) truncates to uint8)
-     * for (i in 0 until w * h) {
-     *     val p = argb[i]
-     *     chw[i] = (p shr 16) and 0xFF; chw[w * h + i] = (p shr 8) and 0xFF; chw[2 * w * h + i] = p and 0xFF
-     * }
-     * runner.prefillImages(chw, w, h, 3)
-     * return IMAGE_SOFT_TOKENS   // or prompt_tokens from the first onStats JSON
-     *                            // (TTFT = first_token_ms - inference_start_ms)
-     * ```
-     * The frame must already be the VLM's input size (`FrameSource.captureStill()` center-crops to it). Expected
-     * size for the default option C model: 896×896 → 256 soft tokens (`// stack.md: UNVERIFIED`).
-     * Which overload (`// stack.md: UNVERIFIED`, docs/stack.md "Corrections" §3-R2 row): uint8
-     * `prefillImages(IntArray)` above if the exported `vision_encoder` normalizes internally; otherwise
-     * `prefillImages(FloatArray, w, h, 3)` with
-     * `((v / 255f) - 0.5f) / 0.5f` per channel. Decide on the first device run: `onStats` `prompt_tokens` equals
-     * [IMAGE_SOFT_TOKENS] (+ prompt) and a printed sign is read correctly; record the result in stack.md.
+     * Reset the context and prefill one frame: the chat preamble from the lockfile, if any, then the image as CHW RGB
+     * in the encoder's format from the lockfile: raw 0..255 float (`image_format: float_0_255`), normalized float
+     * (`image_mean` / `image_std`), else uint8 (`prefillImages(int[])` truncates each int to uint8). The frame is already the VLM's input size: `captureStill()` center-crops
+     * to `vlmInfo.inputWidth`. Pixels live in local arrays only (INV-3).
      */
-    private fun prefillLocked(runner: LlmModule, bitmap: Bitmap): Int {
-        TODO("FR-T1: ${runner.javaClass.simpleName}.resetContext() + prefillImages(IntArray uint8 CHW, " +
-            "${bitmap.width}, ${bitmap.height}, 3) per docs/stack.md §3-R2; return the prefilled token count")
+    private fun prefillLocked(runner: LlmModule, bitmap: Bitmap) {
+        runner.resetContext()
+        val entry = vlmEntry
+        entry?.chatBeforeImage?.takeIf { it.isNotEmpty() }?.let { runner.prefillPrompt(it) }
+        // The encoder's input size is fixed by the export; a frame of another size is center-cropped and scaled here
+        // (the camera path already delivers it at size: captureStill() crops to vlmInfo.inputWidth).
+        val fitted = VlmFrames.fit(bitmap, entry?.inputWidth ?: 0, entry?.inputHeight ?: 0)
+        val w = fitted.width
+        val h = fitted.height
+        val argb = IntArray(w * h)
+        fitted.getPixels(argb, 0, w, 0, 0, w, h)
+        if (fitted !== bitmap) fitted.recycle() // ours, not the caller's (INV-9)
+        val mean = entry?.imageMean.orEmpty()
+        val std = entry?.imageStd.orEmpty()
+        when {
+            entry?.imageFormat.equals(IMAGE_FORMAT_FLOAT_0_255, ignoreCase = true) ->
+                runner.prefillImages(VlmPixels.toFloatChw(argb), w, h, 3)
+            mean.size == 3 && std.size == 3 -> runner.prefillImages(VlmPixels.toNormalizedChw(argb, mean, std), w, h, 3)
+            else -> runner.prefillImages(VlmPixels.toUint8Chw(argb), w, h, 3)
+        }
     }
 
     /**
-     * Stub (device): generate [seqLen] − prefilled new tokens for [prompt], streaming every `onResult` chunk to
-     * [onToken]; returns the concatenated answer. Real body (`docs/stack.md` §3-R2, VERIFIED):
-     * ```
-     * suspendCancellableCoroutine { cont ->
-     *     cont.invokeOnCancellation { runner.stop() }          // FR-G4: lock-free, any thread → generate() returns
-     *     val sb = StringBuilder()
-     *     var failure: InferenceException? = null
-     *     try {
-     *         runner.generate(prompt, seqLen, object : LlmCallback {   // BLOCKS; never on Main; no LlmModule call here
-     *             override fun onResult(result: String) { sb.append(result); onToken(result) }
-     *             override fun onStats(statsJson: String) { Log.i(TAG_LATENCY, "vlm stats=$statsJson") }
-     *             override fun onError(errorCode: Int, message: String) {
-     *                 failure = InferenceException("runner error $errorCode: $message")
-     *             }
-     *         }, /* echo = */ false)
-     *         failure?.let { cont.resumeWithException(it) } ?: cont.resume(sb.toString().trim())
-     *     } catch (t: Throwable) { cont.resumeWithException(InferenceException("generate failed: ${t.message}", t)) }
-     * }
-     * ```
-     * If the chosen VLM needs a chat template, wrap [prompt] here, not in `PromptLibrary` (ADR-0001 keeps the
-     * prompt text model-independent). `// stack.md: UNVERIFIED` whether `LlmModule`'s multimodal runner applies
-     * Gemma 3's template itself; the A/B to run on the first device answer is in ml/README.md §3 "Prompt format".
+     * Generate the answer to [prompt] (wrapped in the lockfile's `chat_template`, if any), streaming every
+     * `onResult` chunk to [onToken]. `generate()` BLOCKS until the runner ends; it is given the whole remaining
+     * context ([SEQ_LEN_REQUEST], clamped by the runner) and stopped after [maxNewTokens] chunks with the lock-free
+     * `stop()`, the one `LlmModule` call allowed inside a callback: 1.3.1 does not forward `maxNewTokens`, and
+     * counting here needs no guess of how many tokens the image took. Cancellation (Stop, the watchdog) also calls
+     * `stop()` (FR-G4), so `generate()` returns promptly.
      */
     private suspend fun generateLocked(
         runner: LlmModule,
         prompt: String,
-        seqLen: Int,
+        maxNewTokens: Int,
         onToken: (String) -> Unit,
     ): String {
-        TODO("FR-T1: ${runner.javaClass.simpleName}.generate(prompt(${prompt.length} chars), seqLen=$seqLen, " +
-            "LlmCallback → onToken, echo=false) per docs/stack.md §3-R2 " +
-            "(LlmModule.generate(String, int, LlmCallback, boolean))")
+        val text = vlmEntry?.chatTemplate?.takeIf { "{prompt}" in it }?.replace("{prompt}", prompt) ?: prompt
+        return suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation { runner.stop() }
+            val answer = StringBuilder()
+            val cap = TokenCap(maxNewTokens)
+            var failure: Throwable? = null
+            val callback = object : LlmCallback {
+                override fun onResult(result: String) {
+                    if (cap.reached || failure != null) return
+                    try {
+                        answer.append(result)
+                        onToken(result)
+                    } catch (t: Throwable) { // never throw into the native runner
+                        failure = t
+                        runner.stop()
+                        return
+                    }
+                    if (cap.add()) runner.stop()
+                }
+
+                override fun onStats(stats: String) {
+                    Log.i(TAG_LATENCY, "vlm stats=$stats")
+                }
+
+                override fun onError(errorCode: Int, message: String) {
+                    failure = InferenceException("runner error $errorCode: $message")
+                }
+            }
+            try {
+                runner.generate(text, SEQ_LEN_REQUEST, callback, false)
+                val error = failure
+                when {
+                    error is InferenceException -> cont.resumeWithException(error)
+                    error != null -> cont.resumeWithException(InferenceException("token stream failed: ${error.message}", error))
+                    else -> cont.resume(answer.toString().trim())
+                }
+            } catch (t: Throwable) {
+                cont.resumeWithException(InferenceException("generate failed: ${t.message}", t))
+            }
+        }
     }
 
     // ── Detector path ────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Stub (device): one forward pass. Returns the output data and its shape for [YoloPostProcessor.decode].
-     * Real body (`docs/stack.md` §3-R2, VERIFIED):
-     * ```
-     * val input = Tensor.fromBlob(chw, longArrayOf(1, 3, inputH.toLong(), inputW.toLong()))
-     * val out = module.forward(EValue.from(input))[0].toTensor()     // [1, N, 6] post-NMS, letterboxed pixels
-     * return out.getDataAsFloatArray() to out.shape()
-     * ```
-     */
+    /** One forward pass: float NCHW in, `[1, N, 6]` post-NMS rows in letterboxed-input pixels out. */
     private fun forwardDetector(
         module: Module,
         chw: FloatArray,
         inputW: Int,
         inputH: Int,
     ): Pair<FloatArray, LongArray> {
-        TODO("FR-N2: ${module.javaClass.simpleName}.forward(EValue.from(Tensor.fromBlob(chw[${chw.size}], " +
-            "longArrayOf(1, 3, $inputH, $inputW))))[0].toTensor() → (getDataAsFloatArray(), shape()) " +
-            "per docs/stack.md §3-R2")
+        val input = Tensor.fromBlob(chw, longArrayOf(1, 3, inputH.toLong(), inputW.toLong()))
+        val out = module.forward(EValue.from(input)).firstOrNull()?.toTensor()
+            ?: throw InferenceException("detector returned no output")
+        return out.dataAsFloatArray to out.shape()
     }
 
     // ── Lifecycle (under the mutex) ──────────────────────────────────────────────────────────────────
@@ -400,9 +489,12 @@ class ExecuTorchInferenceEngine(
         tokenizerFile = resolveOrNull(ModelCatalog.VLM_TOKENIZER)
         detectorFile = resolveOrNull(ModelCatalog.DETECTOR)
         detectorEntry = catalog.entry(ModelCatalog.DETECTOR)
+        vlmEntry = catalog.entry(ModelCatalog.VLM)
+        ocrFile = resolveOrNull(ModelCatalog.OCR)
+        ocrCharsetFile = resolveOrNull(ModelCatalog.OCR_CHARSET)
         // FR-G5: quantization/name from the lockfile (export metadata, ADR-0002), size from the file. LlmModule
         // exposes no metadata API; for the detector the real load replaces `backend` with
-        // module.getMethodMetadata("forward").getBackends().joinToString() ("XnnpackBackend").
+        // module.getMethodMetadata("forward").backends.joinToString() ("XnnpackBackend").
         vlmInfoPending = vlmFile?.let { infoOrNull(ModelCatalog.VLM, it) }
         detectorInfoPending = detectorFile?.let { infoOrNull(ModelCatalog.DETECTOR, it) }
     }
@@ -419,19 +511,11 @@ class ExecuTorchInferenceEngine(
     }
 
     /**
-     * Stub (device). Idempotent: returns at once while a VLM is loaded, so a repeated [warmUp] never builds a
-     * second `LlmModule` beside a live one (keep the guard when pasting the body). Real body (`docs/stack.md`
-     * §3-R2, VERIFIED at v1.3.1), after the guard:
-     * ```
-     * vlm = LlmModule(LlmModuleConfig.create()
-     *     .modulePath(pte.absolutePath).tokenizerPath(tok.absolutePath)
-     *     .modelType(LlmModuleConfig.MODEL_TYPE_MULTIMODAL).temperature(0f)   // greedy for read-verbatim
-     *     .loadMode(LlmModuleConfig.LOAD_MODE_MMAP).build()).also { it.load() } // eager; else first generate() pays it
-     * _stats.update { it.copy(vlmLoaded = true) }
-     * _vlmInfo.value = vlmInfoPending                                          // FR-G5: only once it loaded
-     * ```
-     * A-13/Q9: only an `LlmModule`-compatible export (`token_embedding` + 2-input `text_decoder`, option C) loads;
-     * the SRS Gemma 4 export fails in `MultimodalPrefiller::load()` with `Error::InvalidArgument` (18) (D5).
+     * Load the VLM eagerly (else the first `generate()` pays it). Idempotent: returns at once while a VLM is loaded,
+     * so a repeated [warmUp] never builds a second `LlmModule` beside a live one (RK-3). Greedy (`temperature 0`) for
+     * read-verbatim; mmap so a multi-GB `.pte` is paged, not copied (A-15). A load failure is logged and leaves the
+     * VLM unloaded: the controller then speaks `inferenceFailed` (A-13 / Q9: only an `LlmModule`-compatible export
+     * loads, `docs/stack.md` D5).
      */
     private fun loadVlmLocked() {
         if (vlm != null) return // idempotent (Contracts.kt warmUp)
@@ -442,25 +526,65 @@ class ExecuTorchInferenceEngine(
             Log.w(TAG, "vlm not loaded: $missing (sideload or fetch_models.sh)")
             return
         }
-        Log.w(
-            TAG,
-            "TODO(FR-T1) ExecuTorchInferenceEngine.loadVlmLocked: vlm = LlmModule(LlmModuleConfig.create()" +
-                ".modulePath(${pte.name}).tokenizerPath(${tok.name}).modelType(MODEL_TYPE_MULTIMODAL).temperature(0f)" +
-                ".loadMode(LOAD_MODE_MMAP).build()).also { it.load() }; then stats.vlmLoaded = true (A-13, Q9)",
-        )
+        val t0 = System.nanoTime()
+        val module = try {
+            LlmModule(
+                LlmModuleConfig.create()
+                    .modulePath(pte.absolutePath)
+                    .tokenizerPath(tok.absolutePath)
+                    .modelType(LlmModuleConfig.MODEL_TYPE_MULTIMODAL)
+                    .temperature(0f)
+                    .loadMode(LlmModuleConfig.LOAD_MODE_MMAP)
+                    .build(),
+            ).also { it.load() }
+        } catch (t: Throwable) {
+            Log.w(TAG, "vlm load failed (A-13): ${t.message}")
+            return
+        }
+        vlm = module
+        _stats.update { it.copy(vlmLoaded = true) }
+        _vlmInfo.value = vlmInfoPending // FR-G5: only once it loaded
+        Log.i(TAG_LATENCY, "vlm load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} file=${pte.name}")
     }
 
     /**
-     * Stub (device). Idempotent: returns at once while the detector is loaded (keep the guard when pasting the
-     * body). Real body (`docs/stack.md` §3-R2, VERIFIED at v1.3.1), after the guard:
-     * ```
-     * val t0 = System.nanoTime()
-     * detector = Module.load(file.absolutePath, Module.LOAD_MODE_MMAP, DETECTOR_THREADS)
-     * val backend = detector.getMethodMetadata("forward").getBackends().joinToString()   // "XnnpackBackend"
-     * _detectorInfo.value = detectorInfoPending?.copy(backend = backend)                  // FR-G5: only once it loaded
-     * _stats.update { it.copy(detectorLoaded = true) }
-     * Log.i(TAG_LATENCY, "detector load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} backend=$backend") // INV-2
-     * ```
+     * Load the OCR program (one `.pte`, methods `detect` and `recognize`) and its charset. Idempotent. A missing or
+     * broken file is logged and Read falls back to the VLM.
+     */
+    private fun loadOcrLocked() {
+        if (ocr != null) return
+        val file = ocrFile ?: return
+        val charsetFile = ocrCharsetFile ?: run {
+            Log.w(TAG, "ocr not loaded: ocr-charset.json missing")
+            return
+        }
+        val t0 = System.nanoTime()
+        val charset = runCatching {
+            (LockJson.parse(charsetFile.readText()) as List<*>).map { it as String }
+        }.getOrElse {
+            Log.w(TAG, "ocr not loaded: bad charset (${it.message})")
+            return
+        }
+        val module = try {
+            Module.load(file.absolutePath, Module.LOAD_MODE_MMAP, DETECTOR_THREADS)
+        } catch (t: Throwable) {
+            Log.w(TAG, "ocr load failed: ${t.message}")
+            return
+        }
+        val methods = runCatching { module.getMethods().toList() }.getOrDefault(emptyList())
+        if (!methods.containsAll(listOf("detect", "recognize"))) {
+            Log.w(TAG, "ocr not loaded: ${file.name} has methods $methods, need detect + recognize")
+            runCatching { module.close() }
+            return
+        }
+        ocr = module
+        ocrCharset = charset
+        Log.i(TAG_LATENCY, "ocr load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} charset=${charset.size}")
+    }
+
+    /**
+     * Load the detector with mmap on [DETECTOR_THREADS] threads and publish its backend (FR-G5). Idempotent. A load
+     * failure is logged and Navigation runs on depth and planes only (`docs/nfr.md` fault model).
      */
     private fun loadDetectorLocked() {
         if (detector != null) return // idempotent
@@ -469,12 +593,18 @@ class ExecuTorchInferenceEngine(
             Log.w(TAG, "detector not loaded: detector.pte missing (sideload or fetch_models.sh)")
             return
         }
-        Log.w(
-            TAG,
-            "TODO(FR-N2) ExecuTorchInferenceEngine.loadDetectorLocked: detector = Module.load(${file.name}, " +
-                "LOAD_MODE_MMAP, $DETECTOR_THREADS); backend = getMethodMetadata(\"forward\").getBackends(); " +
-                "stats.detectorLoaded = true (Q7)",
-        )
+        val t0 = System.nanoTime()
+        val module = try {
+            Module.load(file.absolutePath, Module.LOAD_MODE_MMAP, DETECTOR_THREADS)
+        } catch (t: Throwable) {
+            Log.w(TAG, "detector load failed (Q7): ${t.message}")
+            return
+        }
+        detector = module
+        val backend = runCatching { module.getMethodMetadata("forward").backends.joinToString() }.getOrDefault("")
+        _detectorInfo.value = detectorInfoPending?.let { if (backend.isNotEmpty()) it.copy(backend = backend) else it }
+        _stats.update { it.copy(detectorLoaded = true) }
+        Log.i(TAG_LATENCY, "detector load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} backend=$backend") // INV-2
     }
 
     /**
@@ -505,28 +635,23 @@ class ExecuTorchInferenceEngine(
         /** Fallback detector input when the lockfile row has no dims; the verified yolo26 export is 640×640. */
         const val DEFAULT_DETECTOR_INPUT: Int = 640
 
+        /** Text boxes read per frame at most (each costs one `recognize`); the most confident are kept. */
+        const val OCR_MAX_BOXES: Int = 40
+
+        /** Text boxes smaller than this in source pixels are noise, not glyphs. */
+        const val MIN_TEXT_SIDE: Int = 3
+
         /** `Module.load(path, loadMode, numThreads)`; 4 big cores on the XR2+ Gen 2 (measure, then tune). */
         const val DETECTOR_THREADS: Int = 4
 
-        /** Export-time `max_seq_len`; the runner clamps `seqLen` to it (`docs/stack.md` §3-R2). Set from the export. */
-        const val MAX_CONTEXT_LEN: Int = 1024
-
-        /** Image soft tokens for the default option C model (SigLIP 896×896 → 256). stack.md: UNVERIFIED */
-        const val IMAGE_SOFT_TOKENS: Int = 256
-
         /**
-         * `docs/stack.md` §3-R2: `seqLen` is an ABSOLUTE position budget, `max_new = min(seqLen, max_context_len)
-         * − pos`, and `maxNewTokens` is not forwarded in 1.3.1. So the contract's `maxNewTokens` becomes
-         * `prefilledTokens + maxNewTokens`, clamped to [maxContextLen] and always strictly above the prefilled
-         * count (otherwise the runner errors with nothing to generate).
+         * `seqLen` asked of `generate()`: an absolute position budget the runner clamps to the export's
+         * `max_seq_len` (`max_new = min(seqLen, max_context_len) − pos`, `docs/stack.md` §3-R2), so this means
+         * "whatever context is left"; [TokenCap] ends the answer at `maxNewTokens`.
          */
-        fun seqLenBudget(prefilledTokens: Int, maxNewTokens: Int, maxContextLen: Int): Int {
-            require(prefilledTokens >= 0) { "prefilledTokens must be ≥ 0: $prefilledTokens" }
-            require(maxNewTokens > 0) { "maxNewTokens must be > 0: $maxNewTokens" }
-            require(maxContextLen > 0) { "maxContextLen must be > 0: $maxContextLen" }
-            val wanted = prefilledTokens.toLong() + maxNewTokens
-            val clamped = minOf(wanted, maxContextLen.toLong()).toInt()
-            return maxOf(clamped, minOf(prefilledTokens + 1, maxContextLen))
-        }
+        const val SEQ_LEN_REQUEST: Int = 1 shl 15
+
+        /** Lockfile `image_format` for encoders that take raw pixel values as float. */
+        const val IMAGE_FORMAT_FLOAT_0_255: String = "float_0_255"
     }
 }

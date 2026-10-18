@@ -137,7 +137,9 @@ push_one() {  # <local file> <remote path>
   pushed=$((pushed + 1))
 }
 
-while IFS='|' read -r name dest; do
+# The rows come in on fd 3: adb reads stdin, and on fd 0 the first push would swallow the remaining rows (only the
+# first artifact was ever pushed).
+while IFS='|' read -r name dest <&3; do
   [ -n "$name" ] || continue
   if [ -n "$ONLY" ] && [ "$ONLY" != "$name" ]; then continue; fi
   src="$FROM/$dest"
@@ -146,8 +148,8 @@ while IFS='|' read -r name dest; do
     missing=$((missing + 1))
     continue
   fi
-  push_one "$src" "$REMOTE_DIR/$dest"
-done <<< "$ROWS"
+  push_one "$src" "$REMOTE_DIR/$dest" </dev/null
+done 3<<< "$ROWS"
 
 # The lockfile copy lets the engine print name / quantization / backend / size for sideloaded files too (FR-G5, ADR-0007).
 if [ "$((pushed + skipped))" -gt 0 ]; then
