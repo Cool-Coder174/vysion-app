@@ -196,6 +196,13 @@ data class HandObservation(
     val indexTip: Vec3?,
     val indexProximal: Vec3?,
     val timestampNanos: Long,
+    // Added for the eyes-free gestures (HandGestureRecognizer): which finger touches the thumb, and which way the
+    // palm faces. Same space as the joints above. Defaults keep older call sites compiling.
+    val wrist: Vec3? = null,
+    val middleTip: Vec3? = null,
+    val ringTip: Vec3? = null,
+    val littleTip: Vec3? = null,
+    val littleProximal: Vec3? = null,
 )
 
 /**
@@ -603,8 +610,8 @@ class XrPerceptionSession(
                         launchDepthFeed(xrSession)
                         launchHeadPoseFeed(xrSession)
                         launchPlaneFeed(xrSession)
-                        // Hand feed (launchHandFeed) stays off until a consumer exists (FR-D4 pointing needs the VLM):
-                        // two hands at the frame rate is load with no reader.
+                        // Hands feed the eyes-free gestures (XrHandGestures: talk, next page, stop for blind users).
+                        launchHandFeed(xrSession)
                     }
                     _state.value = SessionState.RUNNING
                     Log.i(TAG, "XR session configured successfully; state=${_state.value}")
@@ -764,6 +771,11 @@ class XrPerceptionSession(
                                 indexTip = joints[HandJointType.INDEX_TIP]?.translation?.toVec3(),
                                 indexProximal = joints[HandJointType.INDEX_PROXIMAL]?.translation?.toVec3(),
                                 timestampNanos = SystemClock.elapsedRealtimeNanos(),
+                                wrist = joints[HandJointType.WRIST]?.translation?.toVec3(),
+                                middleTip = joints[HandJointType.MIDDLE_TIP]?.translation?.toVec3(),
+                                ringTip = joints[HandJointType.RING_TIP]?.translation?.toVec3(),
+                                littleTip = joints[HandJointType.LITTLE_TIP]?.translation?.toVec3(),
+                                littleProximal = joints[HandJointType.LITTLE_PROXIMAL]?.translation?.toVec3(),
                             ),
                         )
                     }

@@ -7,6 +7,7 @@ import com.vysion.xr.core.AnchorStore
 import com.vysion.xr.core.CommandBus
 import com.vysion.xr.core.DiagnosticsSource
 import com.vysion.xr.core.FrameSource
+import com.vysion.xr.core.HandGestureSource
 import com.vysion.xr.core.HeadPoseSource
 import com.vysion.xr.core.InferenceEngine
 import com.vysion.xr.core.ModePhrasebook
@@ -21,14 +22,17 @@ import com.vysion.xr.inference.LibraryPromptSet
 import com.vysion.xr.inference.ModelCatalog
 import com.vysion.xr.perception.NoOpAnchorStore
 import com.vysion.xr.perception.NoOpHeadPoseSource
+import com.vysion.xr.perception.NoOpHandGestures
 import com.vysion.xr.perception.NoOpNavigationEngine
 import com.vysion.xr.perception.XrAnchorStore
+import com.vysion.xr.perception.XrHandGestures
 import com.vysion.xr.perception.XrHeadPoseSource
 import com.vysion.xr.perception.XrNavigationEngine
 import com.vysion.xr.perception.XrPerceptionSession
 import com.vysion.xr.platform.CameraFrameSource
 import com.vysion.xr.platform.DeviceProfile
 import com.vysion.xr.platform.FakeFrameSource
+import com.vysion.xr.platform.GestureCommands
 import com.vysion.xr.platform.ModeController
 import com.vysion.xr.platform.OnboardingStore
 import com.vysion.xr.platform.PassthroughOverlayRenderer
@@ -127,6 +131,9 @@ class AppGraph(private val app: Application) {
         perception?.let { XrNavigationEngine(it, frameSource, inferenceEngine, anchorStore, headPose, scope) }
             ?: NoOpNavigationEngine()
 
+    /** Eyes-free hand gestures (blind users): middle-finger pinch to talk, ring-finger tap to page, palm out to stop. */
+    val handGestures: HandGestureSource = perception?.let { XrHandGestures(it) } ?: NoOpHandGestures()
+
     // R5 — diagnostics
     val diagnostics: DiagnosticsSource = DiagnosticsCollector(app, inferenceEngine, frameSource, scope)
 
@@ -155,12 +162,17 @@ class AppGraph(private val app: Application) {
         prompts = prompts,
     )
 
+    /** Hand gestures → the same commands as voice and panels (`platform.GestureCommands`). */
+    val gestureCommands: GestureCommands =
+        GestureCommands(handGestures, commandBus, speaker, phrasebook, modeController.mode, scope)
+
     /**
      * Called from `MainActivity.onStart` after permissions are granted, and once when first-launch
      * onboarding finishes (then with [speakWelcome] false: the last onboarding page already said it).
      */
     fun start(speakWelcome: Boolean = true) {
         modeController.start(speakWelcome)
+        gestureCommands.start()
     }
 
     /**
@@ -190,6 +202,7 @@ class AppGraph(private val app: Application) {
      * engine so [start] can resume without a multi-second model reload.
      */
     fun stop() {
+        gestureCommands.stop()
         modeController.stop()
         perceptionStop = perception?.let { session -> scope.launch { session.stop() } }
     }

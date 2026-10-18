@@ -44,6 +44,11 @@ object Cues {
         MODE_AUDIO_DESCRIPTION,
         MODE_NAVIGATION,
 
+        /** Eyes-free paging (hand gesture NEXT_PAGE): page name + how to run it. */
+        PAGE_TEXT_READER,
+        PAGE_AUDIO_DESCRIPTION,
+        PAGE_NAVIGATION,
+
         LISTENING,
         DONE,
 
@@ -97,14 +102,17 @@ object Cues {
     private const val ES = "es"
 
     private val EN_US: Map<Key, String> = mapOf(
-        Key.WELCOME to "Welcome to Vysion XR. Pinch Talk, then say read this, describe, or find the door. " +
-            "To quiet me, say stop or pinch Stop.",
+        Key.WELCOME to "Welcome to Vysion XR. To talk, touch your thumb to your middle finger and hold, " +
+            "then say read this, describe, or find the door. To stop me, hold your palm out, or say stop.",
         // Verbatim copy of R.string.product_sentence (res/values/strings.xml); the test keeps them equal.
         Key.PRODUCT_SENTENCE to "Vysion XR helps you read, understand, and move through a space. " +
             "It is not validated for unassisted travel by blind users.",
         Key.MODE_TEXT_READER to "Text Reader mode",
         Key.MODE_AUDIO_DESCRIPTION to "Audio Description mode",
         Key.MODE_NAVIGATION to "Navigation mode",
+        Key.PAGE_TEXT_READER to "Read. Tap your thumb to your middle finger to read.",
+        Key.PAGE_AUDIO_DESCRIPTION to "Describe. Tap your thumb to your middle finger to describe.",
+        Key.PAGE_NAVIGATION to "Find the door. Tap your thumb to your middle finger to find the door.",
         Key.LISTENING to "Listening",
         Key.DONE to "Done",
         Key.BUSY to "One moment, still working",
@@ -131,13 +139,16 @@ object Cues {
     )
 
     private val ES_MX: Map<Key, String> = mapOf(
-        Key.WELCOME to "Bienvenido a Vysion XR. Pellizca Hablar y di lee esto, describe, o busca la puerta. " +
-            "Para callarme, di alto o pellizca Detener.",
+        Key.WELCOME to "Bienvenido a Vysion XR. Para hablar, junta el pulgar con el dedo medio y mantén, " +
+            "y di lee esto, describe, o busca la puerta. Para callarme, muestra la palma, o di alto.",
         Key.PRODUCT_SENTENCE to "Vysion XR te ayuda a leer, entender y moverte por un espacio. " +
             "No está validado para que personas ciegas viajen sin asistencia.",
         Key.MODE_TEXT_READER to "Modo lector de texto",
         Key.MODE_AUDIO_DESCRIPTION to "Modo descripción de audio",
         Key.MODE_NAVIGATION to "Modo navegación",
+        Key.PAGE_TEXT_READER to "Leer. Toca el pulgar con el dedo medio para leer.",
+        Key.PAGE_AUDIO_DESCRIPTION to "Describir. Toca el pulgar con el dedo medio para describir.",
+        Key.PAGE_NAVIGATION to "Buscar la puerta. Toca el pulgar con el dedo medio para buscarla.",
         Key.LISTENING to "Escuchando",
         Key.DONE to "Listo",
         Key.BUSY to "Un momento, sigo trabajando",
@@ -190,6 +201,13 @@ object Cues {
     fun permissionDenied(locale: Locale = Speaker.EN_US): String = text(Key.PERMISSION_DENIED, locale)
 
     /** FR-G3: spoken on every mode change; the panel shows the same mode. */
+    /** Eyes-free paging: the page's name and how to run it with the middle-finger tap. */
+    fun pageFocused(mode: Mode, locale: Locale = Speaker.EN_US): String = when (mode) {
+        Mode.TEXT_READER -> text(Key.PAGE_TEXT_READER, locale)
+        Mode.AUDIO_DESCRIPTION -> text(Key.PAGE_AUDIO_DESCRIPTION, locale)
+        Mode.NAVIGATION -> text(Key.PAGE_NAVIGATION, locale)
+    }
+
     fun modeAnnouncement(mode: Mode, locale: Locale = Speaker.EN_US): String = when (mode) {
         Mode.TEXT_READER -> text(Key.MODE_TEXT_READER, locale)
         Mode.AUDIO_DESCRIPTION -> text(Key.MODE_AUDIO_DESCRIPTION, locale)
@@ -341,6 +359,7 @@ object CuesPhrasebook : ModePhrasebook {
     override val cameraLost: String get() = Cues.cameraLost(locale())
     override val modelNotFound: String get() = Cues.modelNotFound(locale())
     override fun modeAnnounced(mode: Mode): String = Cues.modeAnnouncement(mode, locale())
+    override fun pageFocused(mode: Mode): String = Cues.pageFocused(mode, locale())
     override fun navigationCue(cue: NavigationCue): String? =
         if (cue == NavigationCue.Arrived) null else Cues.phrase(cue, locale())
     override fun onboarding(step: OnboardingStep): OnboardingPage = Cues.onboarding(step, locale())
@@ -414,11 +433,12 @@ private class OnboardingCopy(
                 "You can stop me any time.",
             ),
             privacyFootnote = "Next, Android asks to use the camera and microphone.",
-            talk = "Talk to me anytime." to "Look at Talk and pinch. Speak, and I send when you pause.",
+            talk = "Talk to me anytime." to "Touch your thumb to your middle finger and hold while you speak. Let go to send. " +
+                    "Thumb to ring finger moves to the next page.",
             talkHint = "Try it now: say “read this”",
             talkHintSpoken = "Try it now: say read this.",
             stop = "Stop me anytime." to
-                "Look at Stop and pinch. I go quiet right away.",
+                "Hold your open hand out, palm away from you. I go quiet right away.",
             stopHint = "Try it: I’ll start talking, you stop me",
             sounds = "Learn my sounds." to "Each sound means one thing. Look at a sound and pinch to hear it.",
             soundRows = listOf(
@@ -440,7 +460,7 @@ private class OnboardingCopy(
                 OnboardingItem("Navigate", "“Find the door”"),
             ),
             allSetSpokenTail = "Say read this, what’s here, or find the door.",
-            stopPractice = "This is a long sentence so you can practice stopping me. Look at Stop and pinch, " +
+            stopPractice = "This is a long sentence so you can practice stopping me. Hold your palm out, " +
                 "and I go quiet right away. I keep talking until you do. I keep talking until you do.",
         )
 
@@ -454,11 +474,12 @@ private class OnboardingCopy(
                 "Puedes detenerme en cualquier momento.",
             ),
             privacyFootnote = "Después, Android te pide usar la cámara y el micrófono.",
-            talk = "Háblame cuando quieras." to "Mira Hablar y pellizca. Habla y envío cuando hagas una pausa.",
+            talk = "Háblame cuando quieras." to "Junta el pulgar con el dedo medio y mantén mientras hablas. Suelta para enviar. " +
+                    "Pulgar con anular pasa a la siguiente página.",
             talkHint = "Pruébalo: di “lee esto”",
             talkHintSpoken = "Pruébalo: di lee esto.",
             stop = "Detenme cuando quieras." to
-                "Mira Detener y pellizca. Me callo de inmediato.",
+                "Muestra la mano abierta, con la palma hacia afuera. Me callo de inmediato.",
             stopHint = "Pruébalo: yo empiezo a hablar y tú me detienes",
             sounds = "Aprende mis sonidos." to "Cada sonido significa una cosa. Mira un sonido y pellizca para oírlo.",
             soundRows = listOf(
@@ -480,7 +501,7 @@ private class OnboardingCopy(
                 OnboardingItem("Navegar", "“Busca la puerta”"),
             ),
             allSetSpokenTail = "Di lee esto, qué hay aquí, o busca la puerta.",
-            stopPractice = "Esta es una frase larga para que practiques detenerme. Mira Detener y pellizca, " +
+            stopPractice = "Esta es una frase larga para que practiques detenerme. Muestra la palma, " +
                 "y me callo de inmediato. Sigo hablando hasta que lo hagas. " +
                 "Sigo hablando hasta que lo hagas.",
         )

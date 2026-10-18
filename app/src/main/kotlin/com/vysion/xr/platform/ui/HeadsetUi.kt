@@ -369,7 +369,7 @@ data class RailMore(val selected: Boolean, val onToggle: () -> Unit)
  * fit in that (headset captures 2026-10-17 showed a 4-item rail cut off). Diagnostics is [DiagnosticsToggle].
  */
 @Composable
-fun ModeRail(mode: Mode?, commands: CommandBus, itemSize: Dp, labelStyle: androidx.compose.ui.text.TextStyle, modifier: Modifier = Modifier) {
+fun ModeRail(mode: Mode?, page: Mode?, commands: CommandBus, itemSize: Dp, labelStyle: androidx.compose.ui.text.TextStyle, modifier: Modifier = Modifier) {
     val railLabel = stringResource(R.string.a11y_mode_rail)
     Column(
         verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -379,13 +379,13 @@ fun ModeRail(mode: Mode?, commands: CommandBus, itemSize: Dp, labelStyle: androi
             .semantics { contentDescription = railLabel }
             .padding(vertical = Space.s, horizontal = Space.xs),
     ) {
-        RailItem(stringResource(R.string.mode_read), VysionIcons.Read, mode == Mode.TEXT_READER, itemSize, labelStyle) {
+        RailItem(stringResource(R.string.mode_read), VysionIcons.Read, mode == Mode.TEXT_READER, page == Mode.TEXT_READER, itemSize, labelStyle) {
             commands.inject(Command.Read, CommandSource.PANEL)
         }
-        RailItem(stringResource(R.string.mode_describe), VysionIcons.Eye, mode == Mode.AUDIO_DESCRIPTION, itemSize, labelStyle) {
+        RailItem(stringResource(R.string.mode_describe), VysionIcons.Eye, mode == Mode.AUDIO_DESCRIPTION, page == Mode.AUDIO_DESCRIPTION, itemSize, labelStyle) {
             commands.inject(Command.Describe, CommandSource.PANEL)
         }
-        RailItem(stringResource(R.string.mode_find_door), VysionIcons.Door, mode == Mode.NAVIGATION, itemSize, labelStyle) {
+        RailItem(stringResource(R.string.mode_find_door), VysionIcons.Door, mode == Mode.NAVIGATION, page == Mode.NAVIGATION, itemSize, labelStyle) {
             commands.inject(Command.FindDoor, CommandSource.PANEL)
         }
     }
@@ -406,12 +406,16 @@ fun DiagnosticsToggle(more: RailMore, height: Dp, labelStyle: androidx.compose.u
     )
 }
 
-/** One rail entry: indicator pill with the icon, the label under it, the whole column clickable. */
+/**
+ * One rail entry: indicator pill with the icon, the label under it, the whole column clickable. [focused] is the
+ * hand-gesture page (`GestureCommands.page`): a ring, so a companion can see what a middle-finger tap will run.
+ */
 @Composable
 private fun RailItem(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     selected: Boolean,
+    focused: Boolean,
     size: Dp,
     labelStyle: androidx.compose.ui.text.TextStyle,
     onClick: () -> Unit,
@@ -442,7 +446,8 @@ private fun RailItem(
             contentAlignment = Alignment.Center,
             modifier = Modifier
                 .size(width = size, height = size * RAIL_PILL_HEIGHT)
-                .background(pill, CircleShape),
+                .background(pill, CircleShape)
+                .border(2.dp, if (focused && !selected) Accent.blue else Color.Transparent, CircleShape),
         ) {
             Icon(icon, contentDescription = null, tint = if (selected) Ink.onLight else Ink.primary, modifier = Modifier.size(size * 0.5f))
         }

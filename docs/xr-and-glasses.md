@@ -16,6 +16,22 @@ did not, and what a glasses target would take.
 | High contrast over passthrough | | Near-opaque graphite glass (85–96 % alpha) |
 | TalkBack structure | `heading()` on titles, live regions for updates | Titles are headings; answers are NOT live regions (the app speaks them; TalkBack would repeat them) |
 
+### Eyes-free gestures (blind users)
+
+Galaxy XR owns the index pinch (select), the 2 s index pinch (options) and any pinch with the palm facing you (Home).
+So the app's gestures never use the index finger and are ignored while the palm faces the wearer
+(`perception/HandGestureRecognizer.kt`, tested; `platform/GestureCommands.kt`):
+
+| Gesture | Does | Spoken / shown |
+|---|---|---|
+| Thumb to middle finger, hold | Talk (mic open while held, sends on release) | Listening earcon, Listening window |
+| Thumb to middle finger, quick tap | Run the current page (Read, Describe or Find door) | The page's answer |
+| Thumb to ring finger, tap | Next page (Read → Describe → Find door) | Ping + "Describe. Tap your thumb to your middle finger to describe." |
+| Open hand, palm away, hold ½ s | Stop | Silence |
+
+Thresholds: pinch on < 2.2 cm, off > 3.5 cm; tap < 400 ms; open hand = every fingertip > 11 cm from the wrist.
+Tune them on device with `adb logcat -s vysion.gesture`.
+
 Not adopted: `androidx.xr.compose.material3` (1.0.0-alpha17). It was built against Compose for XR alpha14 and calls
 APIs removed in beta01 (`Orbiter(ContentEdge…)`, `SpatialPanel(…, DragPolicy, ResizePolicy)`), so it would likely
 crash with `NoSuchMethodError`. Our own orbiter rail follows the same spec.

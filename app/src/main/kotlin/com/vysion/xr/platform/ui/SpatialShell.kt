@@ -23,6 +23,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -116,6 +117,7 @@ fun SpatialShell(graph: AppGraph, diagnostics: @Composable () -> Unit, onboardin
 @Composable
 private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composable () -> Unit) {
     val shell = rememberShellState(graph)
+    val gesturePage by graph.gestureCommands.page.collectAsStateWithLifecycle()
     val preview = LocalDesignPreview.current
     var diagnosticsShown by rememberSaveable { mutableStateOf(preview == PreviewScreen.DIAGNOSTICS) }
     val obstacle = shell.obstacle
@@ -148,6 +150,7 @@ private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composa
                 Orbiter(OrbiterPosition.CenterStart(OrbiterPosition.EdgeAlignment.Outside, DpVolumeOffset(-ORBITER_GAP, 0.dp, 0.dp))) {
                     ModeRail(
                         mode = shell.mode,
+                        page = gesturePage,
                         commands = graph.commandBus,
                         itemSize = 56.dp,
                         labelStyle = SpatialType.railLabel,
