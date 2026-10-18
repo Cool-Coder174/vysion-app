@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -30,6 +31,7 @@ import androidx.xr.runtime.Session
 import androidx.xr.scenecore.SpatialCapability
 import androidx.xr.scenecore.scene
 import com.vysion.xr.AppGraph
+import kotlinx.coroutines.launch
 
 /**
  * The Galaxy XR layout: passthrough Full Space with one floating control panel (FR-G1), the
@@ -63,6 +65,10 @@ fun SpatialShell(graph: AppGraph, diagnostics: @Composable () -> Unit) {
     val capabilities = LocalSpatialCapabilities.current
     val session = LocalSession.current
 
+    // One Session per activity: hand Compose's to R3 so perception never calls Session.create twice.
+    LaunchedEffect(session) {
+        graph.perception?.offerComposeSession(session)
+    }
     // A-2 fallback: ask for full passthrough as soon as we are allowed to control it.
     LaunchedEffect(session, capabilities.isPassthroughControlEnabled) {
         session?.let { forcePassthrough(it) }
@@ -79,6 +85,22 @@ fun SpatialShell(graph: AppGraph, diagnostics: @Composable () -> Unit) {
 
     val shell = rememberShellState(graph)
     var diagnosticsShown by rememberSaveable { mutableStateOf(false) }
+    // TEMP-DEBUG (test only, remove before the demo)
+    val debugScope = androidx.compose.runtime.rememberCoroutineScope()
+    var debugStatus by androidx.compose.runtime.remember { mutableStateOf("Place marker ahead") }
+    val debugLiveFlow: kotlinx.coroutines.flow.StateFlow<String?> =
+        androidx.compose.runtime.remember { graph.perception?.debugLive ?: kotlinx.coroutines.flow.MutableStateFlow(null) }
+    val debugLive by debugLiveFlow.collectAsState()
+    var debugCue by androidx.compose.runtime.remember { mutableStateOf("no guidance cue yet") }
+    LaunchedEffect(Unit) {
+        graph.navigationEngine.cues.collect { cue ->
+            debugCue = when (cue) {
+                is com.vysion.xr.core.NavigationCue.DoorBearing ->
+                    "door at ${cue.clock} o'clock, %.1f m${if (cue.inView) "" else " (out of view)"}".format(cue.distanceM)
+                else -> cue.toString()
+            }
+        }
+    }
 
     Subspace {
         SpatialRow {
@@ -98,6 +120,21 @@ fun SpatialShell(graph: AppGraph, diagnostics: @Composable () -> Unit) {
                         progress = shell.progress,
                         modifier = Modifier.fillMaxSize(),
                     )
+                    // TEMP-DEBUG (test only, remove before the demo): marker test button.
+                    Box(modifier = Modifier.align(Alignment.TopStart).padding(PANEL_MARGIN)) {
+                        androidx.compose.material3.Button(onClick = {
+                            debugScope.launch {
+                                debugStatus = graph.perception?.debugPlaceAnchorAhead() ?: "no XR session"
+                                graph.perception?.debugLastAnchor?.let { id ->
+                                    if (!graph.navigationEngine.isRunning.value) graph.navigationEngine.start()
+                                    graph.navigationEngine.guideTo(id)
+                                }
+                            }
+                        }) { androidx.compose.material3.Text(debugLive ?: debugStatus) }
+                    }
+                    Box(modifier = Modifier.align(Alignment.BottomStart).padding(PANEL_MARGIN)) {
+                        androidx.compose.material3.Text(debugCue, color = Color.Yellow)
+                    }
                     if (diagnosticsShown) {
                         Box(modifier = Modifier.align(Alignment.TopEnd).padding(PANEL_MARGIN)) {
                             diagnostics() // FR-G5 (R5's DiagnosticsOverlay, passed in by MainActivity)
