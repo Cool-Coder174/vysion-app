@@ -71,7 +71,7 @@
     },
     {
       "name": "detector-int8",
-      "role": "the detector row's model exported int8 (static 8-bit activations, per-channel 8-bit weights, decode kept float); used when the build asks for it (-Pdetector=detector-int8), with `detector` as the fallback",
+      "role": "the detector row's model exported int8 (static 8-bit activations, per-channel 8-bit weights, decode kept float); the detector the app tries first (BuildConfig.DETECTOR, default since 2026-10-18), with `detector` as the fallback when this file is missing, refused or will not load",
       "dest": "detector-int8.pte",
       "url": "TBD",
       "sha256": "c718c84169afa2664b440c9201433b3a6d567900c64677635b164fc5159fae96",

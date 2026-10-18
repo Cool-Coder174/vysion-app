@@ -12,7 +12,7 @@ Tags on commands below: **VERIFIED** = the flag set was checked against the Exec
 |---|---|---|---|
 | `ocr` + `ocr-charset` | `ocr.pte`, `ocr-charset.json` | PP-OCRv6 small, prebuilt by Software Mansion (Apache-2.0), URL in `models.lock` | loads 0.2 s; read a 960×720 test sign exactly in 1.1 s |
 | `detector` | `detector.pte` | YOLOv8n Open Images V7 (Door 164, Stairs 489, people, furniture): `ml/export/export_detector_oiv7.sh` | loads; `[1, 605, 2100]` decoded as columns + Kotlin NMS |
-| `detector-int8` | `detector-int8.pte` | the same model, int8: `ml/export/export_detector_oiv7.sh --int8` (§2a) | `detect()` median 54–55 ms vs 93 ms FP32, door recall 8.9% vs 9.6% (`docs/benchmarks.md`); used only in a `-Pdetector=detector-int8` build, FP32 is the fallback and the shipping default |
+| `detector-int8` | `detector-int8.pte` | the same model, int8: `ml/export/export_detector_oiv7.sh --int8` (§2a) | `detect()` median 54–55 ms vs 93 ms FP32, door recall 8.9% vs 9.6% (`docs/benchmarks.md`); the shipping default since 2026-10-18; `detector` (FP32) is the fallback |
 | `vlm` + `vlm-tokenizer` | `vlm.pte`, `vlm-tokenizer.json` | LFM2.5-VL-450M, prebuilt by Software Mansion v0.11.0 (LFM Open License v1.0) | answers on the headset via `ModuleVlmRunner` (`runner: module`): 7.8 s for 60 tokens |
 | `asr` + `asr-preprocessor` + `asr-tokenizer` + `vad` | `asr.pte`, `asr-preprocessor.pte`, `asr-tokenizer.json`, `vad.pte` | Whisper-tiny fp32 (prebuilt, larryliu0820), 30 s log-mel preprocessor (`ml/export/export_asr.sh`, url `TBD`), OpenAI's `tokenizer.json`, Silero VAD (prebuilt, younghan-meta); voice commands, ADR-0011 | load 2.2 s; clip end → command 1.5–1.6 s median, English 41/45 and Spanish 28/42 test clips right (`docs/benchmarks.md` "Voice commands") |
 
@@ -108,8 +108,8 @@ Ultralytics' `format=executorch` is FP32 only, so `--int8` runs its own PT2E flo
   every Open Images V7 *test* image with a door (held out from calibration), and prints recall/precision per label
   and how many FP32 detections int8 reproduces. Results in `docs/benchmarks.md`.
 
-On the headset the engine tries the build's row first (`BuildConfig.DETECTOR`, `-Pdetector=detector-int8`), then
-`detector`: a missing, refused or unloadable `detector-int8.pte` logs `detector-int8 unavailable …` or
+On the headset the engine tries the build's row first (`BuildConfig.DETECTOR`: `detector-int8` by default,
+`-Pdetector=detector` for FP32 first), then `detector`: a missing, refused or unloadable `detector-int8.pte` logs `detector-int8 unavailable …` or
 `detector load failed …` and loads `detector.pte`. `vysion.latency: detector load ms=… row=…` names the file in use.
 
 ## 3. VLM: 4-bit weights, XNNPACK, plus the tokenizer

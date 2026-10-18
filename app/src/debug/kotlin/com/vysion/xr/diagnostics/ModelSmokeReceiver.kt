@@ -41,8 +41,8 @@ import kotlinx.coroutines.launch
  *
  * `--es model detector --ei runs 20` times [InferenceEngine.detect] on the image: one untimed warm-up call, then `runs`
  * calls, logged as `detector runs=… median=… p90=… min=… max=… ms` (the whole `detect()`: pixels, letterbox, forward,
- * decode, NMS). The row comes from the build (`-Pdetector=detector-int8`); `vysion.latency: detector load … row=` says
- * which file loaded.
+ * decode, NMS). The row comes from the build (`BuildConfig.DETECTOR`: int8 by default, `-Pdetector=detector` for FP32
+ * first); `vysion.latency: detector load … row=` says which file loaded.
  *
  * `--es model whereami [--ez cold true]` runs FR-N9 at a fixed test point (the Civic Center tile in the unit tests,
  * never the wearer's location, which needs a worn headset and Location on): the tiles (cold = dropped from memory
