@@ -45,6 +45,34 @@ app-restricted key in `local.properties` (with `X-Android-Package` / `X-Android-
 | 7 `describe` | hedged | 1.15 s | started at 1.00 s, cancelled | cloud | flow ends at 8.9 s |
 | offline (airplane mode) | | | | | **not checked on the device** (JVM tests only: `CloudDescribeEngineTest`) |
 
+## Where am I (FR-N9; ADR-0010 rows "Where am I map" and "Where am I wording"; network on)
+
+Debug smoke test (`adb shell am broadcast -a com.vysion.xr.SMOKE -n com.vysion.xr/.diagnostics.ModelSmokeReceiver --es
+model whereami --ez cold true|false`) at a fixed test point (Larkin Street by the Main Library, San Francisco: the unit
+tests' tile), not the wearer's location. Galaxy XR SM-I610 on Wi-Fi, unworn, 2026-10-18; development runs, not the
+20-run protocol. `vysion.latency: whereami …` (`MapPlaceSource`) and `vysion.smoke: whereami …` lines; times are
+wall-clock `System.nanoTime`. "Lookup" = tiles + decode + finder; "cold" = tiles dropped from memory first.
+
+| Run | Tiles | Download (559 KB z14 tile) | Decode (`transportation_name` + `poi`) | Finder | Lookup | Gemini first chunk | Gemini whole answer |
+|---|---|---|---|---|---|---|---|
+| 1 cold | 1 downloaded | 359 ms | 369 ms | 134 ms | 0.87 s | 1.13 s | 1.45 s |
+| 2 warm | 1 from memory | none | none | 130 ms | 0.13 s | 0.76 s | 1.08 s |
+| 3 cold | 1 downloaded | 86 ms | 288 ms | 105 ms | 0.48 s | 1.45 s | 1.60 s |
+| 4 warm | 1 from memory | none | none | 129 ms | 0.13 s | 2.49 s | 2.92 s |
+
+Both wordings of run 1, as spoken: Gemini: "You are on Larkin Street. The monument Portrait of a Phenomenal Woman is 10
+meters away, the Larkin Street and Grove Street bus stop is 20 meters away, and the artwork Double L Excentric Gyratory
+is 30 meters away. You are 50 meters from the Grove Street crossing and 50 meters from the Fulton Street crossing."
+Template (offline): "You are near Larkin Street, between Grove Street and Fulton Street. Nearby: Portrait of a
+Phenomenal Woman, about 10 meters; Larkin Street & Grove Street, about 20 meters; and Double L Excentric Gyratory,
+about 30 meters."
+
+| Step | Measured |
+|---|---|
+| Wi-Fi location fix (fused provider, Location on) | not measured (Location is off on the headset; a fix needs the app in the foreground, i.e. worn) |
+| "where am I" recognized → first spoken word (`vysion.latency: whereami command->first-word`) | not measured (needs a wearer) |
+| Offline (airplane mode): tiles from memory + template | not checked on the device (JVM tests only: `ModeControllerTest`, `CloudDescribeEngineTest`, `CuesTest`) |
+
 ## Thermal soak (`scripts/benchmark.sh --soak 600`)
 
 | Minute | Detector fps | PSS MB | Battery % | Thermal status |
