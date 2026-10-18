@@ -487,7 +487,32 @@ class XrPerceptionSession(
 
     /** Called by the spatial UI with `LocalSession.current`; `null` clears it. */
     fun offerComposeSession(xrSession: Session?) {
+        val previous = composeSession.value
         composeSession.value = xrSession
+        // Android XR can recreate the activity right after launch (relaunch into Full Space): the new activity's Compose
+        // session is the live one, and the one perception configured died with the old activity. Worn log 2026-10-18
+        // 07:50: two MainActivity instances; perception kept the first session, so head pose and hands went silent,
+        // the HUD stopped following and the reading crosshair never showed (`tracked=false`). Re-attach to the new one.
+        if (xrSession != null && previous != null && previous !== xrSession) scope.launch { reattach() }
+    }
+
+    /** Moves the feeders to the session Compose offers now, if perception runs on an older one. Additive (R3). */
+    private suspend fun reattach() {
+        lifecycle.withLock {
+            val current = session ?: return // not running yet: the next open() takes the new session itself
+            val offered = composeSession.value ?: return
+            if (current === offered) return
+            val activity = activityRef?.get() ?: return
+            Log.i(TAG, "Compose offered a new XR session (activity recreated); moving perception to it")
+            feeders?.cancel()
+            feeders = null
+            runCatching { detachAllAnchors() } // they belonged to the old session
+            session = null
+            _headPose.value = null
+            _planes.value = emptyList()
+            _state.value = SessionState.STOPPED
+            open(activity, explicit = true)
+        }
     }
 
     /** Parent of the four feeders of the current run; cancelled by [stop] so a later [start] relaunches them. */
