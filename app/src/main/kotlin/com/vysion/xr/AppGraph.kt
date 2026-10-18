@@ -1,5 +1,6 @@
 package com.vysion.xr
 
+import android.app.Activity
 import android.app.Application
 import com.vysion.xr.core.AnchorStore
 import com.vysion.xr.core.CommandBus
@@ -33,8 +34,12 @@ import com.vysion.xr.voice.CuesPhrasebook
 import com.vysion.xr.voice.SpeechCommandBus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -64,13 +69,30 @@ import kotlinx.coroutines.launch
  * laptop emulator or the S25 Ultra with no camera, XR runtime or model files. On a non-XR device
  * ([DeviceProfile.isXr] false) the perception modules are `NoOp*` regardless (ADR-0006).
  *
+ * Wiring that is not a constructor argument: the VLM still size. `CameraFrameSource.stillEdge` follows
+ * `InferenceEngine.vlmInfo.inputWidth` once the VLM has loaded (FR-T1/FR-D1 prefill needs the model's input
+ * size, Contracts.kt `FrameSource.captureStill`); `FakeFrameSource` always returns 896.
+ *
  * Lifecycle: [start] / [stop] follow `MainActivity.onStart` / `onStop` and can repeat (taking the
- * headset off and on stops and restarts the modules); [release] runs once, from `onDestroy` when the
- * activity is finishing, and is the only place the graph scope is cancelled.
+ * headset off and on stops and restarts the modules); [startPerception] runs after each [start] and waits
+ * for the previous [stop]'s perception teardown, so a quick off/on never leaves the session STOPPED.
+ * [release] runs once, from `onDestroy` when the activity is finishing, and is the only place the graph
+ * scope is cancelled; it sets [isReleased], and `VysionApplication.graph` then builds a fresh graph for the
+ * next activity (a finished activity in a cached process gets a new graph, never the released one). The
+ * camera analysis executor lives as long as the process (`CameraFrameSource`; FrameSource has no release).
  */
 class AppGraph(private val app: Application) {
 
     val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** `true` once [release] ran; the graph cannot be restarted and `VysionApplication.graph` replaces it. */
+    @Volatile
+    var isReleased: Boolean = false
+        private set
+
+    /** The last [stop]'s perception teardown; [startPerception] joins it before starting the session again. */
+    @Volatile
+    private var perceptionStop: Job? = null
 
     val deviceProfile: DeviceProfile = DeviceProfile.detect(app)
     private val useFakes: Boolean = BuildConfig.USE_FAKES
@@ -107,6 +129,16 @@ class AppGraph(private val app: Application) {
     // R5 — diagnostics
     val diagnostics: DiagnosticsSource = DiagnosticsCollector(app, inferenceEngine, frameSource, scope)
 
+    init {
+        // FR-T1 / FR-D1: the still must be the VLM's input size (Contracts.kt captureStill); r1 open issue 1.
+        (frameSource as? CameraFrameSource)?.let { camera ->
+            scope.launch {
+                inferenceEngine.vlmInfo.filterNotNull().map { it.inputWidth }.filter { it > 0 }
+                    .collect { camera.stillEdge = it }
+            }
+        }
+    }
+
     // R1 — the state machine that owns every one-shot command. It speaks only through R4's phrasebook
     // and prompts only through R2's prompt set (INV-4, ADR-0005); the phrasebook follows Speaker.locale.
     val modeController: ModeController = ModeController(
@@ -129,21 +161,36 @@ class AppGraph(private val app: Application) {
     }
 
     /**
+     * R3: (re)start the ARCore for Jetpack XR session with the resumed [activity] (stack.md D7); no-op off the
+     * headset. Waits for the previous [stop]'s `session.stop()` first: the session mutex serializes the two
+     * calls but does not order them, and a stop that won the race would leave perception STOPPED while the
+     * activity is visible. Called from `MainActivity.lifecycleScope` after [start].
+     */
+    suspend fun startPerception(activity: Activity) {
+        val session = perception ?: return
+        perceptionStop?.join()
+        session.start(activity)
+    }
+
+    /**
      * Called from `MainActivity.onStop` (headset taken off, app backgrounded). Stops every loop the
      * controller owns, Navigation and the camera; keeps the graph scope, the loaded models and the TTS
      * engine so [start] can resume without a multi-second model reload.
      */
     fun stop() {
         modeController.stop()
-        perception?.let { session -> scope.launch { session.stop() } }
+        perceptionStop = perception?.let { session -> scope.launch { session.stop() } }
     }
 
     /**
      * Called once from `MainActivity.onDestroy` when the activity is finishing. Releases the native
      * resources that must not leak (`SpeechRecognizer.destroy()`, `TextToSpeech.shutdown()`, the
-     * ExecuTorch modules) and cancels the graph scope. The graph cannot be restarted afterwards.
+     * ExecuTorch modules) and cancels the graph scope. The graph cannot be restarted afterwards: [isReleased]
+     * turns true first, so `VysionApplication.graph` hands the next activity a fresh graph.
      */
     fun release() {
+        if (isReleased) return
+        isReleased = true
         modeController.stop()
         commandBus.release()
         speaker.release()

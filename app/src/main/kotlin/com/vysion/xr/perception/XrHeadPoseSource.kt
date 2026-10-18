@@ -79,7 +79,8 @@ class HeadPoseTracker {
  * - Assumption: A-5 (device tracking configured with `DeviceTrackingMode.SPATIAL` + `HEAD_TRACKING`).
  *
  * The mapping runs eagerly in the session's scope so `pose.value` is current the moment R1 reads it at
- * capture time; the scope is cancelled from `AppGraph.stop()`.
+ * capture time. It survives `XrPerceptionSession.stop()` / `start()` (headset off and on: the raw pose
+ * goes `null`, which also resets the speed baseline); only `AppGraph.release()` cancels the scope.
  */
 class XrHeadPoseSource internal constructor(
     source: PerceptionSource,
@@ -91,6 +92,13 @@ class XrHeadPoseSource internal constructor(
     private val tracker = HeadPoseTracker()
 
     override val pose: StateFlow<HeadPose?> = source.headPose
-        .map { raw -> raw?.let(tracker::next) }
+        .map { raw ->
+            if (raw == null) {
+                tracker.reset() // session stopped: no speed across the gap (FR-T5)
+                null
+            } else {
+                tracker.next(raw)
+            }
+        }
         .stateIn(scope, SharingStarted.Eagerly, null)
 }

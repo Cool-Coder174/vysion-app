@@ -58,8 +58,12 @@ class PlaneSemanticsTest {
     fun `turning 90 degrees takes the wall off the heading`() {
         assertTrue(PlaneSemantics.evaluate(listOf(wall(1.0f)), head(yawDeg = 90f)).isEmpty())
         // and a wall placed to the right is found when turned right
-        val rightWall = wall(1.0f).copy(center = Vec3(1.0f, 0f, 0f), normal = Vec3(-1f, 0f, 0f), axisX = Vec3(0f, 0f, 1f))
-        assertEquals(listOf<NavigationCue>(NavigationCue.WallAhead(1.0f)), PlaneSemantics.evaluate(listOf(rightWall), head(yawDeg = 90f)))
+        val rightWall = wall(1.0f)
+            .copy(center = Vec3(1.0f, 0f, 0f), normal = Vec3(-1f, 0f, 0f), axisX = Vec3(0f, 0f, 1f))
+        assertEquals(
+            listOf<NavigationCue>(NavigationCue.WallAhead(1.0f)),
+            PlaneSemantics.evaluate(listOf(rightWall), head(yawDeg = 90f)),
+        )
     }
 
     @Test
@@ -109,8 +113,9 @@ class PlaneSemanticsTest {
 
     @Test
     fun `ray plane and ray polygon primitives`() {
-        assertEquals(2f, PlaneGeometry.rayPlaneDistance(Vec3.ZERO, Vec3.FORWARD, Vec3(0f, 0f, -2f), Vec3(0f, 0f, 1f))!!, 1e-6f)
-        assertNull(PlaneGeometry.rayPlaneDistance(Vec3.ZERO, Vec3.FORWARD, Vec3(0f, 0f, 2f), Vec3(0f, 0f, 1f))) // behind
+        val facingUs = Vec3(0f, 0f, 1f)
+        assertEquals(2f, PlaneGeometry.rayPlaneDistance(Vec3.ZERO, Vec3.FORWARD, Vec3(0f, 0f, -2f), facingUs)!!, 1e-6f)
+        assertNull(PlaneGeometry.rayPlaneDistance(Vec3.ZERO, Vec3.FORWARD, Vec3(0f, 0f, 2f), facingUs)) // behind
         assertNull(PlaneGeometry.rayPlaneDistance(Vec3.ZERO, Vec3.FORWARD, Vec3(0f, -1f, 0f), Vec3.UP)) // parallel
         val square = listOf(Vec2(-1f, -1f), Vec2(1f, -1f), Vec2(1f, 1f), Vec2(-1f, 1f))
         assertTrue(PlaneGeometry.contains(square, Vec2(0f, 0f)))

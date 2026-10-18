@@ -3,7 +3,8 @@
 #
 #   1. No network permission in our manifest.
 #   2. No network permission in the MERGED manifest (a dependency cannot smuggle one in).
-#   3. No code path that persists camera frames or logs their contents.
+#   3. No code path that persists camera frames or logs their contents, in main AND debug Kotlin sources
+#      (the debug BenchmarkReceiver captures stills and ships in the APK install_headset.sh installs).
 #
 # A line that legitimately needs a flagged API (e.g. copying model files with openFileOutput)
 # carries the marker `privacy-allow: <reason>` on the same line, which this script honors.
@@ -13,14 +14,19 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_SRC="$ROOT/app/src"
-KOTLIN_SRC="$ROOT/app/src/main/kotlin"
+# Every Kotlin source set that ends up in an installed APK: main, plus debug (BenchmarkReceiver).
+KOTLIN_DIRS=()
+for d in "$ROOT/app/src/main/kotlin" "$ROOT/app/src/debug/kotlin"; do
+  [ -d "$d" ] && KOTLIN_DIRS+=("$d")
+done
 fail=0
 
 NET_PERMS='android\.permission\.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE)'
 
 echo "== 1. network permissions in source manifests =="
-# The one allowed form is the manifest-merger GUARD that strips INTERNET from libraries:
+# The one allowed form is the manifest-merger GUARD that strips a network permission from libraries:
 #   <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+#   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
 if grep -rnE "$NET_PERMS" "$APP_SRC" --include=AndroidManifest.xml | grep -v 'tools:node="remove"'; then
   echo "FAIL: a network permission is declared in app/src (ADR-0003)"
   fail=1
@@ -43,10 +49,13 @@ else
   echo "ok"
 fi
 
-echo "== 3. frame persistence APIs in Kotlin sources =="
+echo "== 3. frame persistence APIs in Kotlin sources (main + debug) =="
+# Java writers plus Kotlin's usual ones (kotlin.io writeBytes/writeText/outputStream/…), NIO and pixel copies.
 PERSIST='Bitmap\.compress\(|FileOutputStream\(|MediaStore\.Images|OutputFileOptions|Environment\.getExternalStorage|openFileOutput\(|ImageWriter|MediaRecorder|CameraX.*Recorder'
-if [ -d "$KOTLIN_SRC" ]; then
-  if grep -rnE "$PERSIST" "$KOTLIN_SRC" | grep -v 'privacy-allow:'; then
+PERSIST+='|writeBytes\(|writeText\(|appendBytes\(|appendText\(|\.outputStream\(|bufferedWriter\(|printWriter\(|FileWriter\('
+PERSIST+='|Files\.write|RandomAccessFile\(|openOutputStream\(|copyPixelsToBuffer\('
+if [ "${#KOTLIN_DIRS[@]}" -gt 0 ]; then
+  if grep -rnE "$PERSIST" "${KOTLIN_DIRS[@]}" | grep -v 'privacy-allow:'; then
     echo "FAIL: a storage-writing API appears without a 'privacy-allow:' marker"
     fail=1
   else
@@ -54,10 +63,10 @@ if [ -d "$KOTLIN_SRC" ]; then
   fi
 fi
 
-echo "== 4. logging of frame contents =="
+echo "== 4. logging of frame contents (main + debug) =="
 LOGFRAME='Log\.[dviwe]\([^)]*(pixels|getPixels|copyPixels|frame\.|bitmap\.)'
-if [ -d "$KOTLIN_SRC" ]; then
-  if grep -rnE "$LOGFRAME" "$KOTLIN_SRC" | grep -v 'privacy-allow:'; then
+if [ "${#KOTLIN_DIRS[@]}" -gt 0 ]; then
+  if grep -rnE "$LOGFRAME" "${KOTLIN_DIRS[@]}" | grep -v 'privacy-allow:'; then
     echo "FAIL: frame/pixel data reaches a log statement"
     fail=1
   else

@@ -5,7 +5,9 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
+import androidx.compose.runtime.Composable
 import androidx.lifecycle.lifecycleScope
+import com.vysion.xr.diagnostics.DiagnosticsOverlay
 import com.vysion.xr.platform.Permissions
 import com.vysion.xr.platform.ui.FlatShell
 import com.vysion.xr.platform.ui.SpatialShell
@@ -24,7 +26,7 @@ import kotlinx.coroutines.launch
  * - Requests `CAMERA`, `RECORD_AUDIO` and the four XR permissions through
  *   [Permissions] with a spoken explanation (`Cues.permissionExplanation`, R4, reached through the
  *   controller's phrasebook; no string lives here, INV-4). On grant: [AppGraph.start] and, on the
- *   headset, `XrPerceptionSession.start(this)` (Session.create needs the resumed Activity, stack.md D7).
+ *   headset, `AppGraph.startPerception(this)` (Session.create needs the resumed Activity, stack.md D7).
  *   `onStop`: [AppGraph.stop] (reversible: taking the headset off and on restarts the modules).
  *   `onDestroy` while finishing: [AppGraph.release] (recognizer, TTS, models).
  * - Logs the two NFR evidence lines: `vysion.latency` (command → action) and `vysion.reliability`
@@ -47,7 +49,10 @@ class MainActivity : ComponentActivity() {
         Log.i(TAG, "DeviceProfile: ${graph.deviceProfile.displayName}; useFakes=${BuildConfig.USE_FAKES}")
 
         setContent {
-            if (graph.deviceProfile.isXr) SpatialShell(graph) else FlatShell(graph) // ADR-0006
+            // FR-G5: R5's overlay enters `platform` as a slot, so platform never imports diagnostics (ADR-0005).
+            val diagnostics: @Composable () -> Unit = { DiagnosticsOverlay(source = graph.diagnostics) }
+            // ADR-0006: Full Space on the headset, the flat layout on the S25 Ultra.
+            if (graph.deviceProfile.isXr) SpatialShell(graph, diagnostics) else FlatShell(graph, diagnostics)
         }
 
         // NFR latency: command recognized → action started (≤ 1.5 s), monotonic (H-21), tag vysion.latency.
@@ -69,7 +74,8 @@ class MainActivity : ComponentActivity() {
         val missing = Permissions.missing(this, graph.deviceProfile.isXr)
         when {
             Permissions.canStart(this) && missing.isEmpty() -> startGraph()
-            Permissions.canStart(this) -> startGraph().also { requestOnce(missing) } // XR extras can be denied without blocking
+            // XR extras can be denied without blocking; perception is retried in onPermissionResult.
+            Permissions.canStart(this) -> startGraph().also { requestOnce(missing) }
             else -> requestOnce(missing)
         }
     }
@@ -97,7 +103,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun onPermissionResult(grants: Map<String, Boolean>) {
-        grants.filterValues { !it }.keys.forEach { Log.w(TAG, "permission denied: $it") }
+        // plan.md Security "Detection": permission denials go to logcat under vysion.security.
+        grants.filterValues { !it }.keys.forEach { Log.w(SECURITY_TAG, "permission denied: $it") }
         if (Permissions.canStart(grants, this)) {
             startGraph()
         } else {
@@ -106,22 +113,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Starts the graph once per onStart/onStop cycle, and (re)starts perception on every call: when the
+     * core pair was already granted, the graph starts before the XR permission dialog returns, so the
+     * first `session.start` finds no XR grant (UNAVAILABLE) and the call from [onPermissionResult] is the
+     * retry. `XrPerceptionSession.start` returns at once while RUNNING or STARTING.
+     */
     private fun startGraph() {
         if (!graphStarted) {
             graphStarted = true
             graph.start() // → ModeController.start(): welcome (FR-G1), frames, warm-up
         }
-        // XR permissions are optional for the rest of the app, but required before creating this session.
-        if (graph.deviceProfile.isXr && Permissions.xr.all { Permissions.isGranted(this, it) }) {
-            // R3: the ARCore for Jetpack XR session needs this Activity (stack.md D7); null on the S25 Ultra.
-            graph.perception?.let { session -> lifecycleScope.launch { session.start(this@MainActivity) } }
-        }
+        // R3: the ARCore for Jetpack XR session needs this Activity (stack.md D7); a no-op on the S25 Ultra.
+        // AppGraph orders it after the previous onStop's perception teardown (quick headset off/on).
+        if (graph.perception != null) lifecycleScope.launch { graph.startPerception(this@MainActivity) }
     }
 
     private companion object {
         const val TAG = "vysion"
         const val LATENCY_TAG = "vysion.latency"
         const val RELIABILITY_TAG = "vysion.reliability"
+        const val SECURITY_TAG = "vysion.security"
         const val NANOS_PER_MS = 1_000_000L
     }
 }

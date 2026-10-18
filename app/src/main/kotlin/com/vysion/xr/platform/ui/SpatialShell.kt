@@ -31,7 +31,6 @@ import androidx.xr.runtime.Session
 import androidx.xr.scenecore.SpatialCapability
 import androidx.xr.scenecore.scene
 import com.vysion.xr.AppGraph
-import com.vysion.xr.diagnostics.DiagnosticsOverlay
 import kotlinx.coroutines.launch
 
 /**
@@ -57,9 +56,12 @@ import kotlinx.coroutines.launch
  * ```
  * When spatial UI is not enabled (Home Space, or a runtime without the feature) the shell requests
  * Full Space once (docs/stack.md Q4 fallback) and shows [FlatShell] meanwhile (ADR-0006).
+ *
+ * [diagnostics] is the FR-G5 overlay slot that `MainActivity` fills with R5's `DiagnosticsOverlay`, so
+ * this package never imports `com.vysion.xr.diagnostics` (ADR-0005).
  */
 @Composable
-fun SpatialShell(graph: AppGraph) {
+fun SpatialShell(graph: AppGraph, diagnostics: @Composable () -> Unit) {
     val capabilities = LocalSpatialCapabilities.current
     val session = LocalSession.current
 
@@ -77,7 +79,7 @@ fun SpatialShell(graph: AppGraph) {
     }
 
     if (!capabilities.isSpatialUiEnabled) {
-        FlatShell(graph)
+        FlatShell(graph, diagnostics)
         return
     }
 
@@ -109,7 +111,9 @@ fun SpatialShell(graph: AppGraph) {
                 }
             }
             // FR-T2: 48 sp white on black (21:1); movable and resizable by the user.
-            SpatialPanel(SubspaceModifier.width(TRANSCRIPT_PANEL_WIDTH).height(TRANSCRIPT_PANEL_HEIGHT).movable().resizable()) {
+            SpatialPanel(
+                SubspaceModifier.width(TRANSCRIPT_PANEL_WIDTH).height(TRANSCRIPT_PANEL_HEIGHT).movable().resizable(),
+            ) {
                 Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
                     TranscriptPanel(
                         transcript = shell.transcript,
@@ -133,7 +137,7 @@ fun SpatialShell(graph: AppGraph) {
                     }
                     if (diagnosticsShown) {
                         Box(modifier = Modifier.align(Alignment.TopEnd).padding(PANEL_MARGIN)) {
-                            DiagnosticsOverlay(source = graph.diagnostics) // FR-G5 (R5)
+                            diagnostics() // FR-G5 (R5's DiagnosticsOverlay, passed in by MainActivity)
                         }
                     }
                 }

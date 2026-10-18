@@ -6,11 +6,11 @@ Protocol (SRS §7): **20 runs per model on the headset in airplane mode; report 
 
 | Model | Quantization | Backend | File size | Load time | Median latency | p90 latency | Peak PSS | Runs | Device | Date | Airplane mode |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| VLM (Gemma 4 edge multimodal) | not measured | not measured | not measured | not measured | not measured | not measured | not measured | 0 | Galaxy XR | | |
+| VLM (path chosen at `plan.md` Q6, recorded in `docs/model-plan.md`) | not measured | not measured | not measured | not measured | not measured | not measured | not measured | 0 | Galaxy XR | | |
 | Detector (YOLO26-n COCO) | not measured | not measured | not measured | not measured | not measured | not measured | not measured | 0 | Galaxy XR | | |
-| VLM fallback (SmolVLM-500M), only if RK-2 triggers | not measured | not measured | not measured | not measured | not measured | not measured | not measured | 0 | Galaxy XR | | |
+| VLM fallback (smaller `LlmModule`-compatible export), only if RK-2 triggers | not measured | not measured | not measured | not measured | not measured | not measured | not measured | 0 | Galaxy XR | | |
 
-Latency for the VLM is "capture to first spoken word" for the READ prompt with 60 max tokens; for the detector it is ms per 640x480 frame.
+VLM median/p90 = wall time of `InferenceEngine.describe(still, READ, 60)` from the debug `BenchmarkReceiver` (a fresh `Bitmap` per run, full generation, no TTS). The input is a live `captureStill()`, so point the headset at a printed sign for the whole run; without a camera the receiver uses a synthetic dark-gray frame (`vysion.bench: input: captureStill unavailable; synthetic …`), on which READ answers "No text found" in a few tokens: such a run is not pasted here. No bundled frame exists yet (r5 page P1 item). Capture → first spoken word is the NFR row below, taken from the `vysion.latency: read capture->first-word <ms> ms` line that R1 still has to add (r1 page P0 item); until then it stays "not measured". Detector median/p90 = wall time of one `detect()` on one frame.
 
 ## NFR targets vs measured
 

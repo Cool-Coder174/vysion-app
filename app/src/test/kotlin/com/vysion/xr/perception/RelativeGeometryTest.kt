@@ -97,7 +97,8 @@ class RelativeGeometryTest {
         val s = 0.70710677f
         assertEquals(45f, HeadAngles.fromForwardUp(Vec3(0f, s, -s), Vec3(0f, s, s)).second, 1e-3f) // looking up
 
-        val tiltedRight = HeadAngles.fromForwardUp(Vec3.FORWARD, Vec3(0.5f, 0.8660254f, 0f)) // top of the head moved right
+        // top of the head moved right
+        val tiltedRight = HeadAngles.fromForwardUp(Vec3.FORWARD, Vec3(0.5f, 0.8660254f, 0f))
         assertEquals(30f, tiltedRight.third, 1e-3f)
     }
 

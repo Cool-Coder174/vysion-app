@@ -13,6 +13,12 @@ import kotlinx.coroutines.flow.asStateFlow
  * the package).
  */
 internal interface AnchorPinger {
+    /**
+     * A-6: `null` until known, `true` while spatial pings play, `false` when the last ping could not play
+     * spatially. [XrNavigationEngine] reads it right after [ping] to set `NavigationCue.DoorBearing.pinged`.
+     */
+    val isSpatial: StateFlow<Boolean?>
+
     suspend fun attach(anchor: AnchorId)
     fun ping()
     fun detach()
@@ -34,10 +40,12 @@ internal interface AnchorPinger {
  *   `USAGE_MEDIA` / `CONTENT_TYPE_MUSIC`, which SceneCore refuses to spatialize).
  * - Assumption A-6: "SceneCore spatial audio point source is available and audible through the headset
  *   speakers" (Sat 13:00). If it fails: "non-spatial earcon through `Speaker.earcon(PING)`; say the
- *   bearing more often (every 2 s)". That fallback is R4's earcon played by R1 on each `DoorBearing`
- *   cue; [isSpatial] tells R1 (through the module doc's contract note) whether it is needed. The ping
- *   sound itself is an R4 earcon asset (`Earcons`), not a string; see docs/modules/r3-spatial-perception.md
- *   "Dependencies needed".
+ *   bearing more often (every 2 s)". [isSpatial] drives both halves: [XrNavigationEngine] copies it into
+ *   `NavigationCue.DoorBearing.pinged` (R1 plays R4's `Earcon.PING` through the `Speaker` when false)
+ *   and shortens its guidance period to 2 s. A ping that cannot play for any reason (no entity, no
+ *   sound loaded, `SPATIAL_AUDIO` missing, `play` failed) reports `false`, so the user always hears a
+ *   ping. The ping sound itself is an R4 earcon asset (`Earcons`), not a string; see
+ *   docs/modules/r3-spatial-perception.md "Dependencies needed".
  */
 class SpatialAudioPinger(private val session: XrPerceptionSession) : AnchorPinger {
 
@@ -48,7 +56,7 @@ class SpatialAudioPinger(private val session: XrPerceptionSession) : AnchorPinge
     private val _isSpatial = MutableStateFlow<Boolean?>(null)
 
     /** `null` until the A-6 probe ran; `false` means R1 should play the plain `Earcon.PING` instead. */
-    val isSpatial: StateFlow<Boolean?> = _isSpatial.asStateFlow()
+    override val isSpatial: StateFlow<Boolean?> = _isSpatial.asStateFlow()
 
     /**
      * Real implementation:
@@ -59,11 +67,18 @@ class SpatialAudioPinger(private val session: XrPerceptionSession) : AnchorPinge
      *     val attrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
      *         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
      *     soundPool = SoundPool.Builder().setMaxStreams(1).setAudioAttributes(attrs).build().also { pool ->
-     *         soundId = pool.load(session.app.assets.openFd(PING_ASSET), 1)   // asset from R4's Earcons
+     *         // Loading is asynchronous: the id is usable only after the listener reports status 0.
+     *         pool.setOnLoadCompleteListener { _, id, status -> if (status == 0) soundId = id }
+     *         pool.load(session.assets.openFd(PING_ASSET), 1)   // asset from R4 (r4 page, Speaker P0 item)
      *     }
      * }
-     * _isSpatial.value = session.spatialAudioSupported.value
+     * _isSpatial.value = session.spatialAudioSupported.value   // set by XrPerceptionSession.open() (A-6 probe)
      * ```
+     * `XrPerceptionSession.app` is private: add `internal val assets: AssetManager get() = app.assets` to
+     * `XrPerceptionSession` (package-internal, ADR-0005 unaffected) for the `openFd` above. `openFd` needs the
+     * asset stored uncompressed; AAPT leaves `.ogg` uncompressed by default. Keep [soundId] at -1 until the
+     * listener fires, and in [ping] return early WITHOUT touching [isSpatial] while `soundPool != null` but the
+     * sound is still loading (a few ms for a 4 KB file), so a load still in flight never reports A-6 as failed.
      */
     override suspend fun attach(anchor: AnchorId) {
         detach()
@@ -75,16 +90,25 @@ class SpatialAudioPinger(private val session: XrPerceptionSession) : AnchorPinge
         )
     }
 
-    /** One ping from the anchor entity; called every 3 s by the guidance loop. Never throws. */
+    /**
+     * One ping from the anchor entity; called every 3 s by the guidance loop (2 s while [isSpatial] is
+     * false). Never throws. Updates [isSpatial] on every call so the cue of this tick carries the truth.
+     */
     override fun ping() {
         val e = entity
         val pool = soundPool
         if (e == null || pool == null || soundId < 0) {
-            Log.w(XrPerceptionSession.TAG, "TODO(FR-N3) SpatialAudioPinger.ping: SpatialSoundPool.play(session, soundPool, soundID, PointSourceParams(), entity, 1f, 0, 0, 1f)")
+            Log.w(
+                XrPerceptionSession.TAG,
+                "TODO(FR-N3) SpatialAudioPinger.ping: SpatialSoundPool.play(session, soundPool, soundID, " +
+                    "PointSourceParams(), entity, 1f, 0, 0, 1f)",
+            )
+            _isSpatial.value = false // nothing played: R1 plays the non-spatial Earcon.PING (A-6 fallback)
             return
         }
+        // SoundPool.play returns 0 on failure; playPointSource returns -1 when SPATIAL_AUDIO is missing.
         val stream = session.playPointSource(e, pool, soundId)
-        if (stream < 0) _isSpatial.value = false
+        _isSpatial.value = stream > 0
     }
 
     override fun detach() {

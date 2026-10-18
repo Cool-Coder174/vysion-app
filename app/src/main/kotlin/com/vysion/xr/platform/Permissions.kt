@@ -72,7 +72,7 @@ object Permissions {
     fun missing(context: Context, isXr: Boolean): List<String> =
         required(isXr).filterNot { isGranted(context, it) }
 
-    /** The app can start when the core pair is granted; XR denials degrade R3 features, they do not block (ADR-0006). */
+    /** The app can start when the core pair is granted; XR denials degrade R3 features without blocking (ADR-0006). */
     fun canStart(context: Context): Boolean = core.all { isGranted(context, it) }
 
     /** Pure form of [canStart] for a grant map returned by the launcher. */

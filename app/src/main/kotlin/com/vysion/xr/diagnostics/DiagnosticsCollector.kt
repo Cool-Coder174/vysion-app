@@ -46,7 +46,8 @@ import kotlinx.coroutines.launch
  * docs/architecture.md ("alarm at 3.5 GB PSS") under `vysion.reliability` once per crossing.
  *
  * Never throws from the constructor (the app must launch, AGENTS.md): every collection runs inside
- * [scope] and catches its own failures. Cancelling [scope] (AppGraph.stop) ends the sampling.
+ * [scope] and catches its own failures. Only `AppGraph.release()` cancels [scope]; `AppGraph.stop()` (onStop)
+ * keeps it, so sampling continues at 1 Hz while the app is stopped.
  */
 class DiagnosticsCollector internal constructor(
     private val engine: InferenceEngine,
@@ -56,6 +57,8 @@ class DiagnosticsCollector internal constructor(
     private val auditNetworkPermission: () -> String?,
     private val wallClockMs: () -> Long = System::currentTimeMillis,
     private val memoryPeriodMs: Long = MEMORY_PERIOD_MS,
+    /** Monotonic clock (H-21) for aging the detector fps; same clock as `InferenceStats.lastDetectAtNanos`. */
+    private val monotonicNanos: () -> Long = System::nanoTime,
 ) : DiagnosticsSource {
 
     /** The `AppGraph.kt` constructor: real sampler and audit on the device. */
@@ -90,14 +93,17 @@ class DiagnosticsCollector internal constructor(
                 memorySamples(),
                 manifestAudit(),
             ) { vlm, detector, stats, memoryMb, networkPermission ->
-                compose(vlm, detector, stats, memoryMb, networkPermission, wallClockMs())
+                compose(vlm, detector, stats, memoryMb, networkPermission, wallClockMs(), monotonicNanos())
             }.collect { next ->
                 val previous = _snapshot.value
                 _snapshot.value = next
-                // NFR Memory: budget 4 GB, alarm at 3.5 GB PSS (docs/architecture.md). The reaction
-                // (unload detector, refuse VLM calls with Cues.busy) belongs to R1/R2; this is the evidence line.
+                // NFR Memory: budget 4 GB, alarm at 3.5 GB PSS (docs/architecture.md). The app does not react
+                // on its own: this line is the signal, and the operator takes the RK-2/RK-3 decision (docs/nfr.md).
                 if (crossedMemoryAlarm(previous.appMemoryMb, next.appMemoryMb)) {
-                    Log.w(RELIABILITY_TAG, "PSS alarm: ${next.appMemoryMb} MB > $PSS_ALARM_MB MB (NFR Memory budget 4 GB)")
+                    Log.w(
+                        RELIABILITY_TAG,
+                        "PSS alarm: ${next.appMemoryMb} MB > $PSS_ALARM_MB MB (NFR Memory budget 4 GB)",
+                    )
                 }
             }
         } catch (e: CancellationException) {
@@ -139,6 +145,9 @@ class DiagnosticsCollector internal constructor(
         private const val TAG = "vysion"
         private const val RELIABILITY_TAG = "vysion.reliability"
 
+        /** FpsWindow.DEFAULT_WINDOW_NANOS (R2): no detect for a whole 5 s window → the overlay reads 0.0 fps. */
+        const val DETECTOR_FPS_WINDOW_NANOS: Long = 5_000_000_000L
+
         /** NFR Memory: "sampled every 1 s". */
         const val MEMORY_PERIOD_MS: Long = 1_000L
 
@@ -151,8 +160,11 @@ class DiagnosticsCollector internal constructor(
          *   Two different backends are both shown ("XNNPACK / QNN") so a QNN stretch build is never mistaken
          *   for the shipping XNNPACK one (ADR-0002).
          * - `detectorFps` is `null` until the detector has run once ([InferenceStats.lastDetectMs] is `null`);
-         *   after that the engine's 5 s window value is shown as is, including 0.0 while the detector is
-         *   unloaded during a VLM call (ADR-0004), which is a measurement, not a placeholder.
+         *   after that the engine's 5 s window value, aged by [detectorFpsOf]: 0.0 while the detector is
+         *   unloaded during a VLM call (ADR-0004, the engine resets its window) or once no detect ran for a
+         *   whole window (Navigation stopped, every detect throwing). A measurement, never a stale number.
+         * - `detectorLoaded` (INV-2 monitor) is `null` until the detector's [ModelInfo] is known, then
+         *   [InferenceStats.detectorLoaded].
          * - `lastVlmMs` / `medianVlmMs` are passed through: the engine measures them on a monotonic clock.
          */
         internal fun compose(
@@ -162,16 +174,18 @@ class DiagnosticsCollector internal constructor(
             appMemoryMb: Int?,
             networkPermission: String?,
             measuredAtMs: Long,
+            nowNanos: Long = System.nanoTime(),
         ): DiagnosticsSnapshot = DiagnosticsSnapshot(
             vlm = vlm,
             detector = detector,
             backend = backendOf(vlm, detector),
             lastVlmMs = stats.lastVlmMs,
             medianVlmMs = stats.medianVlmMs,
-            detectorFps = detectorFpsOf(stats),
+            detectorFps = detectorFpsOf(stats, nowNanos),
             appMemoryMb = appMemoryMb,
             networkPermission = networkPermission,
             measuredAtMs = measuredAtMs,
+            detectorLoaded = if (detector == null) null else stats.detectorLoaded,
         )
 
         internal fun backendOf(vlm: ModelInfo?, detector: ModelInfo?): String? =
@@ -182,9 +196,16 @@ class DiagnosticsCollector internal constructor(
                 .takeIf { it.isNotEmpty() }
                 ?.joinToString(" / ")
 
-        /** `null` = the detector never ran (not measured); otherwise the engine's 5 s sliding-window fps (FR-N2). */
-        internal fun detectorFpsOf(stats: InferenceStats): Float? =
-            if (stats.lastDetectMs == null) null else stats.detectorFps
+        /**
+         * `null` = the detector never ran (not measured); otherwise the engine's 5 s sliding-window fps (FR-N2),
+         * or 0 when the last detect is older than [DETECTOR_FPS_WINDOW_NANOS] at [nowNanos] (a dead detector loop
+         * must not keep printing its last fps, nor pass the soak row). Also used by the debug BenchmarkRunner.
+         */
+        internal fun detectorFpsOf(stats: InferenceStats, nowNanos: Long = System.nanoTime()): Float? {
+            if (stats.lastDetectMs == null) return null
+            val last = stats.lastDetectAtNanos ?: return stats.detectorFps
+            return if (nowNanos - last > DETECTOR_FPS_WINDOW_NANOS) 0f else stats.detectorFps
+        }
 
         /** Edge-triggered: true only on the sample that crosses [PSS_ALARM_MB] upwards. */
         internal fun crossedMemoryAlarm(previousMb: Int?, currentMb: Int?): Boolean =

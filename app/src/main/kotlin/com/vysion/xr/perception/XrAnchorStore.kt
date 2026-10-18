@@ -10,18 +10,23 @@ import com.vysion.xr.core.HorizontalBearing
 import com.vysion.xr.core.RelativeTarget
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.transformWhile
 import kotlin.math.abs
 import kotlin.math.sqrt
 
 /**
- * Where the VLM's one-word answer points, as an angle relative to the head's forward direction at
- * capture time (FR-N3 "samples depth along that bearing"). The still is center-cropped to the VLM
- * input, so "left / center / right" are the thirds of the world camera's horizontal field of view.
- * Until that FOV is measured on the headset (stack.md Q3 logs it), the third centers are taken as
- * ±30°, the FR-N1 cone half-angle; refine `LEFT_DEG` / `RIGHT_DEG` from the logged FOV
- * (`±hfov / 3`). Not displayed anywhere, so not subject to INV-7.
+ * Where the VLM's one-word answer points, as an angle relative to the head's forward direction
+ * (FR-N3 "samples depth along that bearing"). The still is center-cropped to the VLM input, so
+ * "left / center / right" are the thirds of the CROPPED still's horizontal field of view `hfovCrop`, whose
+ * centers sit at `±atan((2/3)·tan(hfovCrop/2))` (≈ `±hfovCrop/3` for a narrow FOV). Until R1 logs
+ * `vysion: still hfov=<deg> deg (A-1)` (stack.md Q3, corrected), the centers are taken as ±30°, the FR-N1
+ * cone half-angle; then set `LEFT_DEG` / `RIGHT_DEG` from that line and record it in docs/assumptions.md A-1.
+ * Not displayed anywhere, so not subject to INV-7.
+ *
+ * Which head yaw the offset is added to: the contract intends the yaw at `captureStill()` time, but
+ * `AnchorStore.placeFromBearing` has no time parameter, so [XrAnchorStore] uses the yaw when it is called,
+ * which `ModeController.findDoor` reaches only after both VLM answers. Open contract proposal: r3 module page
+ * "Contract issues" 6 / docs/contracts.md "Open contract proposals".
  */
 object BearingAngles {
     const val LEFT_DEG: Float = -30f
@@ -106,13 +111,21 @@ class XrAnchorStore internal constructor(
      * FR-N3: head yaw + [BearingAngles] → world bearing → depth sample along it → native anchor.
      * Returns `null` ("no usable depth", the contract's own value) when there is no pose, no depth or
      * no tracking; the controller then speaks `Cues.doorNotFound` (R4). Never throws.
+     *
+     * The head yaw is read NOW (call time), not at capture time: if the user turned during the two VLM calls
+     * (up to 2 × 15 s), the anchor goes in the wrong direction (r3 page "Contract issues" 6). Until the session
+     * stub (`XrPerceptionSession.open`, `TODO(FR-N1)`) and its head feeder land, this always logs "no tracked
+     * head pose" and returns `null`.
      */
     override suspend fun placeFromBearing(bearing: HorizontalBearing): AnchorId? {
         val relDeg = BearingAngles.degreesFor(bearing) ?: return null
         source.ensureStarted()
         val head = source.headPose.value
         if (head == null || head.tracking != Tracking.TRACKING) {
-            Log.w(XrPerceptionSession.TAG, "placeFromBearing: no tracked head pose; cannot place the door anchor (FR-N3)")
+            Log.w(
+                XrPerceptionSession.TAG,
+                "placeFromBearing: no tracked head pose; cannot place the door anchor (FR-N3)",
+            )
             return null
         }
         val worldYaw = HeadAngles.wrapDeg(head.yawDeg + relDeg)
@@ -121,26 +134,29 @@ class XrAnchorStore internal constructor(
         val placedAt = RelativeGeometry.relative(head.position, head.yawDeg, point)
         Log.i(
             XrPerceptionSession.TAG,
-            "anchor ${id.value} placed: bearing $bearing (${relDeg}°), ${placedAt.distanceM} m, clock ${placedAt.clock} (FR-N3)",
+            "anchor ${id.value} placed: bearing $bearing (${relDeg}°), ${placedAt.distanceM} m, " +
+                "clock ${placedAt.clock} (FR-N3)",
         )
         return id
     }
 
     /**
      * Relative target every time the anchor pose or the head pose changes; emits only while the anchor
-     * is [Tracking.TRACKING] and **completes** when it is [Tracking.STOPPED] (detached or lost), which
-     * [XrNavigationEngine] turns into [com.vysion.xr.core.NavigationCue.TargetLost]. While PAUSED it
-     * stays silent (the engine's stale timeout handles a long pause). FR-N4: nothing here needs the
-     * anchor to be in view; the native anchor keeps its world pose.
+     * is [Tracking.TRACKING] and the head pose is tracked, and **completes** when the anchor is
+     * [Tracking.STOPPED] (detached, lost, or an id the session never created), which [XrNavigationEngine]
+     * turns into [com.vysion.xr.core.NavigationCue.TargetLost]. Completion depends on the anchor only:
+     * a missing or untrusted head pose makes the flow silent, never keeps a dead anchor alive. While
+     * PAUSED it stays silent (the engine's stale timeout handles a long pause). FR-N4: nothing here
+     * needs the anchor to be in view; the native anchor keeps its world pose.
      */
     override fun track(id: AnchorId): Flow<RelativeTarget> =
-        combine(source.anchorPose(id), source.headPose.filterNotNull()) { anchor, head -> anchor to head }
+        combine(source.anchorPose(id), source.headPose) { anchor, head -> anchor to head }
             .transformWhile { (anchor, head) ->
                 when (anchor.tracking) {
                     Tracking.STOPPED -> false
                     Tracking.PAUSED -> true
                     Tracking.TRACKING -> {
-                        if (head.tracking == Tracking.TRACKING) {
+                        if (head != null && head.tracking == Tracking.TRACKING) {
                             emit(RelativeGeometry.relative(head.position, head.yawDeg, anchor.position))
                         }
                         true

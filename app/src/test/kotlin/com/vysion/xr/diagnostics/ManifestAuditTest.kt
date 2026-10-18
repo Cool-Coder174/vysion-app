@@ -35,7 +35,10 @@ class ManifestAuditTest {
 
     @Test
     fun `internet is reported by its short name`() {
-        assertEquals("INTERNET", ManifestAudit.classify(arrayOf("android.permission.CAMERA", "android.permission.INTERNET")))
+        assertEquals(
+            "INTERNET",
+            ManifestAudit.classify(arrayOf("android.permission.CAMERA", "android.permission.INTERNET")),
+        )
     }
 
     @Test
@@ -60,8 +63,11 @@ class ManifestAuditTest {
 
     @Test
     fun `classification set matches the privacy gate regex`() {
-        // scripts/check_privacy.sh NET_PERMS='android\.permission\.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE)'
-        val gate = Regex("android\\.permission\\.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE)")
+        // scripts/check_privacy.sh NET_PERMS=
+        //   'android\.permission\.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE)'
+        val gate = Regex(
+            "android\\.permission\\.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE)",
+        )
         assertEquals(4, ManifestAudit.NETWORK_PERMISSIONS.size)
         assertTrue(ManifestAudit.NETWORK_PERMISSIONS.all { gate.matches(it) })
     }

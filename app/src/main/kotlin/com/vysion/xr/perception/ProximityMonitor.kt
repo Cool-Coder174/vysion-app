@@ -91,8 +91,10 @@ object DepthCone {
      */
     fun pixelForBearing(relYawDeg: Float, relPitchDeg: Float, width: Int, height: Int, fov: FovDeg): Pair<Int, Int>? {
         if (abs(relYawDeg) >= 90f || abs(relPitchDeg) >= 90f) return null
-        val x = (centerX(width) + focalLengthPx(width, fov.horizontal) * tan(Math.toRadians(relYawDeg.toDouble()))).roundToInt()
-        val y = (centerY(height) - focalLengthPx(height, fov.vertical) * tan(Math.toRadians(relPitchDeg.toDouble()))).roundToInt()
+        val tanYaw = tan(Math.toRadians(relYawDeg.toDouble()))
+        val tanPitch = tan(Math.toRadians(relPitchDeg.toDouble()))
+        val x = (centerX(width) + focalLengthPx(width, fov.horizontal) * tanYaw).roundToInt()
+        val y = (centerY(height) - focalLengthPx(height, fov.vertical) * tanPitch).roundToInt()
         if (x !in 0 until width || y !in 0 until height) return null
         return x to y
     }

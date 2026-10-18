@@ -13,6 +13,7 @@ No Android Studio is needed for any step. The Android XR emulator (optional, §9
 | Command-line tools | `cmdline-tools;latest` (gives `sdkmanager`) | to install the packages above without Android Studio |
 | Python 3 | any `python3` | `scripts/fetch_models.sh`, `scripts/push_models.sh` and `scripts/benchmark.sh` parse JSON with it |
 | Git | any | clone |
+| ffmpeg (R4 only, once) | any build with `libvorbis` (`ffmpeg -encoders \| grep libvorbis`; checked with 7.1.1) | renders `app/src/main/assets/sounds/ping.ogg`, the one audio asset (command in `docs/modules/r4-voice-accessibility.md`, `Speaker` P0 item); nobody else needs it |
 | Disk | several GB free | Gradle caches, the ExecuTorch AAR with native libraries, and the model files (A-x sizes are measured, not estimated here) |
 
 Build tool versions you do **not** install: Gradle **9.6.1** comes from the wrapper (`gradle/wrapper/gradle-wrapper.properties`), AGP **9.4.1**, Kotlin **2.4.21** and the Compose compiler plugin come from Maven on the first build.
@@ -146,7 +147,9 @@ scripts/fetch_models.sh --from ~/exports    # or copy artifacts you just exporte
 scripts/push_models.sh                      # sideload whatever is in assets/models (or --from <dir>) and size-verify on the device
 ```
 
-Both scripts verify what they move: sha256 against the lockfile for fetch, byte size on the device for push (`--sha256` for a full hash). Export recipes: `ml/README.md` (R2). Prebuilt artifacts are attached to the release tag ([`modules/r5-integration.md`](modules/r5-integration.md), release procedure).
+**Precondition for either path: a lockfile the app can read.** `ModelCatalog` reads `assets/models/models.lock` (gitignored, so a fresh clone has none; `scripts/fetch_models.sh` copies it there before it exits 2 on `TBD` rows, then `./gradlew assembleDebug` bundles it) and falls back to `/sdcard/Android/data/com.vysion.xr/files/models/models.lock`, which `scripts/push_models.sh` pushes. With neither, logcat says `No models will resolve` and nothing loads.
+
+Both scripts verify what they move: sha256 against the lockfile for fetch, byte size on the device for push (`--sha256` for a full hash). The app checks again before loading: a sideloaded file whose size or sha256 differs from a non-`TBD` lockfile row is refused and logged under `vysion.security` (fail closed, plan.md Security). Export recipes: `ml/README.md` (R2). Prebuilt artifacts are attached to the release tag ([`modules/r5-integration.md`](modules/r5-integration.md), release procedure).
 
 ## 7. Airplane mode: every benchmark and the demo
 
@@ -169,11 +172,26 @@ adb shell cmd connectivity airplane-mode disable     # off
 ./gradlew testDebugUnitTest                 # the JVM tests always use the fakes; no device, no models
 ```
 
-What you get: the app launches, the welcome is spoken, every command returns a canned answer after a short fake delay, the overlay shows the fake model (`fake-vlm`, backend `FAKE`) with real memory and the real manifest audit, and the 2D layout on a phone. What you do not get: camera frames, XR perception, ExecuTorch, or any number worth writing down. Fakes exist so a module builds and tests before the real thing lands (ADR-0005); they are never evidence for a P0 item.
+On a laptop without an XR-capable emulator, use an Android 14 (API 34, the Galaxy XR's level) phone AVD:
+
+```bash
+sdkmanager --install "emulator" "system-images;android-34;google_apis;x86_64"   # arm64-v8a instead on Apple Silicon
+avdmanager create avd -n Vysion_Phone_API34 -k "system-images;android-34;google_apis;x86_64" -d pixel_8
+emulator -avd Vysion_Phone_API34 -no-snapshot-save &                            # add -no-window -no-audio for headless
+adb wait-for-device && ./gradlew installDebug -PuseFakes=true
+adb shell pm grant com.vysion.xr android.permission.CAMERA && adb shell pm grant com.vysion.xr android.permission.RECORD_AUDIO
+adb shell am start -n com.vysion.xr/.MainActivity
+```
+
+The APK is arm64-only (`abiFilters`); it still installs and runs on the x86_64 Android 14 image through the image's built-in ARM translation, which is fine for fakes and useless for ExecuTorch timing. Verified on 2026-10-17 on an Intel MacBook Pro (i9-9880H, 16 GB): emulator 37.2.12, cold launch 8.5 s, no crash; logcat showed `DeviceProfile: … (2D fallback)` and `manifest audit: network=none`.
+
+What you get: the app launches, the welcome and every answer go to `Speaker.say` (logcat shows `TODO(FR-G4) AndroidTtsPort.speak … dropping utterance` until R4 implements the TTS port, so nothing is audible yet), Read and Describe put the canned answer in the transcript panel, Navigation (GuideMe, FindDoor) reports unavailable (perception is `NoOp*` under fakes), the overlay shows the fake model (`fake-vlm`, backend `FAKE`) with real memory and the real manifest audit but no detector outlines (`NoOpNavigationEngine` emits no detections), and the 2D layout on a phone. What you do not get: camera frames, XR perception, ExecuTorch, or any number worth writing down. Fakes exist so a module builds and tests before the real thing lands (ADR-0005); they are never evidence for a P0 item.
 
 ## 9. Optional: the Android XR emulator
 
 Needs Android Studio (the XR tooling is absent from stable; stack.md §1 names the current **Canary**, Android Studio Rabbit 2 \| 2026.2.2 Canary 5 on 2026-10-17) and the system image `system-images;android-34;android-xr-preview-playstore;arm64-v8a` (API 34, macOS 13.3+ on Apple Silicon, 16 GB RAM). It is useful for the panel layout only: no world camera, no ExecuTorch numbers, no depth. Run the app there with `-PuseFakes=true`. The APK is arm64-only (`abiFilters`), which matches the arm64 image on Apple Silicon; on an x86_64 Linux host the arm64 image is slow or unavailable, so prefer the S25 Ultra.
+
+**Intel Macs cannot run the XR emulator at all.** Every Android XR system image Google publishes is arm64-v8a only (`system-images;android-34;android-xr-preview-playstore;arm64-v8a`, `…;android-xr-v3-playstore;arm64-v8a`, `…;google-xr;arm64-v8a`, checked with `sdkmanager --list` on 2026-10-17), and the XR emulator requires Apple Silicon. Do not download the image on an Intel Mac: it will not boot. On Intel, the XR targets are the real Galaxy XR over ADB (§4–§5) and, for the 2D path, the phone AVD in §8.
 
 ## 10. Troubleshooting
 
@@ -186,14 +204,16 @@ Needs Android Studio (the XR tooling is absent from stable; stack.md §1 names t
 | `Could not find androidx.xr.*` / `org.pytorch:executorch-android:1.3.1` | repository or version typo; offline | compare `gradle/libs.versions.toml` with `stack.md` §1; `./gradlew --refresh-dependencies`; the machine needs network for the first build only |
 | `Could not resolve org.jetbrains.kotlin.plugin.compose:2.4.21` or a Kotlin/AGP version clash | the compose-plugin lift of the built-in Kotlin misbehaves (stack.md D10) | set `kotlin = "2.2.10"` in the TOML (AGP 9.4.1's bundled KGP) and record it in stack.md "Corrections" |
 | `adb: no devices/emulators found` or the device shows `unauthorized` | USB debugging off, cable is charge-only, or the "Allow USB debugging" dialog is still open in the headset | §4; use a data cable in the headset's side port; put the headset on and accept; `adb kill-server && adb devices` |
+| `adb devices` is empty right after updating platform-tools, although the headset is plugged in and authorized | the old `adb` server from before the update is still running | `adb kill-server && adb start-server && adb devices` (seen 2026-10-17 on the Galaxy XR) |
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.vysion.xr signatures do not match` | another laptop installed its own debug build; every machine has a different debug key | `adb uninstall com.vysion.xr` (also deletes the app's storage, including sideloaded models: check `adb shell ls /sdcard/Android/data/com.vysion.xr/files/models` first), then reinstall. To stop it recurring during the 15-minute merge cadence, let R5 install every build from one laptop |
 | `adb connect` works, then the device vanishes | airplane mode (or a reboot) cut Wi-Fi debugging | re-pair (§4) or use USB; install before airplane mode |
-| App speaks "model not found" / overlay model row says "not measured" | no `.pte` where the engine looks: nothing pushed and nothing in assets (lockfile rows still `url: TBD`) | `scripts/push_models.sh` (dev) or `scripts/fetch_models.sh` + reinstall; `adb shell ls -l /sdcard/Android/data/com.vysion.xr/files/models/` should list `vlm.pte`, `vlm-tokenizer.*`, `detector.pte` |
+| App speaks "model not found" / overlay model row says "not measured" | no `.pte` where the engine looks (nothing pushed, nothing in assets), no lockfile on the device (§6 precondition), a sideloaded file failed its size/sha256 check (`adb logcat -s vysion.security`), or the model did not load (the overlay names a model only once it is loaded) | `scripts/push_models.sh` (dev) or `scripts/fetch_models.sh` + reinstall; `adb shell ls -l /sdcard/Android/data/com.vysion.xr/files/models/` should list `vlm.pte`, `vlm-tokenizer.json`, `detector.pte`, `models.lock` |
 | `fetch_models.sh` exits 2 | rows in `ml/models.lock` still say `url: TBD` | expected until R2 publishes; build with `ml/export/*.sh` and `--from <dir>`, or download the release assets |
 | `push_models.sh`: `Permission denied` under `/sdcard/Android/data/...` | app not installed yet, so the package directory is not the app's | install first (§5), launch once, push again |
 | No camera frames; logcat `vysion` has no `camera 0: ...` line; app says the camera is unavailable | `CAMERA` permission denied, or the firmware does not expose camera id 0 to apps (A-1 / RK-1) | Settings → Apps → Vysion XR → Permissions → Camera; if granted and still nothing, take the A-1 fallback (Read/Describe on the S25 Ultra) |
-| Overlay shows `Network permission: INTERNET` (or `ACCESS_NETWORK_STATE`) | a dependency merged a network permission into the APK | `scripts/check_privacy.sh` after `assembleDebug` names it; the `tools:node="remove"` guard in the manifest strips `INTERNET`; add the same guard for the offending permission and rebuild (ADR-0003) |
+| Overlay shows `Network permission: INTERNET` (or `ACCESS_NETWORK_STATE`) | a dependency merged a network permission into the APK | `scripts/check_privacy.sh` after `assembleDebug` names it; the `tools:node="remove"` guards in the manifest strip `INTERNET` and `ACCESS_NETWORK_STATE`; add the same guard for the offending permission (after `javap` shows the library tolerates it) and rebuild (ADR-0003) |
 | TalkBack is on and the headset reads every control aloud while you debug | TalkBack was enabled for the accessibility pass (R4, Q14) | off: `adb shell settings put secure enabled_accessibility_services ""` · on again: enable it once through Settings → Accessibility, read the component with `adb shell settings get secure enabled_accessibility_services` (Google's is `com.google.android.marvin.talkback/com.google.android.marvin.talkback.TalkBackService`; Galaxy devices may ship Samsung's own), then `adb shell settings put secure enabled_accessibility_services <that value>` and `adb shell settings put secure accessibility_enabled 1` |
-| logcat `vysion.reliability`: `PSS alarm: N MB > 3500 MB` | resident memory crossed the 3.5 GB alarm from the 4 GB budget (NFR Memory; VLM resident size larger than estimated) | expected reaction: detector unloaded, new VLM calls refused with `Cues.busy` until PSS < 3 GB (R1/R2); for the numbers, `scripts/benchmark.sh --model vlm` and the RK-2 decision tree in `model-plan.md` |
+| logcat `vysion.reliability`: `PSS alarm: N MB > 3500 MB` | resident memory crossed the 3.5 GB alarm from the 4 GB budget (NFR Memory; VLM resident size larger than estimated) | the app does not react on its own: `DiagnosticsCollector` logs the alarm and the operator takes the RK-2/RK-3 decision (smaller VLM export, token cap); for the numbers, `scripts/benchmark.sh --model vlm` and the RK-2 decision tree in `model-plan.md` |
 | `benchmark.sh`: `REFUSING: airplane mode is off` | the protocol requires it (SRS §7) | `adb shell cmd connectivity airplane-mode enable` over USB |
 | `benchmark.sh`: `no result file at files/bench/<model>-latest.json after the deadline` | the debug `BenchmarkReceiver` was not reached, or the engine threw before the first run | the APK must be a **debug** build; `adb logcat -s vysion.bench` shows `accepted:` and the per-run lines or the failure |
 | App installs on the S25 Ultra but shows the spatial layout, or the headset shows the flat one | `DeviceProfile.isXr` mis-detected (A-12) | logcat `vysion` prints the profile at start; fallback in ADR-0006 is a `BuildConfig` flag |

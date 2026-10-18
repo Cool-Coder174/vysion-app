@@ -16,7 +16,7 @@ flowchart TB
     NE["NavigationEngine<br/>fuses depth, plane labels, detections, head pose<br/>emits bearing, distance, proximity cues"]
   end
   subgraph Inference["Inference: ExecuTorch runtime, XNNPACK backend"]
-    VLM["VLM: Gemma 4 edge, 4-bit<br/>read, describe, door one-shot, arrival<br/>on demand, 6 to 8 s target"]
+    VLM["VLM 4-bit · plan.md Q6<br/>read, describe, door one-shot, arrival<br/>on demand, 6 to 8 s target"]
     DET["Detector: YOLO26-n, int8<br/>people and obstacles at ≥ 5 fps<br/>unloaded while the VLM runs"]
   end
   subgraph Output["Output (voice first)"]
@@ -34,31 +34,31 @@ flowchart TB
   MC -- "cues, transcript" --> TTS
   MC --> UI
   MC --> DX
-  NE -- "cues" --> TTS
+  NE -- "cues" --> MC
   NE --> SA
   NE -- "outlines" --> UI
 ```
 
-Input comes from Android XR's own camera, perception, and speech stacks; Control decides what to run; the two ExecuTorch models answer; Output is speech first, visuals second. The only arrow that skips a layer is Control → Output, because inference results are spoken by Control, not by the models.
+Input comes from Android XR's own camera, perception, and speech stacks; Control decides what to run; the two ExecuTorch models answer; Output is speech first, visuals second. The only arrow that skips a layer is Control → Output, because inference results are spoken by Control, not by the models. Navigation cues go through `ModeController` too: `NavigationEngine` emits cues and pings, and `ModeController` speaks them (through `ModePhrasebook`) and draws the door band; R3 holds no `Speaker`.
 
 ## Package map (one package per role, one shared contract)
 
 | Layer | Package (`com.vysion.xr.`) | Owner | Key types | Doc |
 |---|---|---|---|---|
-| shared | `core` | R5 (changes announced, merged first) | `Contracts.kt` (every cross-module interface and data type), `Units.kt` (clock-face bearing, half-meter rounding) | [`contracts.md`](contracts.md) |
+| shared | `core` | R5 (changes announced, merged first) | `Contracts.kt` (every cross-module interface and data type, including the `ModePhrasebook` and `PromptSet` seams), `Units.kt` (clock-face bearing, half-meter rounding) | [`contracts.md`](contracts.md) |
 | Input + Control | `platform` | R1 | `FrameSource`, `ModeController`, `OverlayRenderer`, `platform.ui.*` panels, `Permissions` | [`modules/r1-xr-platform.md`](modules/r1-xr-platform.md) |
-| Inference | `inference` | R2 | `InferenceEngine` (ExecuTorch impl), `PromptLibrary`, `ModelCatalog`, `FakeInferenceEngine` | [`modules/r2-ml-executorch.md`](modules/r2-ml-executorch.md) |
+| Inference | `inference` | R2 | `InferenceEngine` (ExecuTorch impl), `PromptLibrary` + `LibraryPromptSet` (the `PromptSet`), `ModelCatalog`, `FakeInferenceEngine` | [`modules/r2-ml-executorch.md`](modules/r2-ml-executorch.md) |
 | Input + Control | `perception` | R3 | `XrPerceptionSession`, `ProximityMonitor`, `AnchorStore`, `NavigationEngine`, `SpatialAudioPinger`, `HeadPoseSource` | [`modules/r3-spatial-perception.md`](modules/r3-spatial-perception.md) |
-| Input + Output | `voice` | R4 | `CommandBus`, `CommandGrammar`, `Speaker`, `Cues`, `Earcons` | [`modules/r4-voice-accessibility.md`](modules/r4-voice-accessibility.md) |
-| Output | `diagnostics` | R5 | `DiagnosticsOverlay`, `DiagnosticsCollector`, `MemorySampler`, `ManifestAudit` | [`modules/r5-integration.md`](modules/r5-integration.md) |
-| entry | (root) | R1 | `VysionApplication`, `MainActivity`, `AppGraph` (manual wiring, no DI framework) | [`modules/r1-xr-platform.md`](modules/r1-xr-platform.md) |
+| Input + Output | `voice` | R4 | `CommandBus`, `CommandGrammar`, `Speaker`, `Cues` + `CuesPhrasebook` (the `ModePhrasebook`), `Earcons` | [`modules/r4-voice-accessibility.md`](modules/r4-voice-accessibility.md) |
+| Output | `diagnostics` | R5 | `DiagnosticsOverlay`, `DiagnosticsCollector`, `MemorySampler`, `ManifestAudit`; debug-only `BenchmarkReceiver` (`src/debug`) | [`modules/r5-integration.md`](modules/r5-integration.md) |
+| entry | (root) | R1 | `VysionApplication`, `MainActivity`, `AppGraph` (manual wiring, no DI framework; the only code that imports every role; lifecycle `start`/`stop`/`release`) | [`modules/r1-xr-platform.md`](modules/r1-xr-platform.md) |
 
 Rules (SRS §6, "design decisions that keep five people from colliding"):
 
-1. One `InferenceEngine` owns both models behind a `Mutex`; the detector is unloaded while the VLM generates and reloaded after, so peak memory is one model plus the runtime.
+1. One `InferenceEngine` owns both models behind a `Mutex`; the detector is unloaded while the VLM generates and reloaded lazily by the next `detect()` (not eagerly after `describe`), so peak memory is one model plus the runtime.
 2. Camera runs two streams: a 640x480 analysis stream for the detector and an on-demand still capture, center-cropped and resized to the VLM's input size.
 3. `ModeController` is a state machine: Idle, Listening, Capturing, Inferring, Speaking, back to Idle. Navigation is a background loop that any one-shot command can interrupt and that resumes afterward.
-4. Every module exposes a Kotlin `Flow` or a `suspend fun`; no module reaches into another's internals. `core/Contracts.kt` is the handoff table as code.
+4. Every module exposes a Kotlin `Flow` or a `suspend fun`; no module reaches into another's internals. `core/Contracts.kt` is the handoff table as code. `ModeController` speaks through `ModePhrasebook` (R4's `CuesPhrasebook`) and prompts through `PromptSet` (R2's `LibraryPromptSet`), both passed in by `AppGraph`, so `platform` never imports `voice` or `inference` (ADR-0005).
 
 ## ModeController state machine
 
@@ -98,16 +98,17 @@ sequenceDiagram
   MC->>SP: earcon(THINKING)
   MC->>FS: captureStill()
   FS-->>MC: Bitmap (center-cropped to VLM input)
-  MC->>IE: describe(bitmap, PromptLibrary.READ)
-  Note over IE: Mutex: unload detector → VLM generate → reload detector
-  IE-->>MC: text (first word ≤ 6 s after capture)
+  MC->>IE: describe(bitmap, prompts.read)
+  Note over IE: Mutex: unload detector → VLM generate (detector reloads lazily on the next detect)
+  IE-->>MC: whole answer (today); describeStreaming sentence by sentence if the RK-2 median > 6 s (R1 conditional P0)
   MC->>TP: show(text) (48 dp+, 7:1)
   MC->>SP: say(text)
   SP-->>TP: progress (auto-scroll synced to speech)
+  Note over MC,SP: first word ≤ 6 s after captureStill returns (vysion.latency read capture->first-word, R1 P0 item)
   U->>CB: "in Spanish"
   CB-->>MC: Command.InSpanish
-  MC->>IE: describe(sameBitmap, PromptLibrary.TRANSLATE_ES)
-  MC->>SP: setLocale(es-MX); say(text)
+  MC->>SP: setLocale(es-MX) (and CommandBus.setLocale)
+  Note over MC,IE: P1, not implemented: describe(sameBitmap, prompts.translateEs) needs the retained still (r1 page, plan.md 5.2); today the still is recycled after the Read
 ```
 
 ## Flow 2: Find the door (gate 7)
@@ -129,15 +130,18 @@ sequenceDiagram
   alt both answers agree and are not "none" (RK-6)
     MC->>AS: placeFromBearing(LEFT|CENTER|RIGHT)
     AS-->>MC: AnchorId (depth sampled along the bearing)
+    Note over AS: offset added to the head yaw at call time, after both answers (contracts.md P-1 proposes capture time)
     MC->>NE: guideTo(anchorId); resume()
-    loop every 3 s while guiding (FR-N3)
-      NE-->>SP: DoorBearing(clock, distanceM) → "door, 2 o'clock, 3 meters"
-      NE-->>OR: highlightDoor(box)
-      NE->>NE: spatial ping from the anchor
+    loop every 3 s while guiding (FR-N3; 2 s while the spatial ping fails, A-6)
+      NE->>NE: spatial ping from the anchor (SpatialAudioPinger)
+      NE-->>MC: DoorBearing(clock, distanceM, inView, pinged)
+      MC->>OR: highlightDoor(DoorHighlight.boxFor(clock, inView))
+      MC->>SP: earcon(PING) only if pinged == false; say(phrasebook.navigationCue) → "door, 2 o'clock, 3 meters"
     end
     NE-->>MC: Arrived (anchor within 1 m, FR-N6)
     MC->>IE: describe(frame, ARRIVAL)
     MC->>SP: say(handle side, open/closed)
+    MC->>NE: clearTarget()
   else disagree, or "none"
     MC->>SP: say(Cues.doorNotFound) → "I can't find a door, turn slowly"
     MC->>NE: resume()
@@ -154,14 +158,16 @@ sequenceDiagram
 | `Speaker`, `CommandBus` | `Dispatchers.Main` for Android TTS/SpeechRecognizer callbacks | both APIs are main-thread bound |
 | Compose panels | Main | standard |
 
-Every long-running loop is a `Job` owned by `AppGraph` and cancelled in `MainActivity.onStop`; nothing survives the process.
+Every long-running loop is a `Job` in the `AppGraph` scope. `MainActivity.onStop` calls `AppGraph.stop()`, which cancels the `ModeController` loops and stops Navigation, the frames and the perception session but keeps the scope, the loaded models and the TTS engine, so `onStart` → `AppGraph.start()` (plus `AppGraph.startPerception(activity)`, which first joins the last perception teardown) restarts without a model reload (`InferenceEngine.warmUp()` is idempotent; the camera's analysis executor lives as long as the process). `MainActivity.onDestroy` calls `AppGraph.release()` once, only when `isFinishing`: it releases the `SpeechRecognizer`, the `TextToSpeech` engine and the ExecuTorch modules and then cancels the scope; `VysionApplication.graph` builds a fresh graph if the process is reused for a new activity. Nothing survives the process.
 
 ## Memory strategy
 
 ```
 peak = runtime + max(VLM, detector) + camera buffers + Compose
-       ≈ 0.2 GB + ~1.5–2.5 GB (Gemma 4 edge 4-bit, measured on device) + 0.05 GB + 0.1 GB
-       budget 4 GB (NFR), alarm at 3.5 GB PSS (unload detector, refuse new VLM calls with Cues.busy)
+       ≈ 0.2 GB + VLM resident (estimated 1.5–2.5 GB for a 2B 4-bit model, 2.5–3.5 GB for option C
+         Gemma 3 4B, ml/README §3; not measured until gate 4) + 0.05 GB + 0.1 GB
+       budget 4 GB (NFR), alarm at 3.5 GB PSS: DiagnosticsCollector logs `PSS alarm` under vysion.reliability;
+       the operator takes the RK-2/RK-3 decision (the app does not unload or refuse on its own)
 ```
 
 The number that matters is the measured VLM PSS; until it exists the overlay prints "not measured".

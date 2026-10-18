@@ -30,8 +30,9 @@ import kotlin.math.roundToLong
  * Debug-only measurement protocol (SRS §7: "20 runs per model on the headset in airplane mode; report
  * median and p90 latency, peak memory, and model file size"), driven by `scripts/benchmark.sh`.
  *
- * - Declared in `app/src/debug/AndroidManifest.xml` (exported, action `com.vysion.xr.BENCH`); absent from
- *   release builds (plan.md ## Security "Debug BenchmarkReceiver broadcast ... extras are ints/enums").
+ * - Declared in `app/src/debug/AndroidManifest.xml` (exported, guarded by `android.permission.DUMP`, which the
+ *   shell uid holds and third-party apps cannot get; action `com.vysion.xr.BENCH`); absent from release builds
+ *   (plan.md ## Security "Debug BenchmarkReceiver broadcast ... extras are ints/enums").
  * - Owner: R5 (plan.md tasks 2.4, 4.5 with R2, 8.1). SRS §8 R2/R5 "Benchmark script ... results into the
  *   README table", due Sun 10:00. Feeds docs/benchmarks.md.
  * - Contract with the script (its header comment, verbatim fields):
@@ -240,7 +241,7 @@ internal class BenchmarkRunner(
 
     private fun sample(elapsedMs: Long): Map<String, Any?> = linkedMapOf(
         "minute" to BenchmarkStats.minutes(elapsedMs),
-        "fps" to DiagnosticsCollector.detectorFpsOf(engine.stats.value),
+        "fps" to DiagnosticsCollector.detectorFpsOf(engine.stats.value, System.nanoTime()), // 0 if detect stalled
         "pss_mb" to memory.sampleMb(),
         "battery" to batteryPercent(),
         "thermal" to thermalStatus(),
@@ -321,7 +322,10 @@ internal class BenchmarkRunner(
             target.writeText(BenchmarkJson.render(result) + "\n") // privacy-allow: benchmark JSON, no frame data
             part.delete()
         }
-        Log.i(TAG, "wrote ${target.path}: runs=${result["runs"]} median_ms=${result["median_ms"]} p90_ms=${result["p90_ms"]}")
+        Log.i(
+            TAG,
+            "wrote ${target.path}: runs=${result["runs"]} median_ms=${result["median_ms"]} p90_ms=${result["p90_ms"]}",
+        )
     }
 
     private fun airplaneModeOn(): Boolean = runCatching {
@@ -346,7 +350,10 @@ internal class BenchmarkRunner(
         private const val NANOS_PER_MS = 1_000_000L
         private const val NANOS_PER_SECOND = 1_000_000_000L
 
-        /** Per-run cap: 4× the product watchdog (Contracts.kt VLM_TIMEOUT_MS) so a bad miss is still measured, not hidden. */
+        /**
+         * Per-run cap: 4× the product watchdog (Contracts.kt VLM_TIMEOUT_MS) so a bad miss is still measured,
+         * not hidden.
+         */
         const val VLM_RUN_TIMEOUT_MS: Long = 4 * InferenceEngine.VLM_TIMEOUT_MS
         const val DETECT_RUN_TIMEOUT_MS: Long = 10_000L
 
@@ -359,7 +366,10 @@ internal class BenchmarkRunner(
     }
 }
 
-/** Pure statistics for the JSON (unit-tested). Definitions are stated so a row in docs/benchmarks.md is reproducible. */
+/**
+ * Pure statistics for the JSON (unit-tested). Definitions are stated so a row in docs/benchmarks.md is
+ * reproducible.
+ */
 internal object BenchmarkStats {
     /** Standard median: middle value, or the mean of the two middle values for an even count. `null` when empty. */
     fun median(values: List<Long>): Double? {

@@ -14,7 +14,7 @@
 
 | Phase | Gate | Status |
 |---|---|---|
-| F0 Skeleton repo, docs, contracts | this PR | **Completed** (pending review) |
+| F0 Skeleton repo, docs, contracts | on `main` | **Completed** 2026-10-17: 236 JVM tests green, privacy and cue gates pass; not yet run on a device |
 | F1 Device truths: camera frames, ARCore session, ExecuTorch runtime | Sat 12:00 | Not Started |
 | F2 `FrameSource` handoff + detector on headset | Sat 13:00 | Not Started |
 | F3 Voice in/out + `ModeController` + first merge | Sat 15:00 | Not Started |
@@ -83,10 +83,10 @@ Estimation gate applies (new system with stated latency, memory and throughput t
 |---|---|---|---|
 | Analysis frame, YUV_420_888 640x480 | 0.46 MB | 640 × 480 × 1.5 B | estimated |
 | Analysis frame as ARGB `Bitmap` | 1.2 MB | 640 × 480 × 4 B | estimated |
-| Bitmap churn at 5 fps | 6 MB/s | 1.2 MB × 5; use a 2-bitmap pool, convert only consumed frames | estimated |
+| Bitmap churn at 5 fps | 6 MB/s | 1.2 MB × 5; a fresh `Bitmap` per frame, reclaimed by the GC (no reuse pool: with `conflate()` up to 3 frames are referenced at once, so a small pool would be repainted while `detect` reads it) | estimated |
 | VLM still input (e.g. 896²×3, model-specific) | 2.4 MB | per one-shot command; ≤ 6 per demo | estimated |
-| VLM weights, ~2B params at 4-bit | ~1.0–1.3 GB | 2e9 × 0.5 B, plus embeddings/vision tower at higher precision | estimated, measure at gate 4 (A-4) |
-| VLM resident memory (weights + KV + activations + runtime) | ~1.5–2.5 GB | weights + ~0.1 GB KV for ≤ ~1.1k tokens + runtime ~0.15 GB | estimated, measure at gate 4 |
+| VLM weights, ~2B params at 4-bit | ~1.0–1.3 GB | 2e9 × 0.5 B, plus embeddings/vision tower at higher precision | estimated, measure at gate 4 (A-4). Gemma 4 sizing; re-estimate for the Q6 choice (option C ≈ 2.5–3.5 GB resident, ml/README §3) |
+| VLM resident memory (weights + KV + activations + runtime) | ~1.5–2.5 GB | weights + ~0.1 GB KV for ≤ ~1.1k tokens + runtime ~0.15 GB | estimated, measure at gate 4. Gemma 4 sizing; re-estimate for the Q6 choice (option C ≈ 2.5–3.5 GB, ml/README §3) |
 | Detector int8 (YOLO26-n) | ~5–10 MB file, < 100 MB resident | nano model, int8 | estimated, measure at gate 2 |
 | App total PSS with VLM loaded | ~2.0–2.8 GB | VLM + camera buffers ~10 MB + Compose/XR ~0.2–0.3 GB | estimated; **budget 4 GB**, alarm at 3.5 GB |
 | VLM prefill for image tokens on XR2+ Gen 2 CPU | **unknown** (3–10 s plausible) | ~256–1,024 image tokens at 100–300 tok/s prefill | **the one number that decides RK-2; measured at gate 4** |
@@ -102,10 +102,10 @@ Estimation gate applies (new system with stated latency, memory and throughput t
 
 **Conclusions the numbers force**
 
-1. **The VLM prefill time is the only unknown that can change the architecture.** It is measured first (gate 4, Sat 16:00) and the RK-2 fallback (SmolVLM-500M, token cap 60, prefill once) is decided from the number, not from opinion. Token streaming (`InferenceEngine.describeStreaming`) is worth implementing because it turns "capture to first word" from prefill + full decode into prefill + first token.
+1. **The VLM prefill time is the only unknown that can change the architecture.** It is measured first (gate 4, Sat 16:00) and the RK-2 fallback (a smaller `LlmModule`-compatible export, token cap 60, prefill once; SmolVLM has no runnable path at 1.3.1, D5) is decided from the number, not from opinion. Token streaming (`InferenceEngine.describeStreaming`) is worth implementing because it turns "capture to first word" from prefill + full decode into prefill + first token.
 2. **The detector has ~2.5x headroom at 5 fps on CPU.** The 5 fps cap is a thermal and power choice, not a compute limit; no NPU work is justified for the demo (ADR-0002).
-3. **The 4 GB memory budget holds with ~1.2–2 GB of margin** if the VLM resident size lands in the estimated range. Unloading the detector during VLM calls (ADR-0004) is a margin, not a necessity; if gate 4 measures PSS < 3 GB with both loaded, it can be dropped to simplify.
-4. **A 1.5 GB APK breaks the 15-minute merge cadence over Wi-Fi ADB.** During development, models are sideloaded once to the app's external files dir (`adb push`) and the APK stays ~20 MB; models are bundled in assets only for the release tag. The engine resolves the model path from the external files dir first, then from the assets copy (see Open Questions, Q1).
+3. **The 4 GB memory budget holds with ~1.2–2 GB of margin** if the VLM resident size lands in the estimated range (Gemma 4 sizing; re-estimate for the Q6 choice: option C ≈ 2.5–3.5 GB leaves ~0.5–1.5 GB, ml/README §3). Unloading the detector during VLM calls (ADR-0004) is a margin, not a necessity; if gate 4 measures PSS < 3 GB with both loaded, it can be dropped to simplify.
+4. **A 1.5 GB APK breaks the 15-minute merge cadence over Wi-Fi ADB.** During development, models are sideloaded once to the app's external files dir (`adb push`) and the APK stays at ~65 MB without models (skeleton debug build, 2026-10-17); models are bundled in assets only for the release tag. The engine resolves the model path from the external files dir first, then from the assets copy (see Open Questions, Q1).
 
 ---
 
@@ -118,7 +118,7 @@ Architecture gate: **applies** (new system). The seven-step design is in [`docs/
 | Decision | We chose | Alternative | Why we rejected it |
 |---|---|---|---|
 | Inference runtime | ExecuTorch, XNNPACK CPU delegate (ADR-0002) | LiteRT/MediaPipe; llama.cpp; QNN as primary | 25 rubric points are for ExecuTorch integration; QNN setup is a multi-hour risk with no fallback inside the window |
-| VLM | Gemma 4 edge multimodal, 4-bit (ADR-0001) | SmolVLM-500M as primary | Gemma is the better reader; SmolVLM is the measured fallback, same contract |
+| VLM | Gemma 4 edge multimodal, 4-bit (ADR-0001). Gemma 4 sizing; superseded by Q6 (option C, Gemma 3 4B, ≈ 2.5–3.5 GB, ml/README §3) | SmolVLM-500M as primary | Gemma is the better reader; the fallback is a smaller `LlmModule`-compatible export, same contract (SmolVLM has no runnable path at 1.3.1, D5) |
 | Detector | YOLO26-n int8 as the only second model | Run the VLM continuously; no detector | VLM is too slow to run continuously; detector-off is the fallback |
 | Door finding | VLM one-shot (two frames must agree) + native anchor | Fine-tuned door class in the detector | Needs a Saturday fine-tune; kept as P2 (FR-N8) |
 | Speech in | Android on-device `SpeechRecognizer` | ExecuTorch ASR | Not in the SRS; export time; pinch + panel buttons are the fallback (RK-4) |
@@ -134,8 +134,8 @@ Architecture gate: **applies** (new system). The seven-step design is in [`docs/
 
 | Component | Single point of failure? | Saturates at | Symptom | Mitigation |
 |---|---|---|---|---|
-| VLM prefill + decode (CPU) | yes, one engine | unknown until gate 4 | first word > 6 s | streaming, 60-token cap, smaller image, SmolVLM fallback |
-| Resident memory | yes | 4 GB budget (LMK) | process killed mid-demo | detector unloaded during VLM; alarm at 3.5 GB PSS refuses new VLM calls |
+| VLM prefill + decode (CPU) | yes, one engine | unknown until gate 4 | first word > 6 s | streaming, 60-token cap, smaller image, smaller `LlmModule`-compatible fallback export |
+| Resident memory | yes | 4 GB budget (LMK) | process killed mid-demo | detector unloaded during VLM; alarm at 3.5 GB PSS logged under `vysion.reliability`, the operator takes the RK-2/RK-3 decision |
 | Thermal | yes | minutes of continuous detector + VLM | fps drops below 3 | 5 fps cap; headset cooled before the slot; 10-min soak test |
 | YUV→Bitmap conversion | no | 30 fps if every frame converted | CPU stolen from the detector | `conflate()`; convert only the frame the detector consumes |
 | ADB reinstall | no | 1.5 GB APK | 1–5 min per merge | sideload models during development |
@@ -166,7 +166,7 @@ Design gate: **applies** (concurrency between the VLM, the detector loop and the
 
 | Decision | Choice | Rationale | Rejected alternative & why |
 |---|---|---|---|
-| Concurrency model | Structured coroutines; one `CoroutineScope` per module owned by `AppGraph`; cancelled in `onStop` | No thread leaks across the activity lifecycle; cancellation is the only "stop" that always works | Raw threads/executors: no cancellation story |
+| Concurrency model | Structured coroutines; one `CoroutineScope` per module owned by `AppGraph`; cancelled once by `AppGraph.release()` (`onDestroy` when finishing); `onStop` stops the loops and keeps the scope | No thread leaks across the activity lifecycle; cancellation is the only "stop" that always works | Raw threads/executors: no cancellation story |
 | Mutual exclusion | One `Mutex` inside `InferenceEngine` around every model call (ADR-0004) | Peak memory is one model; no lock ordering problem because there is one lock | Two engines on two threads: both models resident; two owners |
 | Frame delivery | `Flow<Bitmap>` with `conflate()` (latest-wins) | The detector must never queue stale frames; dropping is correct | Buffered channel: unbounded memory, stale boxes |
 | Command delivery | `MutableSharedFlow(extraBufferCapacity = 8, onBufferOverflow = DROP_OLDEST)` | Commands are rare and must not be lost while a collector is busy; a stuck queue is worse than a dropped 9th command | `conflate()`: would drop a "stop" behind another command |
@@ -321,7 +321,7 @@ Security gate: **applies** (camera and microphone are sensitive inputs; permissi
 Phases map one-to-one to the SRS §9 gates. Each phase leaves `main` installable on the headset. Tasks cite the real paths in this repo; the per-role checklists with the SRS due times are in `docs/modules/`.
 
 ### Phase F0: Skeleton repo, documentation, contracts
-- **Status:** Completed (this PR)
+- **Status:** Completed (committed to `main`, 2026-10-17)
 - **Goal:** A fresh clone gives a teammate or an agent everything needed to start a module without asking anyone.
 - **Rationale:** SRS R5 "repo with `main` protected, feature branches per role" (Sat 10:30) and "README that a stranger can follow".
 
@@ -334,7 +334,7 @@ Phases map one-to-one to the SRS §9 gates. Each phase leaves `main` installable
 - [x] Integration decisions on the role agents' contract issues (2026-10-17): `ModePhrasebook` / `PromptSet` moved into `core` and wired in `AppGraph` (R4 `CuesPhrasebook`, R2 `LibraryPromptSet`), so `ModeController` speaks and prompts from launch; `CommandBus.setLocale/release`, `Speaker.release`, `DoorBearing.pinged` added with defaults; `AppGraph.stop()` made reversible (headset off/on) and `release()` added for `onDestroy`; `ACCESS_NETWORK_STATE` from media3-exoplayer stripped by a merger guard; `BenchmarkReceiverTest` moved to `src/testDebug`
 
 #### Verification
-- [x] `./gradlew assembleDebug testDebugUnitTest` passes locally (JDK 17); `scripts/check_privacy.sh` passes; an agent given only the repo can locate the owner, contract, tasks and verification for FR-N3 without guessing (onboarding test in the PR description)
+- [x] `./gradlew assembleDebug testDebugUnitTest` passes locally (JDK 17; 236 tests, 0 failures, 0 compiler warnings, verified 2026-10-17); `scripts/check_privacy.sh` and `scripts/check_cues.sh` pass; an agent given only the repo can locate the owner, contract, tasks and verification for FR-N3 without guessing (onboarding test in the PR description)
 
 #### Risks
 | Risk | Likelihood | Impact | Mitigation |
@@ -350,14 +350,14 @@ Phases map one-to-one to the SRS §9 gates. Each phase leaves `main` installable
 - **Rationale:** "Anyone whose module depends on an unverified assumption starts with the check, not the code." RK-1 and RK-2 are the two project-sinking risks and both start here.
 
 #### Tasks
-- [ ] 1.1 R5 — `docs/assumptions.md` A-9: both devices, ADB from every laptop (`scripts/install_headset.sh --wifi <ip>` succeeds), judging time in writing. Sat 10:30
-- [ ] 1.2 R1 — `platform/CameraFrameSource.kt`: bind CameraX `ImageAnalysis` to camera id 0 with only `CAMERA`; log `FrameStats` (resolution, format, fps) under tag `vysion`; fill A-1. Sat 11:00
+- [ ] 1.1 R5 — `docs/assumptions.md` A-9: both devices, ADB from every laptop (`scripts/install_headset.sh --wifi <ip>:<port>` succeeds; port from the wireless-debugging screen, docs/setup.md §4), judging time in writing. Sat 10:30
+- [ ] 1.2 R1 — `platform/CameraFrameSource.kt`: bind CameraX `ImageAnalysis` to camera id 0 with only `CAMERA`; fill `FrameSource.stats` (resolution and format read from each frame, fps), which R5's `DiagnosticsCollector` logs as `vysion: camera 0: <w>x<h> <format> at <fps> fps (A-1 evidence)`; log `vysion: still hfov=<deg> deg (A-1)` for R3's `BearingAngles`; fill A-1. Sat 11:00
 - [ ] 1.3 R1 — `MainActivity.kt`: Full Space with passthrough, one `SpatialPanel`; confirm passthrough stays on (A-2). Sat 11:00
 - [ ] 1.4 R2 — `inference/ExecuTorchInferenceEngine.kt`: load a sample `.pte` from the external files dir with `Module.load`; log runtime version and backend (A-3). Sat 11:00
 - [ ] 1.5 R3 — `perception/XrPerceptionSession.kt`: create the ARCore for Jetpack XR session with depth, planes, hands, device pose enabled; log one depth sample and one plane (A-5). Sat 12:00
 - [ ] 1.6 R3 — play a SceneCore point-source ping (A-6). Sat 13:00
 - [ ] 1.7 R4 — `voice/SpeechCommandBus.kt`: `SpeechRecognizer` with on-device preference in airplane mode (A-7); `voice/AndroidSpeaker.kt`: enumerate voices, find es-MX/es-ES offline (A-8). Sat 14:00
-- [ ] 1.8 R2 — `ml/export/export_detector.sh`: YOLO26-n → `.pte` XNNPACK int8; A-4 preparation: start the Gemma 4 export (long-running) on a laptop. Sat 13:00
+- [ ] 1.8 R2 — `ml/export/export_detector.sh`: YOLO26-n → `.pte` XNNPACK int8; A-4/A-13 preparation: start the VLM export for the path chosen at 4.0 (`ml/export/export_vlm.sh`, default `--path c`) on a laptop. Sat 13:00
 
 #### Verification
 - [ ] `docs/assumptions.md` rows A-1..A-9 filled with yes/no + evidence (logcat line or screenshot path)
@@ -378,7 +378,7 @@ Phases map one-to-one to the SRS §9 gates. Each phase leaves `main` installable
 - **Rationale:** R1's handoff unblocks R3 and R1's own `ModeController`; R2's detector number feeds the overlay.
 
 #### Tasks
-- [ ] 2.1 R1 — `platform/CameraFrameSource.kt`: `ImageAnalysis` with `STRATEGY_KEEP_ONLY_LATEST`, YUV→`Bitmap` via a 2-bitmap pool, `conflate()`; `ImageCapture` → `captureStill()` center-crop + resize to `ModelInfo.inputWidth/Height`; `stats` updates every second
+- [ ] 2.1 R1 — `platform/CameraFrameSource.kt`: `ImageAnalysis` with `STRATEGY_KEEP_ONLY_LATEST`, `ImageProxy.toBitmap()` into a fresh `Bitmap` per frame (no reuse pool: `conflate()` keeps up to 3 frames referenced), `conflate()`; `ImageCapture` → `captureStill()` center-crop + resize to `ModelInfo.inputWidth/Height`; `stats` updates every second
 - [ ] 2.2 R2 — `inference/ExecuTorchInferenceEngine.detect()`: preprocess, `Module.forward`, NMS, map to `NormalizedBox`; frame counter → `InferenceStats.detectorFps` (5 s window); `lastDetectMs`
 - [ ] 2.3 R2 — `scripts/fetch_models.sh --from` path tested with the detector artifact; sha256 into `ml/models.lock`
 - [ ] 2.4 R5 — `scripts/benchmark.sh --model detector` end to end via the debug `BenchmarkReceiver` (`diagnostics/BenchmarkReceiver.kt`); row into `docs/benchmarks.md`
@@ -393,7 +393,7 @@ Phases map one-to-one to the SRS §9 gates. Each phase leaves `main` installable
 | YUV conversion steals CPU from the detector | Low | fps < 5 | convert only consumed frames; measure |
 
 #### Rollback
-- `FakeFrameSource` (bundled test frames) stays selectable in `AppGraph`.
+- `FakeFrameSource` (synthetic frames painted in code; no image file) stays selectable in `AppGraph`.
 
 ### Phase F3: Voice in/out + `ModeController` + first merge (gate 3, Sat 15:00)
 - **Status:** Not Started
@@ -434,7 +434,7 @@ Phases map one-to-one to the SRS §9 gates. Each phase leaves `main` installable
 
 #### Verification
 - [ ] On the headset: 20 READ runs, median and p90 recorded; peak PSS recorded; model file size recorded; overlay shows them
-- [ ] If median > 6 s: SmolVLM-500M export started by Sat 16:30 (R2 P1 task)
+- [ ] If median > 6 s: a smaller `LlmModule`-compatible optimum-executorch export started by Sat 16:30 (SmolVLM has no runnable path at 1.3.1, D5; R2 P1 task)
 
 #### Risks
 | Risk | Likelihood | Impact | Mitigation |
@@ -467,7 +467,7 @@ Phases map one-to-one to the SRS §9 gates. Each phase leaves `main` installable
 | RK-5 depth noisy | Low | proximity unreliable | plane hit test + box height proxy |
 
 #### Rollback
-- Cues flow can be driven by `FakeNavigationEngine` for the demo of other modes.
+- Text Reader does not depend on `NavigationCues`: if R3 slips, Read and Describe still demo; `AppGraph` wires `NoOpNavigationEngine` off the headset (it emits no cues), and on the headset the XR engine with no target emits no door cues. Cue wording is tested without R3 through the test fakes in `ModeControllerTest`.
 
 ### Phase F6: Describe + proximity e2e, overlay, outlines, diagnostics, S25 build (gate 6, Sat 22:00)
 - **Status:** Not Started
@@ -494,12 +494,12 @@ Phases map one-to-one to the SRS §9 gates. Each phase leaves `main` installable
 
 #### Tasks
 - [ ] 7.1 R1+R2 — door vote in `ModeController`: two stills, two `describe(DOOR)` calls, allowlist parse to `HorizontalBearing`, agreement required (RK-6) else `Cues.doorNotFound`
-- [ ] 7.2 R3 — `guideTo(anchor)`: `DoorBearing` every 3 s, `highlightDoor` box from the bearing, `Arrived` at 1 m; persistence test: turn 180° and back
+- [ ] 7.2 R3 — `guideTo(anchor)`: `DoorBearing` every 3 s (ping first, then the cue), `Arrived` at 1 m; persistence test: turn 180° and back. The door band is R1's: `ModeController.onCue` draws `DoorHighlight.boxFor(clock, inView)` (R3 draws nothing)
 - [ ] 7.3 R1+R2 — arrival: `describe(ARRIVAL)` once, spoken
 - [ ] 7.4 R3 — plane semantics (`WallAhead`, `FloorEnds`) within 1.5 m on heading
 
 #### Verification
-- [ ] On the headset in the demo room: three consecutive successful door finds from different starting bearings, each logged with the two VLM answers, the anchor distance and the arrival cue; one deliberate "no door" case speaks "turn slowly"
+- [ ] On the headset in the demo room: three consecutive successful door finds from different starting bearings, each logged with the two VLM answers, the anchor distance and the arrival cue; one deliberate "no door" case speaks "turn slowly". Evidence: `adb logcat -s vysion | grep -E "door vote|anchor .* placed|cue (DoorBearing|Arrived)"` (the `door vote` and `cue` lines are R1's P0 `ModeController` log lines, still to add)
 
 #### Risks
 | Risk | Likelihood | Impact | Mitigation |
@@ -508,7 +508,7 @@ Phases map one-to-one to the SRS §9 gates. Each phase leaves `main` installable
 | RK-7 integration collapse | Medium | nothing demos | cadence; freeze; R5 owns `main` |
 
 #### Rollback
-- Door finding can be cut from the demo script; Navigation still demos proximity + outlines.
+- Door finding can be cut from the demo script; Navigation still demos proximity, plus outlines only if the headset camera works (A-1). If the cut is because of A-1 (no camera) or A-13 (no VLM on the headset), Navigation is depth and planes only (`docs/assumptions.md`).
 
 ### Phase F8: Feature freeze + measured numbers (gate 8, Sun 11:00)
 - **Status:** Not Started
@@ -547,10 +547,10 @@ Phases map one-to-one to the SRS §9 gates. Each phase leaves `main` installable
 
 > Follow this plan verbatim. Trust the file references. Do not re-verify unless conflicts arise.
 
-1. R5, Sat 10:30: run `scripts/install_headset.sh --wifi <headset-ip> --logcat` from each laptop; record A-9 in `docs/assumptions.md`; create branches `r1/xr-platform`, `r2/ml-executorch`, `r3/perception`, `r4/voice-ux`, `r5/integration` from `main`; protect `main` (require CI).
-2. R1, Sat 11:00: in `app/src/main/kotlin/com/vysion/xr/platform/CameraFrameSource.kt` replace the `TODO(FR-T1)` in `start()` with CameraX `ImageAnalysis` bound to camera id 0 (selector snippet in `docs/stack.md` → R1), update `stats` every second, log `vysion: FrameStats(...)`. Run `scripts/install_headset.sh`, read logcat, fill A-1. Then in `MainActivity.kt` confirm the `SpatialPanel` shows over passthrough; fill A-2.
+1. R5, Sat 10:30: run `scripts/install_headset.sh --wifi <headset-ip>:<port> --logcat` from each laptop (port from the wireless-debugging screen); record A-9 in `docs/assumptions.md`; create branches `r1/xr-platform`, `r2/ml-executorch`, `r3/perception`, `r4/voice-ux`, `r5/integration` from `main`; protect `main` (require CI).
+2. R1, Sat 11:00: in `app/src/main/kotlin/com/vysion/xr/platform/CameraFrameSource.kt` replace the `TODO(FR-T1)` in `start()` with CameraX `ImageAnalysis` bound to camera id 0 (selector snippet in `docs/stack.md` → R1), update `stats` every second (R5's `DiagnosticsCollector` then logs `vysion: camera 0: <w>x<h> <format> at <fps> fps (A-1 evidence)`; there is no `FrameStats(...)` log line), and log `vysion: still hfov=<deg> deg (A-1)`. Run `scripts/install_headset.sh`, read logcat, fill A-1. Then in `MainActivity.kt` confirm the `SpatialPanel` shows over passthrough; fill A-2.
 3. R2, Sat 11:00: `adb push <sample>.pte /sdcard/Android/data/com.vysion.xr/files/models/`; in `inference/ExecuTorchInferenceEngine.kt` implement `warmUp()` enough to `Module.load` it and log the backend; fill A-3. Start `ml/export/export_vlm.sh` on the laptop per `ml/README.md` (expect 30–90 min).
-4. R3, Sat 12:00: in `perception/XrPerceptionSession.kt` create the session with the `Config` from `docs/stack.md` → R3; log one `DepthMap` sample and one `Plane`; fill A-5. Sat 13:00: play a point-source ping via `perception/SpatialAudioPinger.kt`; fill A-6.
+4. R3, Sat 12:00: in `perception/XrPerceptionSession.kt` create the session with the `Config` from `docs/stack.md` → R3; log one `Depth` sample (`vysion: depth <w>x<h>, min trusted depth <m> m`; the class is `Depth`, not DepthMap, stack.md §3-R3) and one `Plane`; fill A-5. Sat 13:00: play a point-source ping via `perception/SpatialAudioPinger.kt`; fill A-6.
 5. R4, Sat 14:00: in `voice/SpeechCommandBus.kt` create the on-device recognizer, airplane mode on, log the result; fill A-7. In `voice/AndroidSpeaker.kt` log `tts.voices` filtered to `es` with `!isNetworkConnectionRequired`; fill A-8.
 6. R2, Sat 13:00: `ml/export/export_detector.sh` → `detector.pte`; `scripts/fetch_models.sh --from <dir> --only detector`; push to the device; run `detect()` once; log ms/frame.
 7. R5: merge gate 1 (`r1`, `r3` branches) to `main`; install; tick gate 1 in `docs/schedule.md` with the logcat evidence; update this file's Status table.

@@ -207,6 +207,19 @@ class ModelCatalogTest {
         assertEquals(sha256(bytes), ModelCatalog.sha256Hex(f))
     }
 
+    @Test
+    fun `a sideload with the wrong size or hash is rejected, a TBD row accepts anything`() {
+        val pinned = ModelCatalog.Entry(name = "vlm", dest = "vlm.pte", sha256 = "ab".repeat(32), bytes = 3L)
+        assertNull(ModelCatalog.sizeProblem(pinned, 3L))
+        assertTrue(ModelCatalog.sizeProblem(pinned, 2L)!!.contains("unfinished adb push"))
+        assertNull(ModelCatalog.sha256Problem(pinned, "AB".repeat(32)))
+        assertTrue(ModelCatalog.sha256Problem(pinned, "00".repeat(32))!!.contains("does not match"))
+
+        val tbd = ModelCatalog.Entry(name = "vlm", dest = "vlm.pte")
+        assertNull(ModelCatalog.sizeProblem(tbd, 1L))
+        assertNull(ModelCatalog.sha256Problem(tbd, "00".repeat(32)))
+    }
+
     private fun sha256(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 }

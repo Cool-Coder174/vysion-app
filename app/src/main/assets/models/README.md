@@ -5,8 +5,8 @@ This directory is filled by `scripts/fetch_models.sh` from the lockfile `ml/mode
 Expected layout after a successful fetch:
 
 ```
-vlm.pte             # Gemma 4 edge multimodal, 4-bit, XNNPACK (or the SmolVLM-500M fallback, same filename)
-vlm-tokenizer.*     # tokenizer artifact the ExecuTorch multimodal runner needs; exact name in ml/README.md
+vlm.pte             # chosen VLM (plan.md Q6), 4-bit, XNNPACK
+vlm-tokenizer.json  # tokenizer.json for LlmModule(tokenizerPath)
 detector.pte        # YOLO26-n (COCO), int8, XNNPACK
 models.lock         # copy of ml/models.lock so the app can print name/quantization/backend/size at runtime
 ```

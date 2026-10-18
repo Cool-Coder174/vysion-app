@@ -17,8 +17,8 @@ import android.util.Log
  * Why the MERGED manifest matters: our own manifest has no network permission, but a library can merge
  * one in. `PackageManager` reports what was actually installed, so the overlay cannot lie (NFR Honesty).
  * The classification set is identical to `scripts/check_privacy.sh` NET_PERMS, so CI and the overlay
- * agree on what counts as a network permission (docs/stack.md §2.7 would test only INTERNET; ADR-0003
- * names ACCESS_NETWORK_STATE too, and the CI gate wins; see docs/modules/r5-integration.md).
+ * agree on what counts as a network permission (docs/stack.md §2.7 / §3-R5 and ADR-0003 name the full set;
+ * the manifest strips INTERNET and ACCESS_NETWORK_STATE with tools:node="remove" guards).
  *
  * The audit runs once (the manifest cannot change while the process lives) and never throws: any
  * failure yields `null`, which the overlay renders as "not measured" (INV-7).

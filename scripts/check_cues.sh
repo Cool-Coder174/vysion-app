@@ -2,7 +2,8 @@
 # Cue placement gate (SRS §8 R4 "every cue string in Cues.kt, nothing hardcoded elsewhere"; INV-4).
 # Run locally before every push; CI runs it after the privacy gate.
 #
-#   1. No string literal is handed to say( / speak( / repeatLast( anywhere in app/src/main outside voice/Cues.kt.
+#   1. No string literal is handed to say( / speak( / repeatLast( anywhere in app/src/main or app/src/debug
+#      outside voice/Cues.kt.
 #      (Cues.kt is the only file that may contain spoken text; everything else passes Cues.* or VLM output.)
 #   2. No hedging word appears in a string value inside voice/Cues.kt (SRS §3 "no 'probably a door'").
 #      The list below mirrors Cues.HEDGING_WORDS; a line that legitimately contains one (the list itself)
@@ -13,6 +14,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KOTLIN_SRC="$ROOT/app/src/main/kotlin"
+DEBUG_SRC="$ROOT/app/src/debug/kotlin"
 CUES="$KOTLIN_SRC/com/vysion/xr/voice/Cues.kt"
 fail=0
 
@@ -20,7 +22,9 @@ echo "== 1. string literals passed to say( / speak( outside voice/Cues.kt =="
 # Matches `say("…`, `speak("…`, `repeatLast("…` and the named-argument form `say(text = "…`.
 LITERAL_SAY='\b(say|speak|repeatLast)\(\s*([A-Za-z_]+\s*=\s*)?"'
 if [ -d "$KOTLIN_SRC" ]; then
-  if grep -rnE "$LITERAL_SAY" "$KOTLIN_SRC" --include='*.kt' | grep -v '/voice/Cues.kt:' | grep -v 'cues-allow:'; then
+  SCAN_DIRS=("$KOTLIN_SRC")
+  [ -d "$DEBUG_SRC" ] && SCAN_DIRS+=("$DEBUG_SRC")
+  if grep -rnE "$LITERAL_SAY" "${SCAN_DIRS[@]}" --include='*.kt' | grep -v '/voice/Cues.kt:' | grep -v 'cues-allow:'; then
     echo "FAIL: a spoken string literal lives outside voice/Cues.kt (SRS §8 R4, INV-4)"
     fail=1
   else

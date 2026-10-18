@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Sideload model artifacts to the device during development (plan.md Q1; AGENTS.md §10).
 #
-# The dev APK must NOT bundle ~1.5 GB of models: a Wi-Fi reinstall would take minutes and break the
+# The dev APK must NOT bundle the multi-GB models (option C VLM estimated 2.5-3.5 GB, ml/README.md §3; not
+# measured): a Wi-Fi reinstall would take minutes and break the
 # 15-minute merge cadence. So the APK stays small and the .pte files are pushed ONCE to the app's
 # external files dir, which ExecuTorch can mmap directly (docs/stack.md §3 → R2 "Paths"; A-15 / Q20):
 #

@@ -63,6 +63,9 @@ class FakeInferenceEngineTest {
         assertNotNull(s.p90VlmMs)
         assertTrue(s.detectorLoaded) // reloaded after each call (ADR-0004 mirrored)
         assertEquals(PromptLibrary.followUp("what?"), engine.lastPrompt)
+        // FR-G6: a prompt localized by PromptLibrary.forLocale keeps its canned answer.
+        val spanishRead = PromptLibrary.forLocale(PromptLibrary.READ, java.util.Locale.forLanguageTag("es-MX"))
+        assertEquals("EXIT. Push bar to open. Alarm will sound.", engine.describe(bitmap, spanishRead))
     }
 
     @Test
@@ -128,8 +131,12 @@ class FakeInferenceEngineTest {
         assertNotNull(s.lastDetectMs)
         assertTrue("fps should be measured after 5 frames", s.detectorFps > 0f)
         assertEquals(5, engine.detectCalls)
+        assertNotNull("detect stamps its monotonic time", s.lastDetectAtNanos)
         engine.cannedDetections = emptyList()
         assertTrue(engine.detect(bitmap).isEmpty())
+        // INV-2 mirrored: a VLM call unloads the detector and restarts its window, so no stale fps survives it.
+        engine.describe(bitmap, PromptLibrary.READ)
+        assertEquals(0f, engine.stats.value.detectorFps)
     }
 
     @Test

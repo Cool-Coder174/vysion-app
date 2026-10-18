@@ -1,6 +1,6 @@
 # Requirements
 
-Source of truth: [`docs/srs/srs-extract.md`](srs/srs-extract.md) §1–§4 (transcribed from the SRS PDF in the same folder). This page adds two columns the SRS does not have, **Owner** (the role whose module implements it, see [`docs/modules/`](modules/)) and **Phase** (the `plan.md` phase whose gate it lands in). Requirement text is verbatim from the SRS so an FR id can be grepped from code comments back to here.
+Source of truth: [`docs/srs/srs-extract.md`](srs/srs-extract.md) §1–§4 (transcribed from the SRS PDF in the same folder). This page adds two columns the SRS does not have, **Owner** (the role whose module implements it, see [`docs/modules/`](modules/); when a P0 row names several roles, **(lead)** marks the one that integrates the end-to-end flow and owns the acceptance evidence, and the others deliver their contract by its gate, AGENTS.md §1) and **Phase** (the `plan.md` phase whose gate it lands in). Requirement text is verbatim from the SRS so an FR id can be grepped from code comments back to here.
 
 ## Judging rubric (what every requirement must earn)
 
@@ -40,11 +40,11 @@ Target: **85+/100**. Anything that earns no rubric points is cut.
 
 | ID | Requirement | Pri | Rubric | Owner | Phase |
 |---|---|---|---|---|---|
-| FR-G1 | App launches on Galaxy XR into passthrough Full Space with one floating control panel and a spoken welcome that lists the three commands | P0 | UC, TI | R1 (shell, panel), R4 (welcome text) | F3 |
-| FR-G2 | Voice commands via on-device SpeechRecognizer, started by pinch-and-hold or the panel mic button: read, describe, guide me, find the door, stop, repeat, slower, in Spanish | P0 | UC | R4 (`CommandBus`), R1 (mic button; pinch is P1) | F3 (pinch: F5) |
-| FR-G3 | Mode changes are announced by TTS; the active mode is also shown on the panel | P0 | UC | R1 (`ModeController`, panel), R4 (`Cues.kt`) | F3 |
+| FR-G1 | App launches on Galaxy XR into passthrough Full Space with one floating control panel and a spoken welcome that lists the three commands | P0 | UC, TI | R1 (lead; shell, panel), R4 (welcome text) | F3 |
+| FR-G2 | Voice commands via on-device SpeechRecognizer, started by pinch-and-hold or the panel mic button: read, describe, guide me, find the door, stop, repeat, slower, in Spanish | P0 | UC | R4 (lead; `CommandBus`), R1 (mic button; pinch is P1) | F3 (pinch: F5) |
+| FR-G3 | Mode changes are announced by TTS; the active mode is also shown on the panel | P0 | UC | R1 (lead; `ModeController`, panel), R4 (`Cues.kt`) | F3 |
 | FR-G4 | All speech output through Android TextToSpeech; "stop" interrupts within 300 ms | P0 | UC | R4 (`Speaker`) | F3 |
-| FR-G5 | Diagnostics overlay (toggle): model name, backend, last inference ms, detector fps, app memory MB, "Network permission: none". Every value measured at runtime | P0 | OD | R5 (`diagnostics/`), R2 (timing hooks) | F6 |
+| FR-G5 | Diagnostics overlay (toggle): model name, backend, last inference ms, detector fps, app memory MB, "Network permission: none". Every value measured at runtime | P0 | OD | R5 (lead; `diagnostics/`), R2 (timing hooks) | F6 |
 | FR-G6 | Spanish output in all three modes (TTS voice + VLM prompt) | P1 | UC | R4 (voice), R2 (prompt) | F6 |
 | FR-G7 | ExecuTorch TTS (Supertonic or Voxtral TTS) replaces Android TTS so speech out is also on ExecuTorch | P2 | TI, OD | R4 | stretch |
 
@@ -52,10 +52,10 @@ Target: **85+/100**. Anything that earns no rubric points is cut.
 
 | ID | Requirement | Pri | Rubric | Owner | Phase |
 |---|---|---|---|---|---|
-| FR-T1 | On "read this", capture one world-camera frame, run the VLM with the read-verbatim prompt, and begin speaking within 6 s | P0 | UC, TI | R1 (`FrameSource`, `ModeController`), R2 (`InferenceEngine`), R4 (`Speaker`) | F5 |
-| FR-T2 | Show the transcript in a large-print spatial panel (48 dp+, 7:1 contrast) anchored where the user was looking | P0 | UC | R1 (`TranscriptPanel`), R4 (spec) | F5 (anchoring: P1) |
+| FR-T1 | On "read this", capture one world-camera frame, run the VLM with the read-verbatim prompt, and begin speaking within 6 s | P0 | UC, TI | R1 (lead; `FrameSource`, `ModeController`, the 6 s evidence), R2 (`InferenceEngine`, gate 4), R4 (`Speaker`, gate 3) | F5 |
+| FR-T2 | Show the transcript in a large-print spatial panel (48 dp+, 7:1 contrast) anchored where the user was looking | P0 | UC | R1 (lead; `TranscriptPanel`), R4 (spec) | F5 (anchoring: P1) |
 | FR-T3 | "Repeat" replays; "slower" replays at 0.7x rate | P1 | UC | R4 | F6 |
-| FR-T4 | "In Spanish" re-prompts the VLM on the same frame for a translation | P1 | UC | R2 (prompt), R4 (locale) | F6 |
+| FR-T4 | "In Spanish" re-prompts the VLM on the same frame for a translation | P1 | UC | R2 (prompt), R4 (locale), R1 (`ModeController` re-prompt on the retained still) | F6 |
 | FR-T5 | If head angular velocity is high at capture, say "hold still" and retry once | P1 | UC | R3 (`HeadPoseSource`), R1 | F6 |
 | FR-T6 | "Next" captures and reads the next page or sign without re-issuing the command | P2 | UC | R1, R4 | stretch |
 
@@ -63,8 +63,8 @@ Target: **85+/100**. Anything that earns no rubric points is cut.
 
 | ID | Requirement | Pri | Rubric | Owner | Phase |
 |---|---|---|---|---|---|
-| FR-D1 | On "describe", capture one frame, run the VLM with the describe prompt (3 sentences max, hazards first, left to right), begin speaking within 8 s | P0 | UC, TI | R1, R2, R4 | F6 |
-| FR-D2 | A follow-up question ("what's on the table?") runs against the same frame without recapture | P1 | UC | R2 (frame + prefill cache), R4 (`Command.FollowUp`) | F6 |
+| FR-D1 | On "describe", capture one frame, run the VLM with the describe prompt (3 sentences max, hazards first, left to right), begin speaking within 8 s | P0 | UC, TI | R1 (lead), R2, R4 | F6 |
+| FR-D2 | A follow-up question ("what's on the table?") runs against the same frame without recapture | P1 | UC | R2 (frame + prefill cache), R4 (`Command.FollowUp`), R1 (`ModeController` re-prompt on the retained still) | F6 |
 | FR-D3 | "Brief" and "detailed" switch prompt length | P1 | UC | R2 (`PromptLibrary`), R4 | F6 |
 | FR-D4 | Pointing with the index finger at a region (hand tracking) describes only that region | P2 | UC, TI | R3 | stretch |
 
@@ -72,9 +72,9 @@ Target: **85+/100**. Anything that earns no rubric points is cut.
 
 | ID | Requirement | Pri | Rubric | Owner | Phase |
 |---|---|---|---|---|---|
-| FR-N1 | Proximity warning: when depth in the forward 60-degree cone falls below 1.0 m, play a rising tone and say "obstacle ahead"; repeat no more than every 2 s | P0 | UC, OD | R3 (`ProximityMonitor`), R4 (earcon + cue) | F6 |
-| FR-N2 | Detector runs at 5 fps or better on camera frames for person and common obstacles; detections drawn as outlines in passthrough | P0 | TI, OD | R2 (`detect`), R3 (loop), R1 (`OverlayRenderer`) | F6 |
-| FR-N3 | "Find the door": VLM returns the door's horizontal position (left/center/right, or none); the app samples depth along that bearing, drops an anchor there, then speaks bearing and distance every 3 s with a spatial-audio ping from the anchor | P0 | UC, TI | R2 (door prompt), R3 (`AnchorStore`, `NavigationEngine`, spatial audio), R1 | F7 |
+| FR-N1 | Proximity warning: when depth in the forward 60-degree cone falls below 1.0 m, play a rising tone and say "obstacle ahead"; repeat no more than every 2 s | P0 | UC, OD | R3 (lead; `ProximityMonitor`), R4 (earcon + cue) | F6 |
+| FR-N2 | Detector runs at 5 fps or better on camera frames for person and common obstacles; detections drawn as outlines in passthrough | P0 | TI, OD | R2 (`detect`), R3 (lead; loop), R1 (`OverlayRenderer`) | F6 |
+| FR-N3 | "Find the door": VLM returns the door's horizontal position (left/center/right, or none); the app samples depth along that bearing, drops an anchor there, then speaks bearing and distance every 3 s with a spatial-audio ping from the anchor | P0 | UC, TI | R2 (door prompt), R3 (lead; `AnchorStore`, `NavigationEngine`, spatial audio, the gate 7 evidence), R1 (door vote, highlight, cue speech) | F7 |
 | FR-N4 | The door anchor persists when it leaves the field of view; guidance continues from head pose | P1 | TI | R3 | F7 |
 | FR-N5 | Plane semantics: say "wall ahead" when a wall plane is within 1.5 m on the heading; say "floor ends" when the floor plane stops within 1.5 m | P1 | UC | R3 | F7 |
 | FR-N6 | On arrival (anchor within 1 m), run the VLM once and speak handle side and whether the door is open | P1 | UC | R2 (arrival prompt), R3 | F7 |

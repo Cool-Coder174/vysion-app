@@ -9,8 +9,9 @@ import java.util.Locale
  * `inference/PromptLibrary.kt`"). Consumed by R1 `ModeController` through `InferenceEngine.describe` (core);
  * quoted in the README and in `docs/model-plan.md`.
  *
- * - Contract provided: `PromptLibrary` (object), `docs/contracts.md` row "PromptLibrary (object)", gate 4.
- * - FR ids: FR-T1 ([READ]), FR-D1 ([DESCRIBE]), FR-N3 ([DOOR], [parseDoorAnswer]), FR-N6 ([ARRIVAL]),
+ * - Contract provided: `core.PromptSet` through [LibraryPromptSet] (`docs/contracts.md` row "`PromptSet` (seam in
+ *   `core`)", gate 4). `PromptLibrary` itself is package-internal reading: no other package may import it.
+ * - FR ids: FR-T1 ([READ]), FR-D1 ([DESCRIBE]), FR-N3 ([DOOR]), FR-N6 ([ARRIVAL]),
  *   FR-T4 ([TRANSLATE_ES]), FR-D2 ([followUp]), FR-D3 ([DESCRIBE_BRIEF], [DESCRIBE_DETAILED]), FR-G6 ([forLocale]).
  * - SRS §8 R2 due: "PromptLibrary.kt with the four prompts in section 7; tune wording against 10 real photos
  *   from the venue. Sat 19:00".
@@ -37,7 +38,11 @@ object PromptLibrary {
         "Describe this scene for someone who cannot see it, in at most three sentences. Hazards first, then what " +
             "is on the left, center, and right. Do not guess."
 
-    /** FR-N3 door one-shot. The answer is parsed by [parseDoorAnswer], never spoken (R4 speaks `Cues`). */
+    /**
+     * FR-N3 door one-shot. The answer is parsed by `platform.DoorVote` (`ModeController`): exactly one of
+     * left/center/right/none and no negation, otherwise no door (RK-6). It is never spoken (R4 speaks `Cues`).
+     * Tune this prompt against `DoorVote.parse`, not against [parseDoorAnswer].
+     */
     const val DOOR: String = "Is there a door in this image? Answer with one word: left, center, right, or none."
 
     /** FR-N6 arrival check: handle side and open/closed, one sentence. */
@@ -58,8 +63,12 @@ object PromptLibrary {
     const val TRANSLATE_ES: String = "Translate the text you read into Spanish; output only the translation."
 
     /**
-     * The exact first sentence [READ] asks the model to produce when the frame has no text. R1 may compare the
-     * answer against this to pick `Cues.noTextFound` instead of speaking the model's words (FR-T1).
+     * The exact first sentence [READ] asks the model to produce when the frame has no text. Today the controller
+     * speaks the model's answer as is, so "No text found." is heard in the model's own words (INV-4 allows VLM
+     * text). Not reachable from `platform`: `PromptSet` has no sentinel and `ModePhrasebook` has no
+     * "no text found" line (there is no `Cues.noTextFound`). The additive change that would add both is an open
+     * P1 proposal in `docs/contracts.md` "Open contract proposals"; until R5 merges it, use this only in tests
+     * and benchmarks.
      */
     const val NO_TEXT_SENTINEL: String = "No text found"
 
@@ -91,7 +100,7 @@ object PromptLibrary {
     /**
      * FR-G6 Spanish output in all three modes. For a Spanish [locale] the prompt gets [SPANISH_SUFFIX]; any other
      * language returns [prompt] unchanged. Two prompts are never localized: [DOOR], whose one-word answer is
-     * parsed by [parseDoorAnswer] (the allowlist is English), and [TRANSLATE_ES], which already targets Spanish.
+     * parsed by `platform.DoorVote` (the allowlist is English), and [TRANSLATE_ES], which already targets Spanish.
      */
     fun forLocale(prompt: String, locale: Locale): String {
         if (locale.language != SPANISH) return prompt
@@ -101,11 +110,14 @@ object PromptLibrary {
     }
 
     /**
-     * FR-N3: turn the VLM's [DOOR] answer into a [HorizontalBearing] with a strict allowlist. The text is split into
-     * words (letters only, case-insensitive) and the FIRST word that is one of `left`, `center`, `right`, `none`
-     * decides. Anything else, including an empty answer or a sentence that mentions no side, is
-     * [HorizontalBearing.NONE]: the controller then speaks `Cues.doorNotFound` rather than guessing (RK-6 requires
-     * two agreeing answers on two frames before an anchor is placed).
+     * REFERENCE ONLY, not used by the app: the controller's parser is `platform.DoorVote.parse` (`ModeController`),
+     * which is stricter (exactly one distinct side word, no negation, else no door; RK-6). Kept for offline prompt
+     * experiments and benchmarks; do not tune [DOOR] against it ("Left, slightly toward the center" is LEFT here
+     * and no door in `DoorVote`).
+     *
+     * The text is split into words (letters only, case-insensitive) and the FIRST word that is one of `left`,
+     * `center`, `right`, `none` decides. Anything else, including an empty answer or a sentence that mentions no
+     * side, is [HorizontalBearing.NONE].
      */
     fun parseDoorAnswer(text: String): HorizontalBearing {
         for (word in WORD.findAll(text)) {
@@ -139,4 +151,5 @@ object LibraryPromptSet : PromptSet {
     override val describeBrief: String get() = PromptLibrary.DESCRIBE_BRIEF
     override val describeDetailed: String get() = PromptLibrary.DESCRIBE_DETAILED
     override fun followUp(question: String): String = PromptLibrary.followUp(question)
+    override fun forLocale(prompt: String, locale: Locale): String = PromptLibrary.forLocale(prompt, locale)
 }

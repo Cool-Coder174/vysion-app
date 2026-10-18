@@ -9,6 +9,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -170,14 +172,17 @@ class AndroidTtsPort(private val app: Application) : TtsPort {
  *
  * Plumbing (real, unit-tested):
  * - a [Channel] of capacity [QUEUE_CAPACITY] feeds one consumer loop; [say] suspends until the engine
- *   reports done / error / stop for that utterance (H-33: bounded queue; a 5th caller waits);
+ *   reports done / error / stop for that utterance (H-33: bounded queue; with one utterance speaking and
+ *   four queued, a further caller waits in `send` and is not counted as queued);
  * - `interrupt = true` drops everything queued, interrupts the current utterance and queues with
  *   `QUEUE_FLUSH` (SRS §3 hazards before descriptions);
  * - [stop] is non-suspending (INV-6): it bumps a generation counter so anything queued before it is
  *   skipped, completes the current utterance, and calls [TtsPort.stop];
  * - a per-utterance watchdog ([utteranceTimeoutMs]) fails an utterance whose callbacks never arrive, so the
  *   controller's SPEAKING state cannot hang (NFR reliability: never silent > 10 s);
- * - [progress] mirrors `onStart` / `onRangeStart` / done for the transcript panel's auto-scroll.
+ * - [progress] mirrors `onStart` / `onRangeStart` / done for the transcript panel's auto-scroll;
+ * - [release] is terminal and idempotent: it silences, closes the queue and shuts the engine down once;
+ *   afterwards [say] returns at once and [stop] / [setRate] / [setLocale] never reach the port.
  *
  * Depends on A-8 (offline es voice) through [setLocale]'s fallback; A-7 is the bus's concern. All latency
  * is left to the caller's monotonic clock; nothing here reads a wall clock.
@@ -207,13 +212,20 @@ class AndroidSpeaker internal constructor(
     private val queue = Channel<Utterance>(QUEUE_CAPACITY)
     private val pending = AtomicInteger(0)
 
-    /** Number of utterances the consumer loop has not started yet; for tests and the diagnostics overlay. */
-    internal val queuedCount: Int get() = pending.get()
+    /**
+     * Utterances accepted into the bounded queue and not started yet, so never more than [QUEUE_CAPACITY]
+     * (H-33); a caller back-pressured in [say] is not queued yet. For tests and the diagnostics overlay.
+     * `say` counts an utterance after `send` returns, so the consumer may un-count it first; the clamp hides
+     * that instant.
+     */
+    internal val queuedCount: Int get() = pending.get().coerceAtLeast(0)
     private val generation = AtomicInteger(0)
     private val current = AtomicReference<Utterance?>(null)
     private val nextId = AtomicLong(0)
 
     @Volatile private var ready = false
+
+    private val released = AtomicBoolean(false)
 
     @Volatile private var rate = 1.0f
 
@@ -228,11 +240,15 @@ class AndroidSpeaker internal constructor(
     private val _locale = MutableStateFlow(Speaker.EN_US)
     override val locale: StateFlow<Locale> = _locale
 
+    /** The locale the engine last bound; A-8's fallback returns here. en-US until a bind succeeds. */
+    @Volatile private var boundLocale: Locale = Speaker.EN_US
+
     private val _isSpeaking = MutableStateFlow(false)
     override val isSpeaking: StateFlow<Boolean> = _isSpeaking
 
     private val listener = object : TtsPort.Listener {
         override fun onInit(ready: Boolean) {
+            if (released.get()) return // a late init after release must not wake a shut-down engine
             this@AndroidSpeaker.ready = ready
             if (ready) {
                 port.setRate(rate)
@@ -285,10 +301,17 @@ class AndroidSpeaker internal constructor(
     override suspend fun say(text: String, interrupt: Boolean) = sayInternal(text, interrupt, remember = true)
 
     /** FR-G4: silence within [Speaker.STOP_LATENCY_BUDGET_MS]; never suspends or waits for the engine (INV-6). */
-    override fun stop() = silence()
+    override fun stop() {
+        if (!released.get()) silence() // after release the engine is shut down and nothing is speaking
+    }
 
-    /** `TextToSpeech.shutdown()`; `AppGraph.release()` calls this once, when the activity finishes. */
+    /**
+     * `TextToSpeech.shutdown()`; `AppGraph.release()` calls this when the activity finishes. Terminal and
+     * idempotent: silences (every waiting [say] returns), closes the queue, shuts the port down exactly once.
+     */
     override fun release() {
+        if (!released.compareAndSet(false, true)) return
+        ready = false // later setRate / setLocale only remember their value
         silence()
         queue.close()
         port.shutdown()
@@ -304,7 +327,7 @@ class AndroidSpeaker internal constructor(
     /**
      * FR-G6 / FR-T4. Before the engine is ready the request is remembered and applied in `onInit`. After
      * that, A-8: es-MX, then es-ES (the port's [VoiceSelection]); with no offline Spanish voice the locale
-     * stays as it was and [Cues.spanishVoiceUnavailable] is spoken.
+     * stays on the voice in use (en-US) and [Cues.spanishVoiceUnavailable] is spoken (see [applyLocale]).
      */
     override fun setLocale(locale: Locale) {
         if (!ready) {
@@ -331,7 +354,7 @@ class AndroidSpeaker internal constructor(
     }
 
     private suspend fun sayInternal(text: String, interrupt: Boolean, remember: Boolean) {
-        if (text.isBlank()) return
+        if (text.isBlank() || released.get()) return
         if (interrupt) silence() // FR-G4 / SRS §3: hazards first; drops ours, then QUEUE_FLUSH drops the engine's
         val utterance = Utterance(
             id = "vysion-${nextId.incrementAndGet()}",
@@ -340,8 +363,12 @@ class AndroidSpeaker internal constructor(
             generation = generation.get(),
         )
         if (remember) lastText = text
-        pending.incrementAndGet()
-        queue.send(utterance) // H-33: suspends while 4 are waiting
+        try {
+            queue.send(utterance) // H-33: suspends while 4 are waiting
+        } catch (_: ClosedSendChannelException) {
+            return // released while this caller waited; nothing will speak again
+        }
+        pending.incrementAndGet() // counted once it is in the queue (see queuedCount)
         utterance.outcome.await()
     }
 
@@ -363,7 +390,7 @@ class AndroidSpeaker internal constructor(
 
     private suspend fun speakOne(utterance: Utterance) {
         pending.decrementAndGet()
-        if (utterance.generation != generation.get()) { // a stop() beat it to the engine
+        if (utterance.generation != generation.get() || released.get()) { // a stop() / release() beat it there
             utterance.complete(Outcome.INTERRUPTED)
             return
         }
@@ -392,13 +419,23 @@ class AndroidSpeaker internal constructor(
         _isSpeaking.value = false
     }
 
-    private fun applyLocale(locale: Locale) {
-        val bound = port.setLocale(locale)
-        when {
-            bound != null -> _locale.value = bound
-            locale.language != _locale.value.language -> scope.launch { // A-8 fallback: keep the current voice, say so
-                sayInternal(Cues.spanishVoiceUnavailable(_locale.value), interrupt = false, remember = false)
-            }
+    /**
+     * A-8 / `docs/nfr.md` fault model "TTS voice for es-MX missing": the port binds es-MX, else es-ES
+     * ([VoiceSelection]); with no offline voice for [requested] the locale returns to the last bound one
+     * (en-US at first, also when the request was remembered before `onInit`) and, when Spanish was asked for
+     * and the voice in use is not Spanish, [Cues.spanishVoiceUnavailable] is spoken in that voice's language.
+     */
+    private fun applyLocale(requested: Locale) {
+        val bound = port.setLocale(requested)
+        if (bound != null) {
+            boundLocale = bound
+            _locale.value = bound
+            return
+        }
+        val fallback = boundLocale
+        _locale.value = fallback
+        if (requested.language == SPANISH && fallback.language != SPANISH) {
+            scope.launch { sayInternal(Cues.spanishVoiceUnavailable(fallback), interrupt = false, remember = false) }
         }
     }
 
@@ -419,5 +456,7 @@ class AndroidSpeaker internal constructor(
 
         fun utteranceTimeoutMs(text: String): Long =
             UTTERANCE_TIMEOUT_BASE_MS + text.length * UTTERANCE_TIMEOUT_PER_CHAR_MS
+
+        private const val SPANISH = "es"
     }
 }

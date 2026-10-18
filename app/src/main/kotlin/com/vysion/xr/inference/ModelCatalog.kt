@@ -9,6 +9,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.security.MessageDigest
+import java.util.Collections
 
 /**
  * Where the model files are and what the lockfile says about them (ADR-0007; `ml/models.lock` is the source of
@@ -30,12 +31,22 @@ import java.security.MessageDigest
  *   RK-11 (lockfile rows may still say `TBD`).
  *
  * Resolution order for an artifact `dest` (plan.md Q1): `getExternalFilesDir("models")/dest` (sideloaded, dev
- * builds; keeps the APK ~20 MB for the 15-minute merge cadence) → `filesDir/models/dest` (copied from
- * `assets/models/dest` on first launch, release builds). The copy follows plan.md S-03 / S-11: stream with
- * `InputStream.copyTo` into `dest.part`, verify the byte count and sha256 against the lockfile when they are not
- * `TBD`, then rename onto `dest`. A `.part` is never loaded; a torn copy therefore never becomes `dest`. The copy
- * is the only write this app ever makes to storage (ADR-0003; `scripts/check_privacy.sh` honors the
+ * builds; keeps the multi-GB models out of the dev APK for the 15-minute merge cadence) → `filesDir/models/dest`
+ * (copied from `assets/models/dest` on first launch, release builds). The copy follows plan.md S-03 / S-11:
+ * stream with `InputStream.copyTo` into `dest.part`, verify the byte count and sha256 against the lockfile when
+ * they are not `TBD`, then rename onto `dest`. A `.part` is never loaded; a torn copy therefore never becomes
+ * `dest`. The copy is the only write this app ever makes to storage (ADR-0003; `scripts/check_privacy.sh` honors the
  * `privacy-allow` marker on that one line).
+ *
+ * Integrity (plan.md `## Security`: "sha256 must match before Module.load", fail closed): a sideloaded file whose
+ * size differs from a non-`TBD` lockfile `bytes` (a truncated or still-running `adb push`) or whose sha256 differs
+ * from a non-`TBD` lockfile `sha256` is NOT returned; the mismatch is logged under `vysion.security` and resolution
+ * falls through to the bundled copy (or fails with "model not found"). The multi-GB hash runs once per process per
+ * `(path, length, lastModified)` ([verifiedSideloads]); [resolve] runs from `warmUp`, off the main thread.
+ *
+ * Lockfile: `assets/models/models.lock` (copied by `scripts/fetch_models.sh`, gitignored), falling back to
+ * `getExternalFilesDir("models")/models.lock` (pushed by `scripts/push_models.sh`), so a dev APK built from a
+ * fresh clone still resolves sideloaded models once `push_models.sh` ran.
  *
  * Everything that does not need `Application` lives in the companion and is JVM-tested: lockfile parsing
  * ([parse]; a 60-line JSON reader instead of `org.json`, which is only a stub on the unit-test classpath),
@@ -64,7 +75,7 @@ class ModelCatalog(private val app: Application) {
         val displayName: String get() = displayNameOf(sourceModel, name)
     }
 
-    /** Parsed once from `assets/models/models.lock`; empty (with a warning) when the asset is missing. */
+    /** Parsed once from `assets/models/models.lock`, else the sideloaded copy; empty (with a warning) if neither. */
     val entries: List<Entry> by lazy { loadEntries() }
 
     fun entry(name: String): Entry? = entries.firstOrNull { it.name == name }
@@ -80,12 +91,14 @@ class ModelCatalog(private val app: Application) {
         val external = externalDir()
         val internal = internalDir()
 
+        var sideloadRejected: String? = null
         external?.let { dir ->
             findExisting(listOf(dir), entry.dest)?.let { file ->
-                if (entry.hasBytes && file.length() != entry.bytes) {
-                    Log.w(TAG, "${entry.dest}: sideloaded size ${file.length()} differs from lockfile ${entry.bytes}")
-                }
-                return file
+                val problem = sideloadProblem(entry, file)
+                if (problem == null) return file
+                // Fail closed (plan.md Security): never hand a torn or foreign file to the native .pte parser.
+                Log.w(SECURITY_TAG, "model integrity: $problem; not loaded")
+                sideloadRejected = problem
             }
         }
         findExisting(listOf(internal), entry.dest)?.let { file ->
@@ -98,10 +111,11 @@ class ModelCatalog(private val app: Application) {
         val source: InputStream = try {
             app.assets.open("$ASSET_DIR/${entry.dest}")
         } catch (e: IOException) {
+            val rejected = sideloadRejected?.let { " (sideloaded copy rejected: $it)" } ?: ""
             throw InferenceException(
                 "model not found: ${entry.dest} is neither in ${external?.absolutePath ?: "<no external files dir>"} " +
                     "(adb push <file> /sdcard/Android/data/${app.packageName}/files/$EXTERNAL_SUBDIR/) nor in assets " +
-                    "(scripts/fetch_models.sh); build it with ${entry.export.ifBlank { "ml/export/*.sh" }}",
+                    "(scripts/fetch_models.sh); build it with ${entry.export.ifBlank { "ml/export/*.sh" }}$rejected",
                 e,
             )
         }
@@ -115,14 +129,36 @@ class ModelCatalog(private val app: Application) {
                 expectedSha256 = entry.sha256.takeIf { entry.hasSha256 },
             )
         } catch (e: IOException) {
+            Log.w(SECURITY_TAG, "model integrity: ${entry.dest} copy rejected: ${e.message}") // size/sha256 or I/O
             throw InferenceException("model copy failed: ${entry.dest}", e) // plan.md S-01/S-02
         }
     }
 
+    /** `(absolutePath|length|lastModified)` of sideloads whose sha256 already matched in this process. */
+    private val verifiedSideloads: MutableSet<String> = Collections.synchronizedSet(HashSet())
+
+    /** `null` when [file] matches [entry]'s non-`TBD` size and sha256, else why not. Hashes once per file version. */
+    private fun sideloadProblem(entry: Entry, file: File): String? {
+        sizeProblem(entry, file.length())?.let { return it }
+        if (!entry.hasSha256) return null
+        val key = "${file.absolutePath}|${file.length()}|${file.lastModified()}"
+        if (key in verifiedSideloads) return null
+        val actual = try {
+            sha256Hex(file)
+        } catch (e: IOException) {
+            return "${entry.dest}: cannot hash sideloaded file (${e.message})"
+        }
+        sha256Problem(entry, actual)?.let { return it }
+        verifiedSideloads += key
+        return null
+    }
+
     /** [ModelInfo] for the overlay (FR-G5): lockfile facts plus the real `File.length()` of the resolved file. */
-    fun modelInfo(name: String): ModelInfo {
+    fun modelInfo(name: String): ModelInfo = modelInfo(name, resolve(name))
+
+    /** As [modelInfo], for a [file] the caller already resolved (no second resolution or hash). */
+    fun modelInfo(name: String, file: File): ModelInfo {
         val entry = entry(name) ?: throw InferenceException("no row named '$name' in assets/$LOCK_ASSET")
-        val file = resolve(name)
         return ModelInfo(
             name = entry.displayName,
             quantization = entry.quantization,
@@ -136,8 +172,8 @@ class ModelCatalog(private val app: Application) {
     /**
      * Full sha256 re-check of the resolved file against the lockfile (plan.md "Integrity of model files":
      * `ModelCatalog.verify()`). `true` when the row has no sha256 yet (nothing to compare), or it matches.
-     * Hashes a multi-GB file, so call it from a benchmark or a debug command, not on every launch; the rename
-     * in [copyVerified] already guarantees `dest` was verified once.
+     * Always re-hashes, so call it from a benchmark or a debug command; [resolve] already checks a sideload once
+     * per process and [copyVerified] checks a bundled copy once before its rename.
      */
     fun verify(name: String): Boolean {
         val entry = entry(name) ?: return false
@@ -152,18 +188,43 @@ class ModelCatalog(private val app: Application) {
 
     private fun candidateDirs(): List<File> = listOfNotNull(externalDir(), internalDir())
 
-    private fun loadEntries(): List<Entry> = try {
-        app.assets.open(LOCK_ASSET).bufferedReader().use { it.readText() }.let(::parse)
-    } catch (e: IOException) {
-        Log.w(TAG, "assets/$LOCK_ASSET missing (${e.message}); run scripts/fetch_models.sh. No models will resolve.")
-        emptyList()
-    } catch (e: IllegalArgumentException) {
-        Log.w(TAG, "assets/$LOCK_ASSET unreadable: ${e.message}")
-        emptyList()
+    private fun loadEntries(): List<Entry> {
+        val text = try {
+            app.assets.open(LOCK_ASSET).bufferedReader().use { it.readText() }
+        } catch (e: IOException) {
+            val pushed = externalDir()?.let { File(it, LOCK_FILE) }?.takeIf { it.isFile }
+            if (pushed == null) {
+                Log.w(
+                    TAG,
+                    "assets/$LOCK_ASSET missing (${e.message}) and no sideloaded $LOCK_FILE; run " +
+                        "scripts/fetch_models.sh then rebuild, or scripts/push_models.sh. No models will resolve.",
+                )
+                return emptyList()
+            }
+            Log.i(TAG, "assets/$LOCK_ASSET missing; using the sideloaded ${pushed.absolutePath} (push_models.sh)")
+            try {
+                pushed.readText()
+            } catch (io: IOException) {
+                Log.w(TAG, "${pushed.absolutePath} unreadable: ${io.message}")
+                return emptyList()
+            }
+        }
+        return try {
+            parse(text)
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "$LOCK_FILE unreadable: ${e.message}")
+            emptyList()
+        }
     }
 
     companion object {
         const val TAG: String = "vysion"
+
+        /** plan.md Security "Detection": integrity failures go to logcat under this tag. */
+        const val SECURITY_TAG: String = "vysion.security"
+
+        /** File name of the lockfile, in assets and in the sideload directory. */
+        const val LOCK_FILE: String = "models.lock"
 
         /** Asset path of the lockfile copy `scripts/fetch_models.sh` writes. */
         const val LOCK_ASSET: String = "models/models.lock"
@@ -276,6 +337,22 @@ class ModelCatalog(private val app: Application) {
             }
         }
 
+        /** Fail-closed size rule for a sideload: `null` when the lockfile has no size yet or it matches. */
+        fun sizeProblem(entry: Entry, actualBytes: Long): String? =
+            if (entry.hasBytes && actualBytes != entry.bytes) {
+                "${entry.dest}: size $actualBytes differs from lockfile ${entry.bytes} (unfinished adb push?)"
+            } else {
+                null
+            }
+
+        /** Fail-closed hash rule: `null` when the lockfile has no sha256 yet or it matches (case-insensitive). */
+        fun sha256Problem(entry: Entry, actualSha256: String): String? =
+            if (entry.hasSha256 && !actualSha256.equals(entry.sha256, ignoreCase = true)) {
+                "${entry.dest}: sha256 $actualSha256 does not match lockfile ${entry.sha256}"
+            } else {
+                null
+            }
+
         /** Lower-case hex sha256 of [file], streamed. */
         fun sha256Hex(file: File): String {
             val digest = MessageDigest.getInstance("SHA-256")
@@ -290,7 +367,7 @@ class ModelCatalog(private val app: Application) {
             return digest.digest().toHex()
         }
 
-        /** `"Gemma 4 edge multimodal (~2B); fallback …"` → `"Gemma 4 edge multimodal"`; blank → [fallback]. */
+        /** `"Gemma 3 4B (4-bit); option C"` → `"Gemma 3 4B"`; blank → [fallback]. */
         fun displayNameOf(sourceModel: String, fallback: String): String {
             val cut = sourceModel.indexOfAny(charArrayOf(';', '('))
             val head = (if (cut >= 0) sourceModel.substring(0, cut) else sourceModel).trim()

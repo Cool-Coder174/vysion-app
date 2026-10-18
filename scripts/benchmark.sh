@@ -4,7 +4,9 @@
 # into docs/benchmarks.md and the README. Numbers come from the device, never from a laptop.
 #
 # Usage:
-#   scripts/benchmark.sh --model vlm        [--runs 20]   # READ prompt on the bundled test frame, 60 max tokens
+#   scripts/benchmark.sh --model vlm        [--runs 20]   # READ prompt, 60 max tokens, on a live captureStill
+#                                         (else a synthetic dark-gray frame: real latency, unrepresentative content;
+#                                         READ on gray is not pasted into docs/benchmarks.md). No bundled frame yet.
 #   scripts/benchmark.sh --model detector   [--runs 20]   # one 640x480 frame per run
 #   scripts/benchmark.sh --soak 600                        # 10 min Navigation loop; fps + PSS every 5 s (NFR Thermal)
 #   scripts/benchmark.sh --serial <serial> ...

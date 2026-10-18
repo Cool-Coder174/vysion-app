@@ -3,7 +3,9 @@
 #
 # Usage:
 #   scripts/install_headset.sh                      # USB-C: first connected device
-#   scripts/install_headset.sh --wifi 192.168.1.42  # ADB over Wi-Fi (pair the headset first, see docs/setup.md)
+#   scripts/install_headset.sh --wifi <ip>:<port>   # ADB over Wi-Fi: Android 11+ wireless debugging, pair first and pass
+#                                                   # the ip:port from the pairing screen (docs/setup.md §4); a bare <ip>
+#                                                   # gets :5555, which works only after `adb tcpip 5555` over USB
 #   scripts/install_headset.sh --serial <serial>    # pick one of several devices
 #   scripts/install_headset.sh --no-build           # install the last APK without rebuilding
 #   scripts/install_headset.sh --logcat             # tail the app's logs after launch
