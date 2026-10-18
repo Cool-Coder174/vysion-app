@@ -37,6 +37,36 @@ class XrPerceptionSessionTest {
     }
 
     @Test
+    fun `depth goes off at pause so a resumed runtime never reads depth it lost`() {
+        // Crash 2026-10-18 11:40:08: resumed with depth configured on a runtime dropped while the headset was off.
+        assertEquals(DepthLifecyclePolicy.Action.DEPTH_OFF, DepthLifecyclePolicy.onPause(depthOn = true))
+        assertEquals(DepthLifecyclePolicy.Action.NONE, DepthLifecyclePolicy.onPause(depthOn = false))
+    }
+
+    @Test
+    fun `resume turns depth back on and retries a start that failed while paused`() {
+        // Headset off and on, runtime kept: start() at onStart configured without depth; ON_RESUME adds it.
+        assertEquals(DepthLifecyclePolicy.Action.DEPTH_ON, DepthLifecyclePolicy.onResume(SessionState.RUNNING, depthOn = false))
+        assertEquals(DepthLifecyclePolicy.Action.NONE, DepthLifecyclePolicy.onResume(SessionState.RUNNING, depthOn = true))
+        // Runtime dropped: start() at onStart failed ("Has the OpenXrManager been created?"); the resumed runtime takes it.
+        assertEquals(DepthLifecyclePolicy.Action.REOPEN, DepthLifecyclePolicy.onResume(SessionState.UNAVAILABLE, depthOn = false))
+        // Never started, mid-start, or stopped by onStop: start(activity) owns those.
+        for (state in listOf(SessionState.NOT_STARTED, SessionState.STARTING, SessionState.STOPPED)) {
+            assertEquals(state.name, DepthLifecyclePolicy.Action.NONE, DepthLifecyclePolicy.onResume(state, depthOn = false))
+        }
+    }
+
+    @Test
+    fun `no state turns depth on at pause or off at resume`() {
+        for (depthOn in listOf(true, false)) {
+            assertTrue(DepthLifecyclePolicy.onPause(depthOn) != DepthLifecyclePolicy.Action.DEPTH_ON)
+            for (state in SessionState.entries) {
+                assertTrue(DepthLifecyclePolicy.onResume(state, depthOn) != DepthLifecyclePolicy.Action.DEPTH_OFF)
+            }
+        }
+    }
+
+    @Test
     fun `ensureStarted before start and after stop leaves the session alone`() = runTest {
         val session = XrPerceptionSession(TestInstances.allocate(Application::class.java), backgroundScope)
         session.ensureStarted()

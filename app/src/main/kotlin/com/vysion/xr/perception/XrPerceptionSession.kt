@@ -6,6 +6,9 @@ import android.content.res.AssetManager
 import android.media.SoundPool
 import android.os.SystemClock
 import android.util.Log
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.xr.arcore.Anchor
 import androidx.xr.arcore.AnchorCreateSuccess
 import androidx.xr.arcore.ArDevice
@@ -260,6 +263,35 @@ internal object SessionStartPolicy {
 }
 
 /**
+ * Depth estimation is on only while the activity is resumed. Pure, tested.
+ *
+ * Why (crash on the headset, 2026-10-18 11:40:08, put back on after 13 minutes off): the Compose for XR `Session`
+ * keeps its last config across pause and resume and restarts its update loop on every resume. Off the head that
+ * long, the native OpenXR session was gone: `start()` at `onStart` failed with "One or more objects are null. Has
+ * the OpenXrManager been created?", and 30 ms later the resumed update loop still asked for depth because the
+ * config said SMOOTH_ONLY. `nativeGetDepthImagesDataBuffers` returned null and arcore-openxr rc02 passes it
+ * unchecked to `OpenXrDepth.update(depthMapBuffers)`: an NPE on `Dispatchers.Default` that killed the app. Planes,
+ * hands and head pose came through the same resume; only depth reads a native buffer without a null check.
+ *
+ * So [XrPerceptionSession] turns depth off at ON_PAUSE, before the Session pauses its runtime, and on again at
+ * ON_RESUME, after the Session resumed it; a start that failed while the runtime was paused is retried at ON_RESUME.
+ */
+internal object DepthLifecyclePolicy {
+    enum class Action { NONE, DEPTH_OFF, DEPTH_ON, REOPEN }
+
+    /** ON_PAUSE, while the runtime still runs: no depth may be configured when it resumes. */
+    fun onPause(depthOn: Boolean): Action = if (depthOn) Action.DEPTH_OFF else Action.NONE
+
+    /** ON_RESUME, after the runtime resumed: depth back on, or the start that failed while it was paused retried. */
+    fun onResume(state: SessionState, depthOn: Boolean): Action = when (state) {
+        SessionState.UNAVAILABLE -> Action.REOPEN
+        SessionState.RUNNING -> if (depthOn) Action.NONE else Action.DEPTH_ON
+        // Never started, being started (start() configures for the lifecycle state it finds), or stopped by onStop.
+        SessionState.NOT_STARTED, SessionState.STARTING, SessionState.STOPPED -> Action.NONE
+    }
+}
+
+/**
  * Opaque handle to the SceneCore `Entity` parented under an anchor's `AnchorSpace`, the point at
  * which [SpatialAudioPinger] plays (stack.md R3 rows "Spatial audio" and "Entities"). `native` holds
  * the `androidx.xr.scenecore.Entity` once FR-N3 lands; it is `Any?` here so the pinger stays
@@ -373,6 +405,9 @@ internal interface PerceptionSource {
  * [stop] from `AppGraph.stop()` on every `onStop`. Reversible: `start` after `stop` opens a fresh run
  * (new feeders, no anchors, no stale pose). [ensureStarted] only retries a session that came up
  * UNAVAILABLE ([SessionStartPolicy]). [scope] is the graph scope; only `AppGraph.release()` cancels it.
+ * Depth estimation follows the activity's RESUMED state, not start/stop ([DepthLifecyclePolicy]: off at ON_PAUSE, on
+ * at ON_RESUME, where a start that failed while the runtime was paused is also retried): a resume with depth
+ * configured on a dropped runtime crashed the app inside arcore-openxr.
  *
  * Threading (docs/architecture.md): every session API is called from [scope] (`Dispatchers.Default`);
  * `Session.create` runs under `Dispatchers.IO` (stack.md D7).
@@ -459,7 +494,8 @@ class XrPerceptionSession(
      */
     override val headPose: StateFlow<RawHeadPose?> = _headPose.asStateFlow()
 
-    /** The runtime session once [start] succeeds. Read by [SpatialAudioPinger] through [xrSession]. */
+    /** The runtime session once [start] succeeds. Read by [SpatialAudioPinger] through [xrSession]. Volatile: ON_PAUSE reads it on main. */
+    @Volatile
     private var session: Session? = null
     internal val xrSession: Session? get() = session
 
@@ -506,6 +542,8 @@ class XrPerceptionSession(
             Log.i(TAG, "Compose offered a new XR session (activity recreated); moving perception to it")
             feeders?.cancel()
             feeders = null
+            depthFeed?.cancel()
+            depthFeed = null
             runCatching { detachAllAnchors() } // they belonged to the old session
             session = null
             _headPose.value = null
@@ -515,8 +553,86 @@ class XrPerceptionSession(
         }
     }
 
-    /** Parent of the four feeders of the current run; cancelled by [stop] so a later [start] relaunches them. */
+    /** Parent of the head pose, plane and hand feeders of the current run; cancelled by [stop] so a later [start] relaunches them. */
     private var feeders: Job? = null
+
+    /** The depth feeder, apart from [feeders]: it runs only while depth is on ([setDepth]); `Depth.left` throws while it is off. */
+    @Volatile
+    private var depthFeed: Job? = null
+
+    /** The activity lifecycle [lifecycleObserver] is registered on. Main thread only. */
+    private var observedLifecycle: Lifecycle? = null
+
+    /**
+     * Depth follows the activity's RESUMED state ([DepthLifecyclePolicy]). Registered in [open] once the Session exists, so
+     * it is newer than the Session's own observer: LifecycleRegistry delivers ON_PAUSE newest first (depth goes off while
+     * the runtime still runs) and ON_RESUME oldest first (the runtime has resumed before depth goes back on).
+     */
+    private val lifecycleObserver = LifecycleEventObserver { _, event ->
+        when (event) {
+            Lifecycle.Event.ON_PAUSE -> session?.let { xrSession ->
+                // Synchronous on main: it must land before the Session's observer pauses the runtime.
+                if (DepthLifecyclePolicy.onPause(xrSession.depthOn) == DepthLifecyclePolicy.Action.DEPTH_OFF) {
+                    setDepth(xrSession, on = false)
+                }
+            }
+            Lifecycle.Event.ON_RESUME -> scope.launch { onActivityResumed() }
+            else -> Unit
+        }
+    }
+
+    private suspend fun onActivityResumed() {
+        lifecycle.withLock {
+            val activity = activityRef?.get() ?: return
+            val xrSession = session
+            when (DepthLifecyclePolicy.onResume(_state.value, xrSession?.depthOn == true)) {
+                DepthLifecyclePolicy.Action.REOPEN -> {
+                    Log.i(TAG, "activity resumed: retrying the XR session start that failed while the runtime was paused")
+                    open(activity, explicit = false)
+                }
+                DepthLifecyclePolicy.Action.DEPTH_ON -> if (xrSession != null && activity.isResumedNow()) setDepth(xrSession, on = true)
+                DepthLifecyclePolicy.Action.DEPTH_OFF, DepthLifecyclePolicy.Action.NONE -> Unit
+            }
+        }
+    }
+
+    /**
+     * Turns depth estimation on or off on [xrSession], every other mode kept, and starts or cancels the depth feeder with
+     * it. Never throws: a refused configure is logged and the session keeps its config (`Session.configure` changes
+     * nothing on failure).
+     */
+    private fun setDepth(xrSession: Session, on: Boolean) {
+        if (!on) {
+            depthFeed?.cancel()
+            depthFeed = null
+        }
+        val mode = if (on) DepthEstimationMode.SMOOTH_ONLY else DepthEstimationMode.DISABLED
+        if (xrSession.config.depthEstimation != mode) {
+            val result = try {
+                xrSession.configure(Config.Builder(xrSession.config).setDepthEstimation(mode).build())
+            } catch (e: RuntimeException) { // IllegalState (runtime gone, session destroyed), Security, UnsupportedOperation
+                Log.w(XrNavigationEngine.TAG_RELIABILITY, "depth ${if (on) "on" else "off"} refused: ${e.message}")
+                return
+            }
+            if (result !is SessionConfigureSuccess) {
+                Log.w(XrNavigationEngine.TAG_RELIABILITY, "depth ${if (on) "on" else "off"} refused: ${result::class.java.simpleName}")
+                return
+            }
+            Log.i(TAG, if (on) "depth on (activity resumed)" else "depth off (activity paused)")
+        }
+        if (on && depthFeed?.isActive != true) depthFeed = scope.launchDepthFeed(xrSession)
+    }
+
+    /** Registers [lifecycleObserver] on [activity]'s lifecycle, moving it off a previous activity's. */
+    private suspend fun observeLifecycle(activity: Activity) {
+        val target = (activity as? LifecycleOwner)?.lifecycle ?: return
+        withContext(Dispatchers.Main.immediate) { // addObserver / removeObserver are main-thread only
+            if (observedLifecycle === target) return@withContext
+            observedLifecycle?.removeObserver(lifecycleObserver)
+            observedLifecycle = target
+            target.addObserver(lifecycleObserver) // replays ON_RESUME when already resumed: a no-op for a running session
+        }
+    }
 
     /**
      * The Activity [start] was last given, for [ensureStarted]'s retry. Weak so a destroyed Activity is
@@ -617,9 +733,13 @@ class XrPerceptionSession(
                 }
             }
 
+            // Before configuring: a start that fails while the runtime is paused is retried at ON_RESUME.
+            observeLifecycle(activity)
+            // Depth only while resumed (DepthLifecyclePolicy); a start from onStart gets it at ON_RESUME.
+            val depthOn = activity.isResumedNow()
             val config = Config.Builder(xrSession.config)
                 .setPlaneTracking(PlaneTrackingMode.HORIZONTAL_AND_VERTICAL)
-                .setDepthEstimation(DepthEstimationMode.SMOOTH_ONLY)
+                .setDepthEstimation(if (depthOn) DepthEstimationMode.SMOOTH_ONLY else DepthEstimationMode.DISABLED)
                 .setHandTracking(HandTrackingMode.BOTH)
                 .setDeviceTracking(DeviceTrackingMode.SPATIAL)
                 .setAnchorPersistence(AnchorPersistenceMode.LOCAL)
@@ -642,15 +762,15 @@ class XrPerceptionSession(
                         "probe geospatial spatial=${probeResult { device.isGeospatialModeSupported(GeospatialMode.SPATIAL) }} " +
                             "vpsAndGps=${probeResult { device.isGeospatialModeSupported(GeospatialMode.VPS_AND_GPS) }}",
                     )
+                    if (depthOn) depthFeed = scope.launchDepthFeed(xrSession)
                     feeders = scope.launch {
-                        launchDepthFeed(xrSession)
                         launchHeadPoseFeed(xrSession)
                         launchPlaneFeed(xrSession)
                         // Hands feed the eyes-free gestures (XrHandGestures: talk, next page, stop for blind users).
                         launchHandFeed(xrSession)
                     }
                     _state.value = SessionState.RUNNING
-                    Log.i(TAG, "XR session configured successfully; state=${_state.value}")
+                    Log.i(TAG, "XR session configured successfully; state=${_state.value} depth=${if (depthOn) "on" else "on resume"}")
                 }
                 else -> {
                     Log.e(TAG, "XR session configuration failed: ${configureResult::class.java.simpleName}")
@@ -660,6 +780,12 @@ class XrPerceptionSession(
         } catch (e: CancellationException) {
             _state.value = SessionState.NOT_STARTED
             throw e
+        } catch (e: IllegalStateException) {
+            // "One or more objects are null. Has the OpenXrManager been created?" (the runtime is paused or was dropped
+            // while the headset was off) or "Session has been destroyed.": retried at ON_RESUME. Caught here, not by the
+            // caller, because that retry and reattach() run on the graph scope, where an exception would kill the app.
+            Log.w(XrNavigationEngine.TAG_RELIABILITY, "perception start failed, retried on resume: ${e.message}")
+            _state.value = SessionState.UNAVAILABLE
         } catch (e: SecurityException) {
             Log.e(TAG, "XR session setup failed because a runtime permission is missing", e)
             _state.value = SessionState.UNAVAILABLE
@@ -834,6 +960,12 @@ class XrPerceptionSession(
 
     private fun Vector3.toVec3() = Vec3(x, y, z)
 
+    private val Session.depthOn: Boolean get() = config.depthEstimation != DepthEstimationMode.DISABLED
+
+    /** RESUMED now; an Activity without a lifecycle (never MainActivity) counts as resumed, the behavior before the policy. */
+    private fun Activity.isResumedNow(): Boolean =
+        (this as? LifecycleOwner)?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) ?: true
+
     private fun TrackingState.toTracking(): Tracking = when (this) {
         TrackingState.TRACKING -> Tracking.TRACKING
         TrackingState.PAUSED -> Tracking.PAUSED
@@ -912,6 +1044,10 @@ class XrPerceptionSession(
         lifecycle.withLock {
             feeders?.cancel()
             feeders = null
+            // ON_PAUSE already turned depth off; this covers a session ON_PAUSE did not reach. Cancels the depth feeder.
+            session?.let { setDepth(it, on = false) }
+            depthFeed?.cancel()
+            depthFeed = null
             detachAllAnchors()
             session = null
             activityRef = null
