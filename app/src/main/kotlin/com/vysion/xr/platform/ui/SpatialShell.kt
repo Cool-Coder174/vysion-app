@@ -1,5 +1,6 @@
 package com.vysion.xr.platform.ui
 
+import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -19,6 +20,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -42,6 +44,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.Lifecycle
 import androidx.xr.compose.platform.LocalSession
 import androidx.xr.compose.platform.LocalSpatialCapabilities
 import androidx.xr.compose.spatial.ExperimentalFollowingSubspaceApi
@@ -93,6 +98,7 @@ import com.vysion.xr.platform.ui.theme.rememberReduceMotion
 import com.vysion.xr.platform.ui.theme.vysionSpring
 import com.vysion.xr.platform.ui.theme.vysionSpring
 import kotlin.math.abs
+import java.util.function.Consumer
 import kotlin.math.tan
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -129,9 +135,11 @@ fun SpatialShell(graph: AppGraph, diagnostics: @Composable () -> Unit, onboardin
         return
     }
 
+    // Augmented reality: the room is always visible, from the first onboarding card on.
+    KeepPassthroughOn(session)
+
     CompositionLocalProvider(LocalReduceMotion provides rememberReduceMotion()) {
         if (!onboarding.done) {
-            LaunchedEffect(session) { session?.let { setPassthrough(it, FULL_PASSTHROUGH) } }
             Subspace {
                 SpatialPanel(
                     SubspaceModifier.width(ONBOARDING_WIDTH).height(ONBOARDING_HEIGHT).movable(),
@@ -154,10 +162,9 @@ private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composa
     var diagnosticsShown by rememberSaveable { mutableStateOf(preview == PreviewScreen.DIAGNOSTICS) }
     val obstacle = shell.obstacle
 
-    // Headset 10, "the room dims": lower passthrough while the obstacle card shows, restore after (A-2).
-    LaunchedEffect(session, obstacle != null) {
-        session?.let { setPassthrough(it, if (obstacle != null) DIMMED_PASSTHROUGH else FULL_PASSTHROUGH) }
-    }
+    // Headset 10 dimmed the room while the obstacle card showed. Not any more: SceneCore turns passthrough OFF for a
+    // semi-transparent value when the app has no environment of its own, so the room went dark exactly when something
+    // was close. The card's hazard styling carries the alert; the wearer keeps seeing the obstacle.
 
     val doorWord = stringResource(R.string.overlay_door)
     val lastSeenWord = stringResource(R.string.overlay_last_seen)
@@ -541,13 +548,54 @@ private fun MarkerTestTool(graph: AppGraph) {
     }
 }
 
-/** Passthrough preference, gated on the capability (A-2: full passthrough was on with our panels shown). */
-private fun setPassthrough(session: Session, opacity: Float) {
-    val scene = session.scene
-    if (scene.spatialCapabilities.contains(SpatialCapability.PASSTHROUGH_CONTROL)) {
-        scene.spatialEnvironment.preferredPassthroughOpacity = opacity
+/**
+ * Augmented reality needs the room: full passthrough, enforced rather than requested once. SceneCore keeps it only as
+ * the app's *preference* and the system can change what is shown (sleep and wake, Home and back, a system toggle), so
+ * the preference is re-applied on every resume and whenever the visible opacity drops below full, and no app
+ * environment is ever requested (with one, passthrough blends with it). Each drop is logged under `vysion` so a dark
+ * room can be traced. If the system keeps refusing (a user setting), the listener fires once per change, not in a loop.
+ */
+@Composable
+private fun KeepPassthroughOn(session: Session?) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(session, lifecycle) {
+        if (session == null) return@DisposableEffect onDispose { }
+        val environment = session.scene.spatialEnvironment
+        val onChanged = Consumer<Float> { visible ->
+            if (visible < FULL_PASSTHROUGH) {
+                Log.w(PASSTHROUGH_TAG, "passthrough dropped to $visible; asking for full passthrough again")
+                setPassthrough(session)
+            }
+        }
+        val onResume = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) setPassthrough(session)
+        }
+        runCatching { environment.addPassthroughOpacityChangedListener(onChanged) }
+        lifecycle.addObserver(onResume)
+        setPassthrough(session)
+        onDispose {
+            runCatching { environment.removePassthroughOpacityChangedListener(onChanged) }
+            lifecycle.removeObserver(onResume)
+        }
     }
 }
+
+/** Full passthrough and no app environment, gated on the capability (A-2: passthrough works with our panels shown). */
+private fun setPassthrough(session: Session) {
+    val scene = session.scene
+    if (!scene.spatialCapabilities.contains(SpatialCapability.PASSTHROUGH_CONTROL)) {
+        Log.w(PASSTHROUGH_TAG, "no PASSTHROUGH_CONTROL capability; the system decides what is shown")
+        return
+    }
+    runCatching {
+        val environment = scene.spatialEnvironment
+        if (environment.preferredSpatialEnvironment != null) environment.preferredSpatialEnvironment = null
+        environment.preferredPassthroughOpacity = FULL_PASSTHROUGH
+        Log.i(PASSTHROUGH_TAG, "passthrough requested: full (visible now ${environment.currentPassthroughOpacity})")
+    }.onFailure { Log.w(PASSTHROUGH_TAG, "passthrough request failed: ${it.message}") }
+}
+
+private const val PASSTHROUGH_TAG = "vysion"
 
 /** A heads-up display, not a monitor: about two thirds of Android XR's default panel, so the room stays the view. */
 private val STATUS_WIDTH = 820.dp
@@ -609,4 +657,3 @@ private val OVERLAY_HEIGHT = 824.dp
 private val ONBOARDING_WIDTH = 1240.dp
 private val ONBOARDING_HEIGHT = 860.dp
 private const val FULL_PASSTHROUGH = 1.0f
-private const val DIMMED_PASSTHROUGH = 0.55f
