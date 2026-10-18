@@ -11,7 +11,7 @@ class HandGestureRecognizerTest {
     private val wrist = Vec3(0.1f, 1.3f, -0.4f)
     private val ms = 1_000_000L
 
-    private enum class Touch { NONE, MIDDLE, RING, INDEX, FIST }
+    private enum class Touch { NONE, MIDDLE, RING, INDEX, FIST, HANG_LOOSE }
 
     /** A synthetic hand. [palmAway] false mirrors it so the palm faces the wearer. */
     private fun hand(
@@ -25,12 +25,12 @@ class HandGestureRecognizerTest {
         var sx = if (palmAway) 1f else -1f
         if (side == HandSide.LEFT) sx = -sx
         fun at(x: Float, y: Float, z: Float) = wrist + Vec3(x * sx, y, z)
-        val thumb = at(-0.06f, 0.07f, -0.02f)
+        var thumb = at(-0.06f, 0.07f, -0.02f)
         val reach = if (open) 0.17f else 0.10f
         var index = at(-0.03f, reach, -0.03f)
         var middle = at(0f, reach, -0.03f)
         var ring = at(0.02f, reach - 0.005f, -0.03f)
-        val little = at(0.035f, reach - 0.015f, -0.03f)
+        var little = at(0.035f, reach - 0.015f, -0.03f)
         val near = thumb + Vec3(0.005f, 0f, 0f)
         when (touch) {
             Touch.MIDDLE -> middle = near
@@ -39,6 +39,13 @@ class HandGestureRecognizerTest {
             Touch.FIST -> {
                 middle = near
                 ring = thumb + Vec3(0f, 0.005f, 0f)
+            }
+            Touch.HANG_LOOSE -> { // three fingers curled, thumb and little finger stretched out
+                index = at(-0.03f, 0.05f, -0.04f)
+                middle = at(0f, 0.05f, -0.04f)
+                ring = at(0.02f, 0.045f, -0.04f)
+                little = at(0.06f, 0.12f, -0.02f)
+                thumb = at(-0.10f, 0.05f, -0.02f)
             }
             Touch.NONE -> Unit
         }
@@ -66,6 +73,17 @@ class HandGestureRecognizerTest {
     fun `a quick middle-finger tap activates the page`() {
         val out = run(HandGestureRecognizer(), hand(0), hand(50, Touch.MIDDLE), hand(200, Touch.MIDDLE), hand(250))
         assertEquals(listOf(HandGesture.ACTIVATE), out)
+    }
+
+    @Test
+    fun `a bouncing tap counts once, two deliberate taps count twice`() {
+        val bounce = run(
+            HandGestureRecognizer(),
+            hand(0, Touch.MIDDLE), hand(100), hand(180, Touch.MIDDLE), hand(330), // released and touched again 233 ms on
+        )
+        assertEquals(listOf(HandGesture.ACTIVATE), bounce)
+        val twice = run(HandGestureRecognizer(), hand(0, Touch.MIDDLE), hand(100), hand(600, Touch.MIDDLE), hand(700))
+        assertEquals(listOf(HandGesture.ACTIVATE, HandGesture.ACTIVATE), twice)
     }
 
     @Test
@@ -104,12 +122,33 @@ class HandGestureRecognizerTest {
     }
 
     @Test
-    fun `an open palm held out stops once, and again after the hand changes`() {
+    fun `hang loose held half a second stops once, and again after the hand changes`() {
         val r = HandGestureRecognizer()
-        val first = run(r, hand(0, open = true), hand(300, open = true), hand(520, open = true), hand(900, open = true))
+        val loose = Touch.HANG_LOOSE
+        val first = run(r, hand(0, loose), hand(300, loose), hand(520, loose), hand(900, loose))
         assertEquals(listOf(HandGesture.STOP), first)
-        val again = run(r, hand(1000), hand(1100, open = true), hand(1700, open = true))
+        val again = run(r, hand(1000), hand(1100, loose), hand(1700, loose))
         assertEquals(listOf(HandGesture.STOP), again)
+    }
+
+    @Test
+    fun `hang loose stops with the palm either way, but an open hand or a relaxed one never does`() {
+        val turned = run(HandGestureRecognizer(), hand(0, Touch.HANG_LOOSE, palmAway = false), hand(600, Touch.HANG_LOOSE, palmAway = false))
+        assertEquals(listOf(HandGesture.STOP), turned)
+        val open = run(HandGestureRecognizer(), hand(0, open = true), hand(600, open = true), hand(1200, open = true))
+        assertTrue(open.toString(), open.isEmpty()) // carrying a tray or a box: the old palm-out stop fired here
+        val relaxed = run(HandGestureRecognizer(), hand(0), hand(600), hand(1200), hand(0, side = HandSide.LEFT))
+        assertTrue(relaxed.isEmpty())
+    }
+
+    @Test
+    fun `hang loose ends a talk in progress`() {
+        val r = HandGestureRecognizer()
+        assertEquals(listOf(HandGesture.TALK_START), run(r, hand(0, Touch.MIDDLE), hand(500, Touch.MIDDLE)))
+        assertEquals(
+            listOf(HandGesture.TALK_END, HandGesture.STOP),
+            run(r, hand(600, Touch.HANG_LOOSE), hand(1200, Touch.HANG_LOOSE)),
+        )
     }
 
     @Test

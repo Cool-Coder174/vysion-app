@@ -113,7 +113,7 @@ object Cues {
 
     private val EN_US: Map<Key, String> = mapOf(
         Key.WELCOME to "Welcome to Vysion XR. To talk, touch your thumb to your middle finger and hold, " +
-            "then say read this, describe, or find the door. To stop me, hold your palm out, or say stop.",
+            "then say read this, describe, or find the door. To stop me, make the hang loose sign, thumb and little finger out, or say stop.",
         // Verbatim copy of R.string.product_sentence (res/values/strings.xml); the test keeps them equal.
         Key.PRODUCT_SENTENCE to "Vysion XR helps you read, understand, and move through a space. " +
             "It is not validated for unassisted travel by blind users.",
@@ -140,7 +140,7 @@ object Cues {
         Key.NAVIGATION_UNAVAILABLE_ON_THIS_DEVICE to
             "Navigation is not available on this device. Read and describe still work.",
         Key.VOICE_COMMANDS_UNAVAILABLE to
-            "Voice commands are not available offline. Use the Read, Describe and Find door buttons.",
+            "Voice commands are not working right now. Tap your thumb to your middle finger to run the page, or use the buttons.",
         Key.SPANISH_VOICE_UNAVAILABLE to "The Spanish voice is not installed. Continuing in English.",
         Key.NOTHING_TO_REPEAT to "Nothing to repeat yet",
         Key.PERMISSION_EXPLANATION to "Vysion needs the camera to see, the microphone to hear you, " +
@@ -155,7 +155,7 @@ object Cues {
 
     private val ES_MX: Map<Key, String> = mapOf(
         Key.WELCOME to "Bienvenido a Vysion XR. Para hablar, junta el pulgar con el dedo medio y mantén, " +
-            "y di lee esto, describe, o busca la puerta. Para callarme, muestra la palma, o di alto.",
+            "y di lee esto, describe, o busca la puerta. Para callarme, extiende el pulgar y el meñique, o di alto.",
         Key.PRODUCT_SENTENCE to "Vysion XR te ayuda a leer, entender y moverte por un espacio. " +
             "No está validado para que personas ciegas viajen sin asistencia.",
         Key.MODE_TEXT_READER to "Modo lector de texto",
@@ -181,7 +181,7 @@ object Cues {
         Key.NAVIGATION_UNAVAILABLE_ON_THIS_DEVICE to
             "La navegación no está disponible en este dispositivo. Leer y describir sí funcionan.",
         Key.VOICE_COMMANDS_UNAVAILABLE to
-            "Los comandos de voz no están disponibles sin conexión. Usa los botones Leer, Describir y Buscar puerta.",
+            "Los comandos de voz no funcionan ahora. Toca el pulgar con el dedo medio para usar la página, o usa los botones.",
         Key.SPANISH_VOICE_UNAVAILABLE to "La voz en español no está instalada. Continúo en inglés.",
         Key.NOTHING_TO_REPEAT to "Nada que repetir todavía",
         Key.PERMISSION_EXPLANATION to "Vysion necesita la cámara para ver, el micrófono para escucharte " +
@@ -469,7 +469,7 @@ private class OnboardingCopy(
             talkHint = "Try it now: say “read this”",
             talkHintSpoken = "Try it now: say read this.",
             stop = "Stop me anytime." to
-                "Hold your open hand out, palm away from you. I go quiet right away.",
+                "Make the hang loose sign: thumb and little finger out, the other fingers folded. Hold it a moment and I go quiet.",
             stopHint = "Try it: I’ll start talking, you stop me",
             sounds = "Learn my sounds." to "Each sound means one thing. Look at a sound and pinch to hear it.",
             soundRows = listOf(
@@ -491,7 +491,7 @@ private class OnboardingCopy(
                 OnboardingItem("Navigate", "“Find the door”"),
             ),
             allSetSpokenTail = "Say read this, what’s here, or find the door.",
-            stopPractice = "This is a long sentence so you can practice stopping me. Hold your palm out, " +
+            stopPractice = "This is a long sentence so you can practice stopping me. Make the hang loose sign, " +
                 "and I go quiet right away. I keep talking until you do. I keep talking until you do.",
         )
 
@@ -510,7 +510,7 @@ private class OnboardingCopy(
             talkHint = "Pruébalo: di “lee esto”",
             talkHintSpoken = "Pruébalo: di lee esto.",
             stop = "Detenme cuando quieras." to
-                "Muestra la mano abierta, con la palma hacia afuera. Me callo de inmediato.",
+                "Extiende el pulgar y el meñique, con los otros dedos doblados. Mantenlo un momento y me callo.",
             stopHint = "Pruébalo: yo empiezo a hablar y tú me detienes",
             sounds = "Aprende mis sonidos." to "Cada sonido significa una cosa. Mira un sonido y pellizca para oírlo.",
             soundRows = listOf(
@@ -532,7 +532,7 @@ private class OnboardingCopy(
                 OnboardingItem("Navegar", "“Busca la puerta”"),
             ),
             allSetSpokenTail = "Di lee esto, qué hay aquí, o busca la puerta.",
-            stopPractice = "Esta es una frase larga para que practiques detenerme. Muestra la palma, " +
+            stopPractice = "Esta es una frase larga para que practiques detenerme. Extiende el pulgar y el meñique, " +
                 "y me callo de inmediato. Sigo hablando hasta que lo hagas. " +
                 "Sigo hablando hasta que lo hagas.",
         )

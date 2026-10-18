@@ -35,6 +35,24 @@ import java.util.Locale
  */
 object CommandGrammar {
 
+    /**
+     * Phrases the recognizer should favor (`RecognizerIntent.EXTRA_BIASING_STRINGS`): the canonical commands in the
+     * session's language, so a short command in a noisy room is heard as the command, not a similar word. Biasing
+     * only shifts the recognizer's guesses; [parse] still decides what is a command.
+     */
+    fun biasingPhrases(languageTag: String): List<String> =
+        if (languageTag.lowercase().startsWith("es")) BIASING_ES else BIASING_EN
+
+    private val BIASING_EN = listOf(
+        "read this", "read that", "describe", "what's here", "what's in front of me", "find the door", "guide me",
+        "stop", "repeat", "say that again", "slower", "in Spanish", "more detail", "next",
+    )
+
+    private val BIASING_ES = listOf(
+        "lee esto", "lee eso", "describe", "qué hay aquí", "qué hay enfrente", "busca la puerta", "guíame",
+        "alto", "para", "repite", "más despacio", "más detalle", "siguiente",
+    )
+
     /** Leading tokens dropped before matching (FR-G2: "Vysion, read this"). Matched within distance 1. */
     val WAKE_WORDS: Set<String> = setOf("vysion", "vision")
 

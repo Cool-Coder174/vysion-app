@@ -27,9 +27,12 @@ So the app's gestures never use the index finger and are ignored while the palm 
 | Thumb to middle finger, hold | Talk (mic open while held, sends on release) | Listening earcon, Listening window |
 | Thumb to middle finger, quick tap | Run the current page (Read, Describe or Find door) | The page's answer |
 | Thumb to ring finger, tap | Next page (Read → Describe → Find door) | Ping + "Describe. Tap your thumb to your middle finger to describe." |
-| Open hand, palm away, hold ½ s | Stop | Silence |
+| Hang loose (thumb and little finger out, other three folded), hold ½ s, palm either way | Stop | Silence |
 
-Thresholds: pinch on < 2.2 cm, off > 3.5 cm; tap < 400 ms; open hand = every fingertip > 11 cm from the wrist.
+Thresholds: pinch on < 2.2 cm, off > 3.5 cm; tap < 400 ms, and a second tap within 400 ms is dropped (one tap fired twice
+233 ms apart on the worn headset); hang loose = index, middle and ring tips < 9.5 cm from the wrist, little tip > 11.5 cm,
+thumb tip > 6.5 cm from the index knuckle. Stop used to be an open palm held out, which fired while the wearer carried
+things (worn test, 2026-10-18).
 Tune them on device with `adb logcat -s vysion.gesture`.
 
 Not adopted: `androidx.xr.compose.material3` (1.0.0-alpha17). It was built against Compose for XR alpha14 and calls

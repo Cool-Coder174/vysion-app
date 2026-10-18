@@ -18,6 +18,16 @@ class CommandGrammarTest {
     private fun parse(s: String, locale: Locale = en) = CommandGrammar.parse(s, locale)
 
     @Test
+    fun `every phrase the recognizer is biased toward is understood, in both languages`() {
+        for ((tag, locale) in listOf("en-US" to Speaker.EN_US, "es-MX" to Speaker.ES_MX)) {
+            for (phrase in CommandGrammar.biasingPhrases(tag)) {
+                val command = CommandGrammar.parse(phrase, locale)
+                assertTrue("\"$phrase\" ($tag) is not understood", command != null) // a question is a FollowUp: still understood
+            }
+        }
+    }
+
+    @Test
     fun `read in both languages including the SRS fuzzy variants`() {
         for (u in listOf("read this", "read it", "read that", "Read", "read the sign", "could you read this please")) {
             assertEquals(u, Command.Read, parse(u))

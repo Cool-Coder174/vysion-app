@@ -408,26 +408,31 @@ private fun WorldLabelLayer(graph: AppGraph) {
     val label by graph.modeController.worldLabel.collectAsStateWithLifecycle()
     val current = label ?: return
     val space = remember(current.anchor) { graph.anchorSpace(current.anchor) } ?: return
-    // A card on a sign 2.5 m away was too small to read in the first worn capture: it grows with distance instead.
+    // Constant apparent size: a card on a sign 2.5 m away was too small to read, and one on a laptop 0.6 m away
+    // filled the view (worn captures, 2026-10-18), so it scales with distance both ways.
     val distanceFlow = remember(current.anchor) { graph.anchorDistanceM(current.anchor) }
     val distance by distanceFlow.collectAsStateWithLifecycle(initialValue = null)
     val reduceMotion = LocalReduceMotion.current
     val grow by animateFloatAsState(
-        targetValue = ((distance ?: WORLD_LABEL_REF_M) / WORLD_LABEL_REF_M).coerceIn(1f, WORLD_LABEL_MAX_SCALE),
+        targetValue = ((distance ?: WORLD_LABEL_REF_M) / WORLD_LABEL_REF_M).coerceIn(WORLD_LABEL_MIN_SCALE, WORLD_LABEL_MAX_SCALE),
         animationSpec = if (reduceMotion) snap() else vysionSpring(response = 0.4f),
         label = "world label scale",
     )
+    var cardHeight by remember(current.anchor) { mutableStateOf(READ_CARD_MIN_HEIGHT) }
     FollowingSubspace(target = FollowTarget.Anchor(space), behavior = FollowBehavior.Tight) {
         when (current.kind) {
             WorldLabel.Kind.DOOR -> SpatialPanel(
                 SubspaceModifier.scale(grow).width(DOOR_LABEL_WIDTH).height(DOOR_LABEL_HEIGHT),
                 shape = SpatialRoundedCornerShape(CornerSize(Radius.window)),
             ) { DoorMarker() }
+            // Above what was read, never over it: the anchor is the crosshair's center, so the card's bottom edge goes
+            // to the crosshair's top edge.
             WorldLabel.Kind.TEXT -> AutoHeightPanel(
                 width = READ_CARD_WIDTH,
-                min = 160.dp,
+                min = READ_CARD_MIN_HEIGHT,
                 max = 560.dp,
-                modifier = SubspaceModifier.scale(grow),
+                modifier = SubspaceModifier.offset(y = (cardHeight / 2 + READ_CARD_LIFT) * grow).scale(grow),
+                onHeight = { cardHeight = it },
             ) {
                 ReadCard(current.text)
             }
@@ -570,7 +575,15 @@ private const val HUD_TILT_DEG = 16f
 
 /** World labels keep at least the HUD's text size: past this distance they grow with it, up to [WORLD_LABEL_MAX_SCALE]. */
 private const val WORLD_LABEL_REF_M = HUD_DISTANCE_M
+private const val WORLD_LABEL_MIN_SCALE = 0.4f
 private const val WORLD_LABEL_MAX_SCALE = 3f
+
+/**
+ * Lift of a read card above its anchor before scaling: at 1 dp ≈ 0.87 mm (measured: 1727.8 px/m at density 1.5) and a
+ * scale of distance / [WORLD_LABEL_REF_M], 250 dp is the reading frame's top edge (10° up) at any distance.
+ */
+private val READ_CARD_LIFT = 250.dp
+private val READ_CARD_MIN_HEIGHT = 160.dp
 
 /** How often the layout checks whether head tracking has come on. */
 private const val TRACKING_POLL_MS = 250L

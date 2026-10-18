@@ -82,44 +82,102 @@ interface RecognizerPort {
  * `RESULTS_RECOGNITION`; `checkRecognitionSupport` (API 33) and `triggerModelDownload` (API 34); all methods on
  * the main thread; `destroy()` mandatory; `RECORD_AUDIO` required). Owner R4, FR-G2.
  *
- * On-device only, never the network recognizer: audio must not leave the headset (ADR-0003). The first session
- * logs which languages the on-device recognizer has installed (A-7 / Q12 evidence) and asks the system to
- * download a supported pack that is missing; the download is the recognizer service's, not this app's.
+ * Two recognizers, in order:
+ * 1. the on-device one (`createOnDeviceSpeechRecognizer`): audio never leaves the headset;
+ * 2. the system's default recognizer (Speech Services by Google on the Galaxy XR) with `EXTRA_PREFER_OFFLINE`, used
+ *    once the first one fails to bind (ADR-0010 row "Voice commands"). On the worn headset every on-device session
+ *    failed: SpeechRecognizer only logged "Bind to system recognition service failed with error 10"
+ *    (ERROR_TOO_MANY_REQUESTS) and never called the listener, so voice commands were silently dead.
+ *
+ * A session that is not ready within [READY_TIMEOUT_MS] counts as a failed bind: the port switches to the next
+ * recognizer and restarts the same session if the wearer is still talking. When neither binds twice in a row, the
+ * session ends with [RecognizerPort.ERROR_LANGUAGE_UNAVAILABLE], the bus turns UNAVAILABLE and the controller says so.
+ *
+ * Every session biases recognition toward the command phrases (`EXTRA_BIASING_STRINGS`,
+ * [CommandGrammar.biasingPhrases]), so short commands said in a noisy room are heard as commands.
  */
 class AndroidRecognizerPort(private val app: Application) : RecognizerPort {
 
-    override val onDeviceAvailable: Boolean = runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(app) }
-        .getOrDefault(false)
-        .also {
-            Log.i(TAG, "A-7 on-device speech recognition available=$it (false -> RK-4: pinch/panel P0, voice P1)")
-        }
+    private val onDevice: Boolean = runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(app) }.getOrDefault(false)
+    private val systemDefault: Boolean = runCatching { SpeechRecognizer.isRecognitionAvailable(app) }.getOrDefault(false)
+
+    /** True when either recognizer exists; `false` makes voice commands UNAVAILABLE from the start. */
+    override val onDeviceAvailable: Boolean = (onDevice || systemDefault).also {
+        Log.i(TAG, "A-7 speech recognition on-device=$onDevice system=$systemDefault (neither -> RK-4: gestures/panel only)")
+    }
 
     private val main = Handler(Looper.getMainLooper())
 
-    /** Created on the first session, on the main thread; `null` again after [destroy]. */
+    /** Created on the first session, on the main thread; `null` again after [destroy] or a failed bind. */
     private var recognizer: SpeechRecognizer? = null
+    private var recognizerIsOnDevice = false
+
+    /** Set when the on-device recognizer failed to bind: the rest of this run uses the system recognizer. */
+    private var onDeviceFailed = false
+
+    /** Consecutive sessions that never became ready. */
+    private var bindFailures = 0
+
+    /** The live session's watchdog and whether the wearer already let go (then a failed bind is not retried). */
+    private var watchdog: Runnable? = null
+    private var stopRequested = false
 
     private val checkedLanguages = mutableSetOf<String>()
 
     override fun startListening(languageTag: String, listener: RecognizerPort.Listener) = onMain {
+        stopRequested = false
+        begin(languageTag, listener)
+    }
+
+    private fun begin(languageTag: String, listener: RecognizerPort.Listener) {
         val r = recognizer ?: create() ?: run {
-            listener.onError(RecognizerPort.ERROR_LANGUAGE_UNAVAILABLE) // no on-device recognizer: UNAVAILABLE
-            return@onMain
+            listener.onError(RecognizerPort.ERROR_LANGUAGE_UNAVAILABLE) // no recognizer at all: UNAVAILABLE
+            return
         }
+        val kind = if (recognizerIsOnDevice) "on-device" else "system"
         val intent = intent(languageTag)
-        if (checkedLanguages.add(languageTag)) checkSupport(r, intent, languageTag)
+        if (recognizerIsOnDevice && checkedLanguages.add(languageTag)) checkSupport(r, intent, languageTag)
+        var answered = false
+        fun settle(): Boolean {
+            if (answered) return false
+            answered = true
+            watchdog?.let(main::removeCallbacks)
+            watchdog = null
+            return true
+        }
+        val guard = Runnable {
+            if (!settle()) return@Runnable
+            bindFailures++
+            Log.w(TAG, "recognizer ($kind) not ready in $READY_TIMEOUT_MS ms: bind failed ($bindFailures in a row)")
+            runCatching { r.destroy() }
+            if (recognizer === r) recognizer = null
+            if (recognizerIsOnDevice) onDeviceFailed = true
+            when {
+                bindFailures >= MAX_BIND_FAILURES -> listener.onError(RecognizerPort.ERROR_LANGUAGE_UNAVAILABLE)
+                !stopRequested -> begin(languageTag, listener) // still talking: retry on the next recognizer now
+                else -> listener.onError(ERROR_CLIENT)
+            }
+        }
+        watchdog = guard
         r.setRecognitionListener(
             object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) = listener.onReadyForSpeech()
+                override fun onReadyForSpeech(params: Bundle?) {
+                    main.removeCallbacks(guard) // bound: results or an error will follow
+                    bindFailures = 0
+                    Log.i(TAG, "recognizer ready ($kind, $languageTag)")
+                    listener.onReadyForSpeech()
+                }
 
                 override fun onResults(results: Bundle?) {
+                    if (!settle()) return
                     val hypotheses = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-                    Log.i(TAG, "recognizer results: ${hypotheses.size} hypotheses ($languageTag)") // never the words
+                    Log.i(TAG, "recognizer results: ${hypotheses.size} hypotheses ($kind, $languageTag)") // never the words
                     listener.onResults(hypotheses)
                 }
 
                 override fun onError(error: Int) {
-                    Log.i(TAG, "recognizer error $error ($languageTag)")
+                    if (!settle()) return
+                    Log.i(TAG, "recognizer error $error ($kind, $languageTag)")
                     listener.onError(error)
                 }
 
@@ -136,27 +194,54 @@ class AndroidRecognizerPort(private val app: Application) : RecognizerPort {
                 override fun onEvent(eventType: Int, params: Bundle?) = Unit
             },
         )
-        runCatching { r.startListening(intent) }.onFailure {
-            Log.w(TAG, "recognizer start failed: ${it.message}")
-            listener.onError(ERROR_CLIENT)
-        }
+        runCatching { r.startListening(intent) }
+            .onSuccess { main.postDelayed(guard, READY_TIMEOUT_MS) }
+            .onFailure {
+                Log.w(TAG, "recognizer start failed ($kind): ${it.message}")
+                if (settle()) listener.onError(ERROR_CLIENT)
+            }
     }
 
-    override fun stopListening() = onMain { runCatching { recognizer?.stopListening() } }
+    override fun stopListening() = onMain {
+        stopRequested = true
+        runCatching { recognizer?.stopListening() }
+    }
 
-    override fun cancel() = onMain { runCatching { recognizer?.cancel() } }
+    override fun cancel() = onMain {
+        stopRequested = true
+        watchdog?.let(main::removeCallbacks) // cancelled on purpose: no error sound for a bind that never came
+        watchdog = null
+        runCatching { recognizer?.cancel() }
+    }
 
     override fun destroy() = onMain {
+        watchdog?.let(main::removeCallbacks)
+        watchdog = null
         runCatching { recognizer?.destroy() }
         recognizer = null
     }
 
     private fun create(): SpeechRecognizer? {
-        if (!onDeviceAvailable) return null
-        return runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(app) }
-            .onFailure { Log.w(TAG, "on-device recognizer unavailable: ${it.message}") }
+        if (onDevice && !onDeviceFailed) {
+            runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(app) }
+                .onFailure { Log.w(TAG, "on-device recognizer unavailable: ${it.message}") }
+                .getOrNull()
+                ?.let {
+                    recognizer = it
+                    recognizerIsOnDevice = true
+                    return it
+                }
+        }
+        if (!systemDefault) return null
+        // network-free unless its offline pack is missing (EXTRA_PREFER_OFFLINE); ADR-0010 row "Voice commands".
+        return runCatching { SpeechRecognizer.createSpeechRecognizer(app) }
+            .onFailure { Log.w(TAG, "system recognizer unavailable: ${it.message}") }
             .getOrNull()
-            ?.also { recognizer = it }
+            ?.also {
+                recognizer = it
+                recognizerIsOnDevice = false
+                Log.i(TAG, "using the system recognizer (offline preferred)")
+            }
     }
 
     private fun intent(languageTag: String) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -164,6 +249,7 @@ class AndroidRecognizerPort(private val app: Application) : RecognizerPort {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
         putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, MAX_RESULTS)
+        putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(CommandGrammar.biasingPhrases(languageTag)))
     }
 
     /** Q12: log the installed on-device languages; request a supported pack that is not installed yet. */
@@ -200,6 +286,13 @@ class AndroidRecognizerPort(private val app: Application) : RecognizerPort {
         const val TAG = "vysion"
         const val MAX_RESULTS = 5
         const val ERROR_CLIENT = SpeechRecognizer.ERROR_CLIENT
+
+        /**
+         * A bound recognizer reports ready within a few hundred ms, and a refused bind fails in a few ms; after this
+         * long the session counts as a failed bind and the next recognizer takes over while the wearer still talks.
+         */
+        const val READY_TIMEOUT_MS = 1_500L
+        const val MAX_BIND_FAILURES = 2
     }
 }
 

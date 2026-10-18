@@ -146,6 +146,16 @@ object VysionIcons {
         )
     }
 
+    /** Stop (eyes-free): the hang loose sign, thumb and little finger out, the other three folded. */
+    val HangLoose: ImageVector by lazy {
+        stroked(
+            "HangLoose",
+            "M8 11.5a1.15 1.15 0 0 1 2.3 0a1.15 1.15 0 0 1 2.3 0a1.15 1.15 0 0 1 2.3 0V5.25a1.25 1.25 0 0 1 2.5 0V15.5" +
+                "a4.5 4.5 0 0 1-4.5 4.5h-.4A4.5 4.5 0 0 1 8 15.5",
+            "M8 15.5 4.4 11.4a1.3 1.3 0 0 1 2-1.7L8 11.5",
+        )
+    }
+
     private fun stroked(name: String, vararg paths: String): ImageVector =
         ImageVector.Builder(name = name, defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
             .apply {

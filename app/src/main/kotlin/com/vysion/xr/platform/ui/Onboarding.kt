@@ -202,7 +202,7 @@ private fun Card(
                 Waveform(color = Accent.blue, barWidth = metrics.icon * 0.07f, height = metrics.icon * 0.7f, bars = 9)
             }
             OnboardingStep.STOP -> Row(horizontalArrangement = Arrangement.spacedBy(metrics.icon * 0.6f), verticalAlignment = Alignment.CenterVertically) {
-                Icon(VysionIcons.Palm, contentDescription = null, tint = Ink.primary, modifier = Modifier.size(metrics.icon)) // palm out = stop (HandGestureRecognizer)
+                Icon(VysionIcons.HangLoose, contentDescription = null, tint = Ink.primary, modifier = Modifier.size(metrics.icon)) // hang loose = stop (HandGestureRecognizer)
                 Column {
                     Text(stringResource(R.string.onboarding_or_say), color = Ink.secondary, style = type.footnote)
                     Text(stringResource(R.string.onboarding_stop_word), color = Accent.orange, style = type.windowTitle)
