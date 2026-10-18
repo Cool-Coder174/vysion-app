@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import androidx.xr.arcore.Anchor
+import androidx.xr.arcore.AnchorCreateSuccess
 import androidx.xr.arcore.ArDevice
 import androidx.xr.arcore.Depth
 import androidx.xr.arcore.RenderViewpoint
@@ -22,6 +23,7 @@ import androidx.xr.runtime.Session
 import androidx.xr.runtime.SessionConfigureSuccess
 import androidx.xr.runtime.SessionCreateSuccess
 import androidx.xr.runtime.XrDevice
+import androidx.xr.runtime.math.Pose
 import androidx.xr.runtime.math.Vector3
 import com.vysion.xr.core.AnchorId
 import kotlinx.coroutines.CancellationException
@@ -46,7 +48,10 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.lang.ref.WeakReference
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.tan
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -413,6 +418,13 @@ class XrPerceptionSession(
     private var loggedFirstDepthSample = false
     private var loggedFirstHeadPose = false
 
+    /** Latest depth map, kept for [sampleDepthAlongBearing]; replaced on every frame, never queued. */
+    @Volatile
+    private var latestDepth: DepthFrame? = null
+
+    /** One pose collector per native anchor, cancelled by [detachAnchor]. */
+    private val anchorJobs = HashMap<AnchorId, Job>()
+
     /**
      * The Session Compose for XR already created for the activity (`LocalSession.current`). The
      * runtime allows one Session per activity, so [start] reuses this one instead of calling
@@ -573,6 +585,7 @@ class XrPerceptionSession(
                     fov = fovDeg,
                     timestampNanos = SystemClock.elapsedRealtimeNanos(),
                 )
+                latestDepth = frame
                 _depthFrames.tryEmit(frame)
 
                 if (!loggedFirstDepthSample) {
@@ -653,38 +666,61 @@ class XrPerceptionSession(
     }
 
     /**
-     * FR-N3 depth sample along a bearing. Two real strategies, in order (both documented so the
-     * implementer picks after the Q6 device check):
-     * 1. `hitTest(session, Ray(origin = head.translation, direction = dir))` (`androidx.xr.arcore.Interaction.hitTest`,
-     *    VERIFIED) → `firstOrNull()?.hitPose?.translation`. Needs plane tracking; works without a depth map.
-     * 2. Depth map: `DepthCone.pixelForBearing(relYawDeg, relPitchDeg, frame)` →
-     *    `DepthCone.medianTrustedDepthAround(frame, x, y, radius = 3)` → `head.position + dir * depth`
-     *    (both helpers in ProximityMonitor.kt, pure, tested).
+     * FR-N3 depth sample along a bearing, from the latest depth map: `DepthCone.pixelForBearing` →
+     * `DepthCone.medianTrustedDepthAround(radius = 3)` → `head.position + dir * range` (helpers in
+     * ProximityMonitor.kt, pure, tested). Roll is ignored. Not yet tried: `hitTest(session, Ray(...))`
+     * against tracked planes, the fallback if the depth map proves too noisy at door range.
      */
     override suspend fun sampleDepthAlongBearing(worldYawDeg: Float, pitchDeg: Float): Vec3? {
-        Log.w(
-            TAG,
-            "TODO(FR-N3) XrPerceptionSession.sampleDepthAlongBearing: hitTest(session, Ray(head.translation, dir)) " +
-                "or DepthCone.medianTrustedDepthAround on the latest DepthFrame",
+        // Strategy 2 (depth map). `null` = "no usable depth", a contract value; R4 speaks Cues.doorNotFound.
+        val head = _headPose.value?.takeIf { it.tracking == Tracking.TRACKING } ?: return null
+        val frame = latestDepth ?: return null
+        val relYaw = HeadAngles.wrapDeg(worldYawDeg - head.yawDeg)
+        val relPitch = pitchDeg - head.pitchDeg
+        val (x, y) = DepthCone.pixelForBearing(relYaw, relPitch, frame.width, frame.height, frame.fov) ?: return null
+        val depth = DepthCone.medianTrustedDepthAround(frame, x, y, radius = 3) ?: return null
+        // The map holds distance along the optical axis (UNVERIFIED: could be ray length); convert to ray length.
+        val u = tan(Math.toRadians(relYaw.toDouble())).toFloat()
+        val v = tan(Math.toRadians(relPitch.toDouble())).toFloat()
+        val range = depth * sqrt(1f + u * u + v * v)
+        val yawR = Math.toRadians(worldYawDeg.toDouble())
+        val pitchR = Math.toRadians(pitchDeg.toDouble())
+        val dir = Vec3(
+            (sin(yawR) * cos(pitchR)).toFloat(),
+            sin(pitchR).toFloat(),
+            (-cos(yawR) * cos(pitchR)).toFloat(),
         )
-        return null // "no usable depth" is a contract value; the controller speaks Cues.doorNotFound (R4)
+        return Vec3(head.position.x + dir.x * range, head.position.y + dir.y * range, head.position.z + dir.z * range)
     }
 
     /**
-     * Real implementation (stack.md R3 "Anchors", VERIFIED):
-     * ```
-     * when (val r = Anchor.create(session, Pose(Vector3(position.x, position.y, position.z)))) {
-     *     is AnchorCreateSuccess -> { val id = AnchorId("door-${nextAnchorSeq++}"); nativeAnchors[id] = r.anchor
-     *         anchorPoses[id] = MutableStateFlow(null); scope.launch { r.anchor.state.collect { st -> anchorPoses[id]?.value =
-     *             AnchorPoseSample(id, st.pose.translation.v3(), st.trackingState.toTracking(), SystemClock.elapsedRealtimeNanos()) } }
-     *         id }
-     *     else -> null   // AnchorCreateResourcesExhausted / AnchorCreateTrackingUnavailable (sealed, keep else)
-     * }
-     * ```
+     * `Anchor.create(session, Pose(position))` (stack.md R3 "Anchors"); on success the anchor's pose
+     * stream feeds [anchorPose]. `null` when there is no session or the runtime refuses
+     * (`AnchorCreateResourcesExhausted` / `AnchorCreateTrackingUnavailable`).
      */
     override suspend fun createAnchor(position: Vec3): AnchorId? {
-        Log.w(TAG, "TODO(FR-N3) XrPerceptionSession.createAnchor: Anchor.create(session, Pose(Vector3(x, y, z))) -> AnchorCreateSuccess")
-        return null
+        val xrSession = session ?: return null
+        val result = try {
+            Anchor.create(xrSession, Pose(Vector3(position.x, position.y, position.z)))
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "anchor creation failed", e)
+            return null
+        }
+        val anchor = (result as? AnchorCreateSuccess)?.anchor ?: run {
+            Log.w(TAG, "anchor not created: ${result::class.java.simpleName}")
+            return null
+        }
+        val id = AnchorId("door-${nextAnchorSeq++}")
+        val poses = MutableStateFlow<AnchorPoseSample?>(null)
+        nativeAnchors[id] = anchor
+        anchorPoses[id] = poses
+        anchorJobs[id] = scope.launch {
+            anchor.state.collect { st ->
+                poses.value = AnchorPoseSample(id, st.pose.translation.toVec3(), st.trackingState.toTracking(), SystemClock.elapsedRealtimeNanos())
+            }
+        }
+        Log.i(TAG, "anchor ${id.value} created (FR-N3)")
+        return id
     }
 
     override fun anchorPose(id: AnchorId): Flow<AnchorPoseSample> {
@@ -696,8 +732,13 @@ class XrPerceptionSession(
     /** `anchor.detach()` (VERIFIED) and a final STOPPED sample so `track()` flows complete (FR-N4 TargetLost). */
     override suspend fun detachAnchor(id: AnchorId) {
         val poses = anchorPoses.remove(id)
-        if (nativeAnchors.remove(id) != null) {
-            Log.w(TAG, "TODO(FR-N3) XrPerceptionSession.detachAnchor: anchor.detach()")
+        anchorJobs.remove(id)?.cancel()
+        nativeAnchors.remove(id)?.let { anchor ->
+            try {
+                anchor.detach()
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "anchor ${id.value} already gone: ${e.message}")
+            }
         }
         if (poses != null) {
             poses.value = AnchorPoseSample(id, poses.value?.position ?: Vec3.ZERO, Tracking.STOPPED, 0L)
