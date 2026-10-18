@@ -211,22 +211,31 @@ private fun pillColors(style: PillStyle, accent: Color, lifted: Boolean): Pair<C
 }
 
 /**
- * Hold to talk (FR-G2): press starts listening, release sends; a TalkBack double-tap toggles instead, because
- * a hold is not reachable there. While listening the pill turns into the listening blue with a live waveform.
+ * Talk: a tap toggle, not press-and-hold. On Galaxy XR a pinch held for 2 s opens the system's options, so holding
+ * to talk fought the OS whenever someone spoke for longer than that (research, 2026-10-17). Tap to start; the
+ * recognizer sends by itself when you pause, and a second tap ([onDone]) sends at once. Hover feedback comes from the
+ * system's gaze highlight plus a lighter fill here.
  */
 @Composable
-fun HoldToTalkButton(
+fun TalkButton(
     label: String,
+    doneLabel: String,
     listening: ListeningState,
     onStart: () -> Unit,
-    onRelease: () -> Unit,
+    onDone: () -> Unit,
     textStyle: TextStyle,
     height: Dp,
     modifier: Modifier = Modifier,
 ) {
     val isListening = listening == ListeningState.LISTENING
     val unavailable = listening == ListeningState.UNAVAILABLE
-    val container = if (unavailable) Glass.pill else Accent.blue
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val container = when {
+        unavailable -> Glass.pill
+        hovered -> Accent.blue.copy(alpha = 0.85f)
+        else -> Accent.blue
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(height * 0.16f),
@@ -234,27 +243,15 @@ fun HoldToTalkButton(
             .heightIn(min = height)
             .clip(CircleShape)
             .background(container, CircleShape)
-            .pointerInput(onStart, onRelease) {
-                detectTapGestures(
-                    onPress = {
-                        onStart()
-                        try {
-                            tryAwaitRelease()
-                        } finally {
-                            onRelease()
-                        }
-                    },
-                )
-            }
-            .semantics {
-                contentDescription = label
-                role = Role.Button
-                stateDescription = listening.name.lowercase()
-                onClick {
-                    if (isListening) onRelease() else onStart()
-                    true
-                }
-            }
+            .hoverable(interaction)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = !unavailable,
+                role = Role.Button,
+                onClick = { if (isListening) onDone() else onStart() },
+            )
+            .semantics { stateDescription = listening.name.lowercase() }
             .padding(horizontal = height * 0.42f, vertical = height * 0.18f),
     ) {
         if (isListening) {
@@ -262,7 +259,7 @@ fun HoldToTalkButton(
         } else {
             Icon(VysionIcons.Mic, contentDescription = null, tint = Color.White, modifier = Modifier.size(height * 0.4f))
         }
-        Text(label, color = Color.White, style = textStyle)
+        Text(if (isListening) doneLabel else label, color = Color.White, style = textStyle)
     }
 }
 

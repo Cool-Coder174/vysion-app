@@ -120,6 +120,8 @@ data class VysionType(
     val body: TextStyle,
     val footnote: TextStyle,
     val label: TextStyle,
+    /** Mode rail item labels: always visible, sized to fit the rail's item width. */
+    val railLabel: TextStyle,
     val chip: TextStyle,
     val distance: TextStyle,
 )
@@ -137,6 +139,7 @@ val SpatialType = VysionType(
     body = style(28.sp, 38.sp, FontWeight.Normal),
     footnote = style(20.sp, 26.sp, FontWeight.Normal),
     label = style(22.sp, 26.sp, FontWeight.SemiBold),
+    railLabel = style(18.sp, 22.sp, FontWeight.SemiBold),
     chip = style(18.sp, 22.sp, FontWeight.Medium),
     distance = style(104.sp, 108.sp, FontWeight.Bold, (-0.03).em),
 )
@@ -151,6 +154,7 @@ val PhoneType = VysionType(
     body = style(17.sp, 24.sp, FontWeight.Normal),
     footnote = style(13.sp, 18.sp, FontWeight.Normal),
     label = style(16.sp, 20.sp, FontWeight.SemiBold),
+    railLabel = style(13.sp, 16.sp, FontWeight.SemiBold),
     chip = style(12.sp, 16.sp, FontWeight.SemiBold, 0.06.em),
     distance = style(72.sp, 76.sp, FontWeight.Bold, (-0.03).em),
 )

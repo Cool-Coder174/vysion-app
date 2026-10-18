@@ -27,10 +27,12 @@
     <string name="mode_read">Read</string>
     <string name="mode_describe">Describe</string>
     <string name="mode_navigate">Navigate</string>
+    <string name="mode_find_door">Find door</string>
     <string name="mode_more">Diagnostics</string>
 
     <!-- Toolbar and onboarding buttons. -->
-    <string name="action_hold_to_talk">Hold to talk</string>
+    <string name="action_talk">Talk</string>
+    <string name="action_done">Done</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_stop">Stop</string>
     <string name="action_repeat">Repeat</string>
@@ -51,28 +53,28 @@
 
     <!-- Status window (designs: Headset 1-12). Titles and subtitles are shown, not spoken. -->
     <string name="status_ready">Ready</string>
-    <string name="status_ready_sub">Say “Vysion” or pinch and hold</string>
-    <string name="status_ready_body">Say “read this,” “describe,” or “find the door.”</string>
-    <string name="status_ready_foot">Say “stop” any time. Palm out also stops.</string>
+    <string name="status_ready_sub">Look at Talk and pinch</string>
+    <string name="status_ready_body">Then say “read this,” “describe,” or “find the door.”</string>
+    <string name="status_ready_foot">Or pinch Read, Describe, or Find door on the left.</string>
     <string name="status_listening">Listening</string>
-    <string name="status_listening_sub">Open your fingers to send</string>
+    <string name="status_listening_sub">I send when you pause</string>
     <string name="status_thinking">Thinking</string>
-    <string name="status_thinking_sub">Soft tick every %1$s s</string>
+    <string name="status_thinking_sub">Working on it</string>
     <string name="status_thinking_asked">You asked: “%1$s”</string>
-    <string name="status_thinking_foot">Never silent more than 2 seconds.</string>
+    <string name="status_thinking_foot">Pinch Stop to cancel.</string>
     <string name="status_reading">Reading</string>
     <string name="status_describing">Describing</string>
     <string name="status_looking">Looking for a door</string>
     <string name="status_looking_sub">Turn slowly</string>
     <string name="status_looking_body">I’ll ping when I find one.</string>
-    <string name="status_looking_foot">Soft tick while looking.</string>
+    <string name="status_looking_foot">Pinch Stop to cancel.</string>
     <string name="status_guiding">Guiding</string>
-    <string name="status_guiding_sub">Ping every 3 s from the door</string>
+    <string name="status_guiding_sub">Follow the ping</string>
     <string name="status_guiding_target">Door · %1$s</string>
     <string name="status_guiding_out_of_view">Door · %1$s · out of view</string>
     <string name="status_use_cane">Use with your cane.</string>
     <string name="status_arrived">Arrived</string>
-    <string name="status_arrived_sub">Done chime</string>
+    <string name="status_arrived_sub">Done</string>
     <string name="status_arrived_body">You’re at the door.</string>
     <string name="status_lost">Lost the door</string>
     <string name="status_lost_sub">Pings paused</string>
@@ -80,16 +82,16 @@
     <string name="status_lost_body_unknown">Turn slowly.</string>
     <string name="status_keep_cane">Keep using your cane.</string>
     <string name="status_obstacle">Obstacle ahead</string>
-    <string name="status_obstacle_sub">Warning tone · cuts in</string>
+    <string name="status_obstacle_sub">Something is close</string>
     <string name="status_obstacle_body">Stop and check with your cane.</string>
     <string name="status_obstacle_ahead">ahead</string>
     <string name="status_no_text">No text found</string>
     <string name="status_no_text_sub">Move closer</string>
     <string name="status_no_text_body">Move closer or hold it in front of you.</string>
     <string name="status_error">That didn’t work</string>
-    <string name="status_error_sub">Low tone</string>
+    <string name="status_error_sub">Something went wrong</string>
     <string name="status_error_body">Say it again.</string>
-    <string name="status_error_foot">Or pinch and hold, or look at the mic and pinch.</string>
+    <string name="status_error_foot">Pinch Talk and try again, or pinch a mode on the left.</string>
     <string name="clock_face">%1$d o’clock</string>
     <string name="meters_short">%1$s m</string>
     <string name="overlay_door">door</string>

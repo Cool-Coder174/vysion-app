@@ -1,12 +1,11 @@
 package com.vysion.xr.platform.ui
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
-import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -37,10 +36,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -55,10 +56,9 @@ import com.vysion.xr.core.CommandSource
 import com.vysion.xr.core.Distances
 import com.vysion.xr.core.Mode
 import com.vysion.xr.core.ModeState
-import com.vysion.xr.platform.ModeController
 import com.vysion.xr.platform.ui.components.Badge
 import com.vysion.xr.platform.ui.components.ClockDial
-import com.vysion.xr.platform.ui.components.HoldToTalkButton
+import com.vysion.xr.platform.ui.components.TalkButton
 import com.vysion.xr.platform.ui.components.PillButton
 import com.vysion.xr.platform.ui.components.PillStyle
 import com.vysion.xr.platform.ui.components.StatusBadge
@@ -71,7 +71,6 @@ import com.vysion.xr.platform.ui.theme.Ink
 import com.vysion.xr.platform.ui.theme.LocalReduceMotion
 import com.vysion.xr.platform.ui.theme.Radius
 import com.vysion.xr.platform.ui.theme.Space
-import com.vysion.xr.platform.ui.theme.Target
 import com.vysion.xr.platform.ui.theme.VysionIcons
 import com.vysion.xr.platform.ui.theme.VysionType
 import com.vysion.xr.platform.ui.theme.vysionSpring
@@ -93,9 +92,7 @@ fun StatusWindow(shell: ShellState, type: VysionType, modifier: Modifier = Modif
         modifier = modifier
             .glass(RoundedCornerShape(Radius.window))
             .semantics { contentDescription = label }
-            // The toolbar orbiter straddles the bottom edge: reserve its upper half plus a gap, or the last line of a
-            // long answer sits under the pills (headset capture, 2026-10-17).
-            .padding(start = 44.dp, end = 44.dp, top = 40.dp, bottom = TOOLBAR_OVERLAP + Space.l),
+            .padding(horizontal = 44.dp, vertical = 40.dp),
     ) {
         // Screens of the same kind (two answers, two bearings) update in place; a change of kind materializes.
         AnimatedContent(
@@ -106,9 +103,6 @@ fun StatusWindow(shell: ShellState, type: VysionType, modifier: Modifier = Modif
         ) { screen -> ScreenContent(shell, screen, type) }
     }
 }
-
-/** Upper half of the bottom toolbar (a [Target.spatial] pill inside [Space.s] of tray padding) that overlaps the window. */
-private val TOOLBAR_OVERLAP = Target.spatial / 2 + Space.s
 
 /** The kind of a screen: [AnimatedContent] animates only when this changes. */
 private enum class ScreenKey {
@@ -153,8 +147,7 @@ private fun ScreenContent(shell: ShellState, screen: HeadsetScreen, type: Vysion
                 Waveform(color = Accent.blue, barWidth = 9.dp, height = 72.dp, bars = 13)
             }
             is HeadsetScreen.Thinking -> {
-                val tick = String.format(Locale.ROOT, "%.1f", ModeController.THINKING_EARCON_PERIOD_MS / 1000f)
-                Header(Badge.ORB, stringResource(R.string.status_thinking), stringResource(R.string.status_thinking_sub, tick), type, active = true)
+                Header(Badge.ORB, stringResource(R.string.status_thinking), stringResource(R.string.status_thinking_sub), type, active = true)
                 screen.asked?.let { asked -> commandWord(asked)?.let { Text(stringResource(R.string.status_thinking_asked, it), color = Ink.secondary, style = type.body) } }
                 ThinkingLines(lineHeight = 22.dp)
                 Footnote(stringResource(R.string.status_thinking_foot), type)
@@ -204,7 +197,9 @@ private fun Header(badge: Badge, title: String, subtitle: String?, type: VysionT
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.m)) {
         StatusBadge(badge, size = 52.dp, active = active)
         Column {
-            Text(title, color = Ink.primary, style = type.windowTitle)
+            // A heading for TalkBack navigation. No liveRegion on answers: the app speaks them itself, and TalkBack
+            // would read them a second time.
+            Text(title, color = Ink.primary, style = type.windowTitle, modifier = Modifier.semantics { heading() })
             if (subtitle != null) Text(subtitle, color = Ink.secondary, style = type.windowSubtitle)
         }
     }
@@ -302,11 +297,12 @@ fun StatusToolbar(shell: ShellState, commands: CommandBus, type: VysionType, hei
             PillButton(stringResource(R.string.action_stop), { send(Command.Stop) }, PillStyle.STOP, type.label, height, icon = VysionIcons.Stop)
         }
         val talk: @Composable () -> Unit = {
-            HoldToTalkButton(
-                label = stringResource(R.string.action_hold_to_talk),
+            TalkButton(
+                label = stringResource(R.string.action_talk),
+                doneLabel = stringResource(R.string.action_done),
                 listening = shell.listening,
                 onStart = commands::startListening,
-                onRelease = commands::stopListening,
+                onDone = commands::stopListening,
                 textStyle = type.label,
                 height = height,
             )
@@ -316,8 +312,10 @@ fun StatusToolbar(shell: ShellState, commands: CommandBus, type: VysionType, hei
         }
         when (val screen = shell.screen) {
             HeadsetScreen.Ready, HeadsetScreen.Error -> talk()
-            HeadsetScreen.Listening ->
-                PillButton(stringResource(R.string.action_cancel), commands::cancelListening, PillStyle.SECONDARY, type.label, height, icon = VysionIcons.Stop)
+            HeadsetScreen.Listening -> {
+                talk() // shows Done while listening
+                PillButton(stringResource(R.string.action_cancel), commands::cancelListening, PillStyle.SECONDARY, type.label, height, icon = VysionIcons.Close)
+            }
             is HeadsetScreen.Thinking, HeadsetScreen.LookingForDoor -> stop()
             is HeadsetScreen.Answer -> {
                 if (busy) stop() else talk()
@@ -329,7 +327,13 @@ fun StatusToolbar(shell: ShellState, commands: CommandBus, type: VysionType, hei
                         leading = { Text("Es", color = Ink.secondary, style = type.chip) },
                     )
                 } else {
-                    PillButton(stringResource(R.string.action_more_detail), { send(Command.Detailed) }, PillStyle.SECONDARY, type.label, height, icon = VysionIcons.Plus)
+                    // "Detailed" alone only changes the next description (FR-D3); the button also describes again
+                    // so pressing it visibly does something.
+                    PillButton(
+                        stringResource(R.string.action_more_detail),
+                        { send(Command.Detailed); send(Command.Describe) },
+                        PillStyle.SECONDARY, type.label, height, icon = VysionIcons.Plus,
+                    )
                 }
             }
             HeadsetScreen.NoText ->
@@ -357,80 +361,95 @@ fun StatusToolbar(shell: ShellState, commands: CommandBus, type: VysionType, hei
 data class RailMore(val selected: Boolean, val onToggle: () -> Unit)
 
 /**
- * The vertical mode rail (designs: "mode tab bar on the left edge … Gaze shows a label"). The active mode is a
- * white disc with a dark glyph; looking at a button shows its name beside it. Pressing a mode runs it, exactly
- * like saying it (Read, Describe, Find the door).
+ * The mode rail: an orbiter that floats off the window's left edge. Every item shows its icon AND its label at all
+ * times (a gaze-only label was clipped by the rail's glass and made the rail change width while you looked at it),
+ * one outlined icon family, a white pill behind the selected mode, and a whole-item hit area of at least
+ * [Target.spatial]. Read, Describe and Find door send the same command the voice would; the gauge opens the
+ * measured-numbers window.
  */
 @Composable
 fun ModeRail(mode: Mode?, commands: CommandBus, more: RailMore, itemSize: Dp, labelStyle: androidx.compose.ui.text.TextStyle, modifier: Modifier = Modifier) {
     val railLabel = stringResource(R.string.a11y_mode_rail)
     Column(
-        verticalArrangement = Arrangement.spacedBy(Space.s),
+        verticalArrangement = Arrangement.spacedBy(Space.xs),
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
-            .glass(CircleShape)
+            .glass(RoundedCornerShape(RAIL_CORNER))
             .semantics { contentDescription = railLabel }
             .padding(vertical = Space.m, horizontal = Space.s),
     ) {
-        RailButton(stringResource(R.string.mode_read), mode == Mode.TEXT_READER, itemSize, labelStyle, { commands.inject(Command.Read, CommandSource.PANEL) }) { tint ->
-            Text("Aa", color = tint, style = labelStyle)
+        RailItem(stringResource(R.string.mode_read), VysionIcons.Read, mode == Mode.TEXT_READER, itemSize, labelStyle) {
+            commands.inject(Command.Read, CommandSource.PANEL)
         }
-        RailButton(stringResource(R.string.mode_describe), mode == Mode.AUDIO_DESCRIPTION, itemSize, labelStyle, { commands.inject(Command.Describe, CommandSource.PANEL) }) { tint ->
-            Icon(VysionIcons.Eye, contentDescription = null, tint = tint, modifier = Modifier.size(itemSize * 0.46f))
+        RailItem(stringResource(R.string.mode_describe), VysionIcons.Eye, mode == Mode.AUDIO_DESCRIPTION, itemSize, labelStyle) {
+            commands.inject(Command.Describe, CommandSource.PANEL)
         }
-        RailButton(stringResource(R.string.mode_navigate), mode == Mode.NAVIGATION, itemSize, labelStyle, { commands.inject(Command.FindDoor, CommandSource.PANEL) }) { tint ->
-            Icon(VysionIcons.Navigate, contentDescription = null, tint = tint, modifier = Modifier.size(itemSize * 0.42f))
+        RailItem(stringResource(R.string.mode_find_door), VysionIcons.Door, mode == Mode.NAVIGATION, itemSize, labelStyle) {
+            commands.inject(Command.FindDoor, CommandSource.PANEL)
         }
-        RailButton(stringResource(R.string.mode_more), more.selected, itemSize, labelStyle, more.onToggle) { tint ->
-            Icon(VysionIcons.More, contentDescription = null, tint = tint, modifier = Modifier.size(itemSize * 0.46f))
-        }
+        Box(
+            Modifier
+                .padding(vertical = Space.xs)
+                .width(itemSize * 0.6f)
+                .height(1.dp)
+                .background(Glass.edge),
+        )
+        RailItem(stringResource(R.string.mode_more), VysionIcons.Gauge, more.selected, itemSize, labelStyle, onClick = more.onToggle)
     }
 }
 
+/** One rail entry: indicator pill with the icon, the label under it, the whole column clickable. */
 @Composable
-private fun RailButton(
+private fun RailItem(
     label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
     selected: Boolean,
     size: Dp,
     labelStyle: androidx.compose.ui.text.TextStyle,
     onClick: () -> Unit,
-    glyph: @Composable (tint: Color) -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val fill = when {
-        selected -> Glass.white
-        hovered -> Color(0x33FFFFFF)
-        else -> Color.Transparent
-    }
-    Box(contentAlignment = Alignment.CenterEnd) {
+    val pill by animateColorAsState(
+        targetValue = when {
+            selected -> Glass.white
+            hovered -> Color(0x2EFFFFFF)
+            else -> Color.Transparent
+        },
+        animationSpec = vysionSpring(response = 0.25f),
+        label = "railPill",
+    )
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Space.xs),
+        modifier = Modifier
+            .width(size * RAIL_ITEM_WIDTH)
+            .clip(RoundedCornerShape(Radius.tile))
+            .hoverable(interaction)
+            .selectable(selected = selected, interactionSource = interaction, indication = null, role = Role.Tab, onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = label }
+            .padding(vertical = Space.s),
+    ) {
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .size(size)
-                .background(fill, CircleShape)
-                .hoverable(interaction)
-                .selectable(selected = selected, interactionSource = interaction, indication = null, role = Role.Tab, onClick = onClick)
-                .semantics { contentDescription = label },
-        ) { glyph(if (selected) Ink.onLight else Ink.primary) }
-        // Gaze label: appears to the left of the rail while the button is looked at.
-        AnimatedVisibility(
-            visible = hovered,
-            enter = fadeIn(vysionSpring(response = 0.25f)) + slideInHorizontally(vysionSpring(response = 0.3f)) { it / 4 },
-            exit = fadeOut(vysionSpring(response = 0.2f)),
-            modifier = Modifier.padding(end = size + Space.m),
+                .size(width = size, height = size * RAIL_PILL_HEIGHT)
+                .background(pill, CircleShape),
         ) {
-            Text(
-                label,
-                color = Ink.primary,
-                style = labelStyle,
-                modifier = Modifier
-                    .background(Glass.tray, CircleShape)
-                    .padding(horizontal = Space.m, vertical = Space.xs),
-            )
+            Icon(icon, contentDescription = null, tint = if (selected) Ink.onLight else Ink.primary, modifier = Modifier.size(size * 0.5f))
         }
+        Text(
+            label,
+            color = if (selected || hovered) Ink.primary else Ink.secondary,
+            style = labelStyle,
+            maxLines = 1,
+        )
     }
 }
+
+private val RAIL_CORNER = 44.dp
+private const val RAIL_ITEM_WIDTH = 1.6f
+private const val RAIL_PILL_HEIGHT = 0.66f
 
 // ── Obstacle (cuts in over everything) ──────────────────────────────────────────────────────────────────────────
 

@@ -35,12 +35,14 @@ import androidx.xr.compose.spatial.Orbiter
 import androidx.xr.compose.spatial.OrbiterPosition
 import androidx.xr.compose.spatial.Subspace
 import androidx.xr.compose.subspace.SpatialPanel
-import androidx.xr.compose.subspace.SpatialRow
+import androidx.xr.compose.subspace.SpatialBox
 import androidx.xr.compose.subspace.layout.SpatialRoundedCornerShape
 import androidx.xr.compose.subspace.layout.SubspaceModifier
 import androidx.xr.compose.subspace.layout.height
 import androidx.xr.compose.subspace.layout.movable
+import androidx.xr.compose.subspace.layout.offset
 import androidx.xr.compose.subspace.layout.width
+import androidx.xr.compose.unit.DpVolumeOffset
 import androidx.xr.runtime.Session
 import androidx.xr.scenecore.SpatialCapability
 import androidx.xr.scenecore.scene
@@ -126,8 +128,10 @@ private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composa
     val doorWord = stringResource(R.string.overlay_door)
     val lastSeenWord = stringResource(R.string.overlay_last_seen)
     Subspace {
-        SpatialRow {
-            // The status window, sized to its content; the rail and toolbar orbit its edges.
+        // The status window stays centered in front of the wearer; the diagnostics window and the outline layer open
+        // beside it without moving it (a SpatialRow centered the whole row, so opening diagnostics pushed the window
+        // left). The rail and toolbar float just outside its edges, never over its text.
+        SpatialBox {
             AutoHeightPanel(width = STATUS_WIDTH, min = 300.dp, max = 980.dp) {
                 if (obstacle != null) {
                     ObstacleCard(
@@ -141,39 +145,48 @@ private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composa
                 } else {
                     StatusWindow(shell, SpatialType, Modifier.fillMaxWidth())
                 }
-                Orbiter(OrbiterPosition.CenterStart(OrbiterPosition.EdgeAlignment.Outside)) {
+                Orbiter(OrbiterPosition.CenterStart(OrbiterPosition.EdgeAlignment.Outside, DpVolumeOffset(-ORBITER_GAP, 0.dp, 0.dp))) {
                     ModeRail(
                         mode = shell.mode,
                         commands = graph.commandBus,
                         more = RailMore(diagnosticsShown) { diagnosticsShown = !diagnosticsShown },
-                        itemSize = 72.dp,
-                        labelStyle = SpatialType.label,
+                        itemSize = 64.dp,
+                        labelStyle = SpatialType.railLabel,
                     )
                 }
                 if (obstacle == null) {
-                    Orbiter(OrbiterPosition.BottomCenter(OrbiterPosition.EdgeAlignment.Center)) {
+                    Orbiter(OrbiterPosition.BottomCenter(OrbiterPosition.EdgeAlignment.Outside, DpVolumeOffset(0.dp, -ORBITER_GAP, 0.dp))) {
                         StatusToolbar(shell, graph.commandBus, SpatialType, Target.spatial)
                     }
                 }
             }
             // FR-G5 (designs: Headset 13, the second window): R5's numbers, plus the R3 test tool in debug builds.
             if (diagnosticsShown) {
-                AutoHeightPanel(width = DIAGNOSTICS_WIDTH, min = 240.dp, max = 900.dp) {
+                AutoHeightPanel(
+                    width = DIAGNOSTICS_WIDTH,
+                    min = 240.dp,
+                    max = 900.dp,
+                    modifier = SubspaceModifier.offset(x = (STATUS_WIDTH + DIAGNOSTICS_WIDTH) / 2 + SIDE_GAP),
+                ) {
                     Column(verticalArrangement = Arrangement.spacedBy(Space.m)) {
                         diagnostics()
                         if (BuildConfig.DEBUG) MarkerTestTool(graph)
                     }
                 }
-            }
-            // FR-N2 / FR-N3: outlines over passthrough. Transparent; only the boxes and their chips are drawn.
-            SpatialPanel(SubspaceModifier.width(OVERLAY_WIDTH).height(OVERLAY_HEIGHT)) {
-                Box(modifier = Modifier.fillMaxSize().background(Color.Transparent)) {
-                    shell.overlay?.let {
-                        OverlayCanvas(
-                            renderer = it,
-                            modifier = Modifier.fillMaxSize(),
-                            style = OverlayStyle.forScreen(shell.screen, doorWord, lastSeenWord),
-                        )
+                // FR-N2 / FR-N3 outlines. A flat panel cannot line up with the objects it outlines, so it is a
+                // developer view that opens with diagnostics, never part of the wearer's main view.
+                SpatialPanel(
+                    SubspaceModifier.width(OVERLAY_WIDTH).height(OVERLAY_HEIGHT)
+                        .offset(x = -((STATUS_WIDTH + OVERLAY_WIDTH) / 2 + SIDE_GAP)),
+                ) {
+                    Box(modifier = Modifier.fillMaxSize().background(Color.Transparent)) {
+                        shell.overlay?.let {
+                            OverlayCanvas(
+                                renderer = it,
+                                modifier = Modifier.fillMaxSize(),
+                                style = OverlayStyle.forScreen(shell.screen, doorWord, lastSeenWord),
+                            )
+                        }
                     }
                 }
             }
@@ -186,11 +199,11 @@ private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composa
  * back for Ready). The content is measured unbounded and the panel resized within [min]..[max].
  */
 @Composable
-private fun AutoHeightPanel(width: Dp, min: Dp, max: Dp, content: @Composable () -> Unit) {
+private fun AutoHeightPanel(width: Dp, min: Dp, max: Dp, modifier: SubspaceModifier = SubspaceModifier, content: @Composable () -> Unit) {
     var height by remember { mutableStateOf(min) }
     val density = LocalDensity.current
     SpatialPanel(
-        SubspaceModifier.width(width).height(height).movable(),
+        modifier.width(width).height(height).movable(),
         shape = SpatialRoundedCornerShape(CornerSize(Radius.window)),
     ) {
         Box(
@@ -252,6 +265,12 @@ private fun setPassthrough(session: Session, opacity: Float) {
 }
 
 private val STATUS_WIDTH = 1040.dp
+
+/** Space between the status window and its rail / toolbar orbiters. */
+private val ORBITER_GAP = 20.dp
+
+/** Space between side-by-side windows. */
+private val SIDE_GAP = 48.dp
 private val DIAGNOSTICS_WIDTH = 720.dp
 private val OVERLAY_WIDTH = 1100.dp
 private val OVERLAY_HEIGHT = 824.dp

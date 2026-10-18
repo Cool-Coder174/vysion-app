@@ -23,6 +23,38 @@ object VysionIcons {
         )
     }
 
+    /** Read: a page with lines of text (replaces the "Aa" text glyph; every rail icon shares one stroke). */
+    val Read: ImageVector by lazy {
+        stroked(
+            "Read",
+            "M7 3.5h7.5L19 8v11.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1z",
+            "M14.5 3.5V8H19",
+            "M9 11.5h7",
+            "M9 14.75h7",
+            "M9 18h4.5",
+        )
+    }
+
+    /** Find the door: a door ajar, outlined like the rest of the rail. */
+    val Door: ImageVector by lazy {
+        stroked(
+            "Door",
+            "M5 20.5h14",
+            "M7 20.5V4.5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v16",
+            "M14 12.5v.01",
+        )
+    }
+
+    /** Diagnostics: a gauge (the measured-numbers window). */
+    val Gauge: ImageVector by lazy {
+        stroked(
+            "Gauge",
+            "M4.5 16.5a7.5 7.5 0 1 1 15 0",
+            "M12 16.5l3.5-4.5",
+            "M12 16.5v.01",
+        )
+    }
+
     /** Navigation: a heading needle pointing the way. */
     val Navigate: ImageVector by lazy { filled("Navigate", "M12 2.75l6.25 17.5L12 16.6l-6.25 3.65z") }
 
