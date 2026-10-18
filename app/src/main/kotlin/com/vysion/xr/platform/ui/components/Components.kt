@@ -90,6 +90,19 @@ fun Modifier.glass(
     .border(1.5.dp, Brush.verticalGradient(listOf(edge, edge.copy(alpha = edge.alpha * 0.35f))), shape)
 
 /**
+ * The phone's glass (designs "Phone v6"): a translucent white or near-black fill over the live camera with a
+ * one-pixel hairline, instead of the headset's graphite gradient. Chrome only, like [glass].
+ */
+fun Modifier.phoneGlass(
+    shape: Shape,
+    fill: Color = Glass.control,
+    edge: Color = Glass.controlEdge,
+): Modifier = this
+    .clip(shape)
+    .background(fill, shape)
+    .border(1.dp, edge, shape)
+
+/**
  * Vysion's presence: a small luminous blue sphere. It breathes while [active] (listening, thinking) and is
  * still otherwise; with Remove animations on it never moves.
  */

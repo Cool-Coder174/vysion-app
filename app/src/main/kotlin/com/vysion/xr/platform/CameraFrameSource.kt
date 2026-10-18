@@ -17,6 +17,8 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.core.UseCase
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -78,6 +80,12 @@ import kotlin.math.tan
 class CameraFrameSource(
     private val app: Application,
     private val scope: CoroutineScope,
+    /**
+     * FR-N2 (phone): also bind a `Preview` use case, so the flat shell can show the live camera behind its controls
+     * (designs "Phone v6": the camera fills the screen). `AppGraph` passes `!deviceProfile.isXr`: on the headset
+     * passthrough is the camera view and a third stream would only cost bandwidth.
+     */
+    private val withPreview: Boolean = false,
 ) : FrameSource {
 
     private val _frames = MutableSharedFlow<Bitmap>(
@@ -146,6 +154,18 @@ class CameraFrameSource(
         ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
     }
 
+    /** The live view for the phone (`withPreview`); `null` on the headset. Streams only while a surface is attached. */
+    private val preview: Preview? by lazy { if (withPreview) Preview.Builder().build() else null }
+
+    /**
+     * FR-N2 (phone): where the live camera is drawn. `FlatShell` hands over its `PreviewView.surfaceProvider` when the
+     * view enters composition and `null` when it leaves; with no provider the preview use case streams nowhere. A no-op
+     * when the source was built without `withPreview`. Main thread (CameraX's `Preview.setSurfaceProvider` contract).
+     */
+    fun setPreviewSurface(provider: Preview.SurfaceProvider?) {
+        preview?.setSurfaceProvider(provider)
+    }
+
     /**
      * The lifecycle the use cases are bound to: `AppGraph` is Application-scoped, so this source drives its own
      * registry from [start] / [stop] on the main thread (`LifecycleRegistry` enforces it). It never goes to
@@ -172,9 +192,10 @@ class CameraFrameSource(
             if (!bound) {
                 logCameraProbe()
                 owner.registry.currentState = Lifecycle.State.CREATED
-                cameraProvider.bindToLifecycle(owner, worldCameraSelector, analysis, still)
+                val useCases: Array<UseCase> = listOfNotNull<UseCase>(analysis, still, preview).toTypedArray()
+                cameraProvider.bindToLifecycle(owner, worldCameraSelector, *useCases)
                 bound = true
-                Log.i(TAG, "camera $WORLD_CAMERA_ID bound: analysis + still (A-1)")
+                Log.i(TAG, "camera $WORLD_CAMERA_ID bound: analysis + still${if (preview != null) " + preview" else ""} (A-1)")
             }
             owner.registry.currentState = Lifecycle.State.STARTED
         } catch (e: IllegalArgumentException) { // CameraX: no camera matches the selector

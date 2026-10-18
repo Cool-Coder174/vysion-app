@@ -115,21 +115,59 @@
     <!-- Diagnostics window (designs: Headset 13). -->
     <string name="diagnostics_title">Measured on device</string>
 
-    <!-- Phone app v5 (designs page 23). -->
-    <string name="phone_tips_title">The whole screen is the button.</string>
-    <string name="phone_tip_tap">Tap anywhere</string>
-    <string name="phone_tip_tap_detail">Read what’s in front of you</string>
-    <string name="phone_tip_hold">Press and hold</string>
-    <string name="phone_tip_hold_detail">Talk to Vysion</string>
-    <string name="phone_tip_swipe">Swipe left or right</string>
-    <string name="phone_tip_swipe_detail">Change mode</string>
-    <string name="phone_tip_stop">Two-finger double-tap</string>
-    <string name="phone_tip_stop_detail">Stop talking</string>
-    <string name="phone_label_reading">Reading · swipe up to repeat</string>
-    <string name="phone_label_describing">Describing · swipe up to repeat</string>
-    <string name="phone_label_listening">Listening · let go to send</string>
-    <string name="phone_label_door">Door · %1$s</string>
-    <string name="phone_hint_describe">Tap anywhere to hear what’s here</string>
-    <string name="phone_hint_read">Tap anywhere to read what’s in front of you</string>
-    <string name="phone_hint_navigate">Tap anywhere to find the door</string>
+    <!-- Phone v6 (designs "Phone v6 · End-to-end"): the camera fills the screen, the whole screen is the button,
+         answers arrive in a bottom sheet. Shown, not spoken. -->
+    <string name="phone_hint_read">Tap anywhere to read</string>
+    <string name="phone_hint_describe">Tap to hear what’s here</string>
+    <string name="phone_where_to">Where to?</string>
+    <string name="phone_where_to_hint">Or hold anywhere and say it.</string>
+    <string name="phone_target_door">Door</string>
+    <string name="phone_kicker_listening">Listening · let go to send</string>
+    <string name="phone_kicker_thinking">Thinking</string>
+    <string name="phone_kicker_looking">Looking</string>
+    <string name="phone_kicker_guiding">Guiding · door</string>
+    <string name="phone_kicker_stop">Stop</string>
+    <string name="phone_thinking_read">Reading the sign. Hold still.</string>
+    <string name="phone_thinking_describe">Looking around. Hold still.</string>
+    <string name="phone_thinking_where">Finding where you are.</string>
+    <string name="phone_callout_reading">Reading this sign</string>
+    <string name="phone_looking_body">Turn slowly. I check twice before I guide you.</string>
+    <string name="phone_guiding_foot">%1$s. The ping speeds up as you get closer.</string>
+    <string name="phone_guiding_out_of_view">%1$s · out of view. Turn toward it.</string>
+    <string name="phone_obstacle_body">%1$s ahead. Stop and check with your cane.</string>
+    <string name="action_describe_it">Describe it</string>
+    <string name="action_settings">Settings</string>
+    <string name="a11y_mode_pill">Mode: %1$s. Double-tap for the next mode.</string>
+    <string name="a11y_mode_switcher">Mode switcher</string>
+    <string name="a11y_shutter_talk">Listening. Double-tap to send.</string>
+
+    <!-- Phone onboarding chrome (designs v6, section 1); the page words themselves come from voice/Cues.kt. -->
+    <string name="onboarding_lesson">Lesson %1$d of 3</string>
+    <string name="action_not_now">Not now</string>
+    <string name="action_skip">Skip</string>
+    <string name="onboarding_tap_done">That’s a tap</string>
+    <string name="onboarding_swipe_done">That’s a swipe</string>
+    <string name="onboarding_hold_label">Hold</string>
+    <string name="onboarding_two_finger_label">Two-finger double-tap</string>
+    <string name="onboarding_now_stop">Now tap twice with two fingers.</string>
+    <string name="onboarding_stopped">You stopped me</string>
+    <string name="a11y_page_dots">Page %1$d of %2$d</string>
+
+    <!-- Settings (designs v6 V5). Speaking speed and language reach the Speaker; detail reaches the controller (FR-D3). -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_voice">Voice</string>
+    <string name="settings_speed">Speaking speed</string>
+    <string name="settings_language">Language</string>
+    <string name="settings_english">English</string>
+    <string name="settings_feedback">Feedback</string>
+    <string name="settings_haptics">Haptics</string>
+    <string name="settings_haptics_sub">A tap for every touch, a buzz for every answer</string>
+    <string name="settings_answers">Answers</string>
+    <string name="settings_detail">Detail</string>
+    <string name="settings_short">Short</string>
+    <string name="settings_full">Full</string>
+    <string name="settings_measured">Measured numbers</string>
+    <string name="settings_measured_sub">Latency, memory and backend, from this phone</string>
+    <string name="settings_privacy_title">Read, Describe and Find the door run on this phone.</string>
+    <string name="settings_privacy_body">Camera frames are never stored.</string>
 </resources>

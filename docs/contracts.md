@@ -134,6 +134,8 @@ interface ModePhrasebook {
     fun navigationCue(cue: NavigationCue): String?   // null = nothing to say (e.g. Arrived runs the ARRIVAL prompt)
     fun onboarding(step: OnboardingStep): OnboardingPage   // designs pages 2-8: shown AND read aloud; default blank page
     val stopPractice: String get() = ""                    // onboarding page 4: Vysion talks until the user stops it
+    fun phoneOnboarding(step: PhoneOnboardingStep): PhoneOnboardingPage   // phone first-launch (designs "Phone v6" §1): six pages, three lessons; default blank page
+    val phoneStopPractice: String get() = ""             // phone lesson 3: Vysion talks until the two-finger double-tap stops it
     fun whereAmI(result: WhereAmI): String = ""      // FR-N9: template answer (offline / cloud failed), the permission explanation, or what is wrong + the way out
     object Unwired : ModePhrasebook                  // every value "", navigationCue → null; blank is skipped, never spoken
 }
@@ -141,6 +143,9 @@ enum class OnboardingStep { WELCOME, PRIVACY, TALK, STOP, SOUNDS, SAFETY, ALL_SE
 data class OnboardingItem(val title: String, val detail: String? = null)
 data class OnboardingPage(val step: OnboardingStep, val title: String, val body: String? = null, val items: List<OnboardingItem> = emptyList(),
                           val hint: String? = null, val footnote: String? = null, val spoken: String)
+enum class PhoneOnboardingStep { WELCOME, PERMISSIONS, LEARN_TAP, LEARN_SWIPE, LEARN_TALK_STOP, ALL_SET }   // a phone runs this flow, never OnboardingStep
+data class PhoneOnboardingPage(val step: PhoneOnboardingStep, val title: String, val body: String? = null, val hint: String? = null,
+                               val items: List<OnboardingItem> = emptyList(), val spoken: String)   // spoken = read aloud on entry; hint = the pill
 interface PromptSet {
     val read: String; val describe: String; val door: String; val arrival: String   // the four P0 prompts
     val translateEs: String? get() = null; val describeBrief: String? get() = null; val describeDetailed: String? get() = null
@@ -203,6 +208,7 @@ Each is additive (a default value or a default body), so no caller breaks. Until
 | P-2 | `val noTextFound: String get() = ""` on `ModePhrasebook`; `val noTextSentinel: String? get() = null` on `PromptSet` (`LibraryPromptSet` returns `PromptLibrary.NO_TEXT_SENTINEL`) | FR-T1: today the READ answer "No text found." is spoken in the model's own words; this lets R1 speak R4's fixed line instead (en-US "No text found.", es-MX "No encontré texto.", `Key.NO_TEXT_FOUND`), matching the answer case-insensitively against the sentinel | R1 `ModeController.captureAndDescribe` (Read only); R4 `CuesPhrasebook`; R2 `LibraryPromptSet` | half done 2026-10-17: `PromptSet.noTextSentinel` landed (the UI shows the designs' "move closer" screen); the spoken `noTextFound` line is still open, P1 (r4 page "Who says what") |
 | P-3 | `val box: NormalizedBox? = null` on `NavigationCue.DoorBearing` | the door highlight is a left / center / right band from the clock hour, not the door's outline | R3 fills it when the detector (or the P2 door class, FR-N8) sees the door; R1 draws it instead of `DoorHighlight` | open (r1 page open issue 2) |
 | P-4 | `data class PointingRegion(val box: NormalizedBox)` and a `PointingSource` | FR-D4 (P2) region-only describe | R3 provides, R1 crops | not started (r3 page Contract issue 5) |
+| P-5 | `PhoneOnboardingStep`, `PhoneOnboardingPage`, `ModePhrasebook.phoneOnboarding(step)` and `val phoneStopPractice: String get() = ""` | the phone's first-launch flow (designs "Phone v6 · End-to-end" §1: six pages, three lessons) needs its own words, not the headset's seven cards | R1 `PhoneOnboardingFlow` (`platform/ui/PhoneOnboarding.kt`); R4 `Cues.phoneOnboarding` / `Cues.phoneStopPractice` through `CuesPhrasebook` (EN_US and ES_MX) | merged 2026-10-18 by R1/R4; additive, the defaults (blank page, `""`) keep every existing `ModePhrasebook` compiling |
 
 ## Pure helpers every role shares
 

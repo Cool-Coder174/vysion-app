@@ -209,6 +209,21 @@ class SpeechCommandBusTest {
     }
 
     @Test
+    fun `a missing microphone permission is retried, not terminal, and the next start after the grant works`() = runTest {
+        // Onboarding "Not now" then the app's own dialog: the first session fails on the permission, the second must run.
+        val port = FakeRecognizerPort()
+        val earcons = RecordingEarcons()
+        val bus = bus(port, earcons)
+        bus.startListening()
+        port.listener!!.onError(RecognizerPort.ERROR_INSUFFICIENT_PERMISSIONS)
+        assertEquals(ListeningState.IDLE, bus.state.value)
+        assertEquals(listOf(Earcon.ERROR), earcons.played)
+        bus.startListening()
+        assertEquals(ListeningState.LISTENING, bus.state.value)
+        assertEquals(2, port.sessions.size)
+    }
+
+    @Test
     fun `language errors demote to UNAVAILABLE, other errors return to IDLE`() = runTest {
         val port = FakeRecognizerPort()
         val earcons = RecordingEarcons()

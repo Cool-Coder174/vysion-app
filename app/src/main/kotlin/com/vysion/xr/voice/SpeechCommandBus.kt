@@ -386,6 +386,10 @@ class SpeechCommandBus internal constructor(
 
         override fun onError(code: Int) {
             capJob?.cancel()
+            // Only a recognizer that cannot work at all demotes to UNAVAILABLE. A missing microphone permission
+            // (ERROR_INSUFFICIENT_PERMISSIONS) is not that: the user can grant it a moment later (onboarding "Not now",
+            // then the app's own dialog), and the port re-checks it on the next start, so the bus goes back to IDLE
+            // (review 2026-10-18: it used to stay UNAVAILABLE for the whole process).
             _state.value = if (code in UNAVAILABLE_ERRORS) ListeningState.UNAVAILABLE else ListeningState.IDLE
             if (code != RecognizerPort.ERROR_SPEECH_TIMEOUT) earcons.play(Earcon.ERROR)
         }
@@ -457,8 +461,8 @@ class SpeechCommandBus internal constructor(
         /** plan.md H-15: a listening session is capped so a missed end-of-speech never leaves the mic open. */
         const val LISTENING_CAP_MS: Long = 8_000
 
+        /** Errors that mean no session can ever succeed in this process; a permission error is retried instead. */
         private val UNAVAILABLE_ERRORS = setOf(
-            RecognizerPort.ERROR_INSUFFICIENT_PERMISSIONS,
             RecognizerPort.ERROR_LANGUAGE_NOT_SUPPORTED,
             RecognizerPort.ERROR_LANGUAGE_UNAVAILABLE,
         )
