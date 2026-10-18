@@ -123,6 +123,7 @@ debug `--es model ask-whereami` broadcast, which injects the same `Command.Where
 | Tiles (2: the fix was within 300 m of an edge; 958,109 bytes) | download 403 ms, decode 696 ms, finder 473 ms |
 | Gemini wording, first chunk | 0.89 s |
 | "where am I" recognized → first spoken word (`vysion.latency: whereami command->first-word`) | **4.56 s**, worded by the cloud |
+| Second worn run (10:14, 4 tiles: fix near a corner; 1,260,326 bytes) | fix 1.23 s; download 416 ms, decode 606 ms, finder 296 ms; Gemini first chunk 1.15 s; **3.78 s** command → first word, cloud |
 | Offline (airplane mode): tiles from memory + template | not checked on the device (JVM tests only: `ModeControllerTest`, `CloudDescribeEngineTest`, `CuesTest`) |
 
 Found on the way: with Google Location Accuracy off, Android's network provider is `allowed=false` and the fused
