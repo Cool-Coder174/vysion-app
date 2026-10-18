@@ -36,10 +36,13 @@
     <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
 
-    <!-- Package visibility for the SpeechRecognizer fallback (createSpeechRecognizer, targetSdk ≥ 30). -->
+    <!-- Package visibility (targetSdk ≥ 30): the on-device SpeechRecognizer service and the TextToSpeech engines. -->
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
     </queries>
 

@@ -3,7 +3,10 @@ package com.vysion.xr.platform
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.ImageFormat
+import android.graphics.Matrix
 import android.graphics.PixelFormat
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.os.SystemClock
 import android.util.Log
 import android.util.Size
@@ -12,20 +15,34 @@ import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.lifecycle.awaitInstance
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import com.vysion.xr.core.FrameSource
 import com.vysion.xr.core.FrameStats
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.math.atan
+import kotlin.math.tan
 
 /**
  * Provides [FrameSource] on the headset and the phone: the world-facing camera through CameraX
@@ -130,88 +147,129 @@ class CameraFrameSource(
     }
 
     /**
-     * FR-T1 / FR-N2: bind both use cases to the world camera. Device-only; stub per the skeleton
-     * rules. The intended body (docs/stack.md → R1 "Provider", VERIFIED) is:
-     * ```
-     * val provider = ProcessCameraProvider.awaitInstance(app)      // import androidx.camera.lifecycle.awaitInstance
-     * provider.unbindAll()
-     * provider.bindToLifecycle(lifecycleOwner, worldCameraSelector, analysis, still)
-     * ```
-     * where `lifecycleOwner` is a `LifecycleRegistry` this class drives from [start]/[stop] on
-     * `Dispatchers.Main` (the constructor has no Activity; `AppGraph` is Application-scoped). Owner snippet
-     * (`LifecycleRegistry(LifecycleOwner)`, `currentState` get/set, `LifecycleOwner.lifecycle`: javap against
-     * lifecycle-runtime / lifecycle-common 2.11.0, docs/stack.md "Corrections found at build time"):
-     * ```
-     * private val owner = object : LifecycleOwner {
-     *     val registry = LifecycleRegistry(this)
-     *     override val lifecycle: Lifecycle get() = registry
-     * }
-     * // start(): withContext(Dispatchers.Main) {
-     * //     if (owner.registry.currentState == Lifecycle.State.INITIALIZED) {
-     * //         owner.registry.currentState = Lifecycle.State.CREATED
-     * //         provider.bindToLifecycle(owner, worldCameraSelector, analysis, still)   // bind once
-     * //     }
-     * //     owner.registry.currentState = Lifecycle.State.STARTED                         // frames flow
-     * // }
-     * // stop():  withContext(Dispatchers.Main) { owner.registry.currentState = Lifecycle.State.CREATED }
-     * ```
-     * Never move the registry to DESTROYED: a destroyed lifecycle cannot start again and [stop] is reversible.
-     * Hour-one probe (A-1): log `CameraManager.cameraIdList` and the chosen id's characteristics
-     * under tag `vysion`; if id "0" yields nothing, take RK-1 at Sat 12:00. Also log the horizontal FOV of
-     * the still after the center crop, which R3 needs for `BearingAngles` (stack.md Q3 correction):
-     * `hfov = 2·atan(SENSOR_INFO_PHYSICAL_SIZE.width / (2·LENS_INFO_AVAILABLE_FOCAL_LENGTHS[0]))`, then for the
-     * square crop of a W×H (W ≥ H) frame `hfovCrop = 2·atan((H / W)·tan(hfov / 2))`; log
-     * `vysion: still hfov=<hfovCrop> deg (A-1)`. Metadata only (INV-3).
+     * The lifecycle the use cases are bound to: `AppGraph` is Application-scoped, so this source drives its own
+     * registry from [start] / [stop] on the main thread (`LifecycleRegistry` enforces it). It never goes to
+     * DESTROYED: a destroyed lifecycle cannot start again and [stop] is reversible.
      */
-    override suspend fun start() {
-        Log.w(
-            TAG,
-            "TODO(FR-T1) CameraFrameSource.start: ProcessCameraProvider.awaitInstance(app) then " +
-                "bindToLifecycle(lifecycleOwner, worldCameraSelector, analysis, still); log FrameStats (A-1)",
-        )
+    private val owner = object : LifecycleOwner {
+        val registry by lazy { LifecycleRegistry(this) }
+        override val lifecycle: Lifecycle get() = registry
+    }
+
+    private var provider: ProcessCameraProvider? = null
+
+    /** Main thread only. */
+    private var bound = false
+
+    /**
+     * FR-T1 / FR-N2: bind both use cases to the world camera once, then move the private lifecycle to STARTED
+     * so frames flow (docs/stack.md → R1 "Provider", VERIFIED). The first call logs the A-1 probe. Throws when the
+     * camera cannot be bound (no id [WORLD_CAMERA_ID], permission missing): the controller records it.
+     */
+    override suspend fun start() = withContext(Dispatchers.Main) {
+        try {
+            val cameraProvider = provider ?: ProcessCameraProvider.awaitInstance(app).also { provider = it }
+            if (!bound) {
+                logCameraProbe()
+                owner.registry.currentState = Lifecycle.State.CREATED
+                cameraProvider.bindToLifecycle(owner, worldCameraSelector, analysis, still)
+                bound = true
+                Log.i(TAG, "camera $WORLD_CAMERA_ID bound: analysis + still (A-1)")
+            }
+            owner.registry.currentState = Lifecycle.State.STARTED
+        } catch (e: IllegalArgumentException) { // CameraX: no camera matches the selector
+            Log.w(TAG, "camera $WORLD_CAMERA_ID not available to this app (A-1 -> RK-1): ${e.message}")
+            throw e
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "camera start failed (A-1): ${e.message}")
+            throw e
+        }
     }
 
     /**
-     * Unbind the use cases (reversible: [start] rebinds). Keeps [analysisExecutor], which lives as long as
-     * the process. [stats] goes back to `null` (no frames while stopped, NFR "Honesty"). Never throws.
+     * Stop the frames (reversible: [start] resumes them). Keeps the binding and [analysisExecutor], which live as
+     * long as the process. [stats] goes back to `null` (no frames while stopped, NFR "Honesty"). Never throws.
      */
     override suspend fun stop() {
         _stats.value = null
-        Log.w(
-            TAG,
-            "TODO(FR-T1) CameraFrameSource.stop: lifecycleRegistry.currentState = CREATED (or provider.unbindAll()) " +
-                "on Main; keep analysisExecutor, stop is reversible (AGENTS.md §5)",
-        )
+        runCatching {
+            withContext(Dispatchers.Main) {
+                if (owner.registry.currentState.isAtLeast(Lifecycle.State.CREATED)) {
+                    owner.registry.currentState = Lifecycle.State.CREATED
+                }
+            }
+        }
     }
 
     /**
-     * FR-T1 / FR-D1: one still, center-cropped and resized to [stillEdge] x [stillEdge]. The caller
-     * owns the result (INV-9). Intended body (docs/stack.md → R1 "Still", VERIFIED):
-     * ```
-     * val full = suspendCancellableCoroutine<Bitmap> { cont ->
-     *     still.takePicture(ContextCompat.getMainExecutor(app), object : ImageCapture.OnImageCapturedCallback() {
-     *         override fun onCaptureSuccess(image: ImageProxy) { cont.resume(image.use { it.toBitmap() }) }
-     *         override fun onError(exception: ImageCaptureException) { cont.resumeWithException(exception) }
-     *     })
-     * }
-     * return CenterCrop.apply(full, stillEdge, stillEdge).also { if (it !== full) full.recycle() }
-     * ```
-     * Rotation (docs/stack.md → R1 "Bitmap", corrected): read it inside `onCaptureSuccess`, before the
-     * `ImageProxy` closes, and rotate before cropping:
-     * ```
-     * val r = image.imageInfo.rotationDegrees
-     * val raw = image.use { it.toBitmap() }
-     * val upright = if (r == 0) raw else Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height,
-     *     Matrix().apply { postRotate(r.toFloat()) }, true).also { if (it !== raw) raw.recycle() }
-     * cont.resume(upright)
-     * ```
-     * Log once per process after the crop, metadata only (INV-3; name locals so `scripts/check_privacy.sh` §4 does not
-     * see `bitmap.` / `frame.` in the log call): `val w = upright.width; val h = upright.height`, then
-     * `Log.i(TAG, "still ${w}x$h rotation=$r -> ${stillEdge}x$stillEdge (A-1)")`. Record it in the A-1 Evidence column.
+     * FR-T1 / FR-D1: one still, upright, center-cropped and resized to [stillEdge] x [stillEdge]. The caller
+     * owns the result (INV-9). In-memory capture only (INV-3): the `OnImageCapturedCallback` overload.
      */
-    override suspend fun captureStill(): Bitmap =
-        TODO("FR-T1: ImageCapture.takePicture(mainExecutor, OnImageCapturedCallback) + CenterCrop.apply " +
-            "(docs/stack.md → R1 'Still')")
+    override suspend fun captureStill(): Bitmap {
+        val upright = suspendCancellableCoroutine { cont ->
+            still.takePicture(
+                ContextCompat.getMainExecutor(app),
+                object : ImageCapture.OnImageCapturedCallback() {
+                    override fun onCaptureSuccess(image: ImageProxy) {
+                        val rotation = image.imageInfo.rotationDegrees // read before the proxy closes
+                        val raw = image.use { it.toBitmap() }
+                        val turned = if (rotation == 0) {
+                            raw
+                        } else {
+                            Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, Matrix().apply { postRotate(rotation.toFloat()) }, true)
+                                .also { if (it !== raw) raw.recycle() }
+                        }
+                        if (!loggedStill) {
+                            loggedStill = true
+                            val w = turned.width
+                            val h = turned.height
+                            Log.i(TAG, "still ${w}x$h rotation=$rotation -> ${stillEdge}x$stillEdge (A-1)")
+                        }
+                        cont.resume(turned)
+                    }
+
+                    override fun onError(exception: ImageCaptureException) {
+                        cont.resumeWithException(exception)
+                    }
+                },
+            )
+        }
+        val edge = stillEdge
+        return CenterCrop.apply(upright, edge, edge).also { if (it !== upright) upright.recycle() }
+    }
+
+    @Volatile private var loggedStill = false
+
+    /**
+     * A-1 hour-one probe, metadata only (INV-3): every camera id with its facing, and the chosen one's horizontal
+     * field of view after the square center crop, which R3 needs for `BearingAngles` (stack.md Q3 correction).
+     */
+    private fun logCameraProbe() {
+        runCatching {
+            val manager = app.getSystemService(CameraManager::class.java) ?: return
+            for (id in manager.cameraIdList) {
+                val c = manager.getCameraCharacteristics(id)
+                val facing = when (c.get(CameraCharacteristics.LENS_FACING)) {
+                    CameraCharacteristics.LENS_FACING_BACK -> "back"
+                    CameraCharacteristics.LENS_FACING_FRONT -> "front"
+                    CameraCharacteristics.LENS_FACING_EXTERNAL -> "external"
+                    else -> "unknown"
+                }
+                val sensor = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                val focal = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
+                val pixels = c.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+                var line = "camera id=$id facing=$facing"
+                if (sensor != null && focal != null && focal > 0f && pixels != null && pixels.width > 0) {
+                    val hfov = 2.0 * atan(sensor.width / (2.0 * focal))
+                    val longEdge = maxOf(pixels.width, pixels.height).toDouble()
+                    val shortEdge = minOf(pixels.width, pixels.height).toDouble()
+                    val hfovCrop = 2.0 * atan((shortEdge / longEdge) * tan(hfov / 2.0))
+                    line += " hfov=%.1f deg still hfov=%.1f deg".format(Math.toDegrees(hfov), Math.toDegrees(hfovCrop))
+                }
+                Log.i(TAG, "$line (A-1)")
+            }
+        }.onFailure { Log.w(TAG, "camera probe failed: ${it.message}") }
+    }
 
     /** Analyzer callback: measure fps, convert, publish. Runs on [analysisExecutor]. */
     private fun onAnalysisFrame(image: ImageProxy) {
@@ -221,17 +279,21 @@ class CameraFrameSource(
             if (fps != null) {
                 // NFR Honesty / A-1 "note resolution and format": size and format are read from the frame, not
                 // typed. The id is the only one the selector admits ([worldCameraSelector] filters on it).
-                _stats.value = FrameStats(
+                val measured = FrameStats(
                     cameraId = WORLD_CAMERA_ID,
                     width = frame.width,
                     height = frame.height,
                     format = imageFormatName(frame.format),
                     fps = fps,
                 )
+                if (_stats.value == null) { // A-1 evidence once per start, metadata only (INV-3)
+                    Log.i(TAG, "camera ${measured.cameraId} ${measured.width}x${measured.height} ${measured.format} fps=${"%.1f".format(measured.fps)} (A-1)")
+                }
+                _stats.value = measured
             }
-            // docs/stack.md → R1 "Bitmap": ImageProxy.toBitmap() supports RGBA_8888;
-            // rotation via imageInfo.rotationDegrees.
-            _frames.tryEmit(frame.toBitmap())
+            // docs/stack.md → R1 "Bitmap": ImageProxy.toBitmap() supports RGBA_8888. Converted only while a
+            // collector listens (Navigation's detector): otherwise each frame would allocate a Bitmap for nobody.
+            if (_frames.subscriptionCount.value > 0) _frames.tryEmit(frame.toBitmap())
         }
     }
 

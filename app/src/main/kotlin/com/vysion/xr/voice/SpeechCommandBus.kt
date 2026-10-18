@@ -1,6 +1,14 @@
 package com.vysion.xr.voice
 
 import android.app.Application
+import android.content.Intent
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognitionSupport
+import android.speech.RecognitionSupportCallback
+import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
 import com.vysion.xr.core.Command
@@ -24,7 +32,7 @@ import java.util.Locale
 /**
  * The thin device boundary under [SpeechCommandBus]: exactly what `android.speech.SpeechRecognizer` needs
  * (`docs/stack.md` §3-R4), so the state machine, the 8 s cap and the flow plumbing are unit-tested with a
- * fake. [AndroidRecognizerPort] is the real one (stub bodies in the skeleton).
+ * fake. [AndroidRecognizerPort] is the real one.
  */
 interface RecognizerPort {
     /**
@@ -70,11 +78,13 @@ interface RecognizerPort {
  * The real [RecognizerPort] over `android.speech.SpeechRecognizer` (`docs/stack.md` §3-R4, VERIFIED:
  * `isOnDeviceRecognitionAvailable`, `createOnDeviceSpeechRecognizer` (API 31, throws
  * `UnsupportedOperationException` when unavailable), `RecognizerIntent.ACTION_RECOGNIZE_SPEECH` with
- * `EXTRA_LANGUAGE_MODEL = LANGUAGE_MODEL_FREE_FORM`, `EXTRA_LANGUAGE`, `EXTRA_PREFER_OFFLINE = true`,
- * `EXTRA_PARTIAL_RESULTS`; `RESULTS_RECOGNITION`; all methods on the main thread; `destroy()` mandatory;
- * `RECORD_AUDIO` required). Owner R4, FR-G2, due Sat 14:00 together with the A-7 check: the
- * availability line below IS that check (plan.md "create the on-device recognizer, airplane mode on, log
- * the result; fill A-7"). Everything else is a skeleton stub.
+ * `EXTRA_LANGUAGE_MODEL = LANGUAGE_MODEL_FREE_FORM`, `EXTRA_LANGUAGE`, `EXTRA_PREFER_OFFLINE = true`;
+ * `RESULTS_RECOGNITION`; `checkRecognitionSupport` (API 33) and `triggerModelDownload` (API 34); all methods on
+ * the main thread; `destroy()` mandatory; `RECORD_AUDIO` required). Owner R4, FR-G2.
+ *
+ * On-device only, never the network recognizer: audio must not leave the headset (ADR-0003). The first session
+ * logs which languages the on-device recognizer has installed (A-7 / Q12 evidence) and asks the system to
+ * download a supported pack that is missing; the download is the recognizer service's, not this app's.
  */
 class AndroidRecognizerPort(private val app: Application) : RecognizerPort {
 
@@ -84,32 +94,112 @@ class AndroidRecognizerPort(private val app: Application) : RecognizerPort {
             Log.i(TAG, "A-7 on-device speech recognition available=$it (false -> RK-4: pinch/panel P0, voice P1)")
         }
 
-    override fun startListening(languageTag: String, listener: RecognizerPort.Listener) {
-        Log.w(
-            TAG,
-            "TODO(FR-G2) AndroidRecognizerPort.startListening: on MAIN, recognizer ?: " +
-                "createOnDeviceSpeechRecognizer(app); setRecognitionListener(RecognitionListener forwarding " +
-                "onReadyForSpeech / onResults(RESULTS_RECOGNITION) / onError to listener); " +
-                "startListening(Intent(ACTION_RECOGNIZE_SPEECH) with LANGUAGE_MODEL_FREE_FORM, " +
-                "EXTRA_LANGUAGE=$languageTag, EXTRA_PREFER_OFFLINE=true, EXTRA_PARTIAL_RESULTS=true) " +
-                "(docs/stack.md §3-R4)",
+    private val main = Handler(Looper.getMainLooper())
+
+    /** Created on the first session, on the main thread; `null` again after [destroy]. */
+    private var recognizer: SpeechRecognizer? = null
+
+    private val checkedLanguages = mutableSetOf<String>()
+
+    override fun startListening(languageTag: String, listener: RecognizerPort.Listener) = onMain {
+        val r = recognizer ?: create() ?: run {
+            listener.onError(RecognizerPort.ERROR_LANGUAGE_UNAVAILABLE) // no on-device recognizer: UNAVAILABLE
+            return@onMain
+        }
+        val intent = intent(languageTag)
+        if (checkedLanguages.add(languageTag)) checkSupport(r, intent, languageTag)
+        r.setRecognitionListener(
+            object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) = listener.onReadyForSpeech()
+
+                override fun onResults(results: Bundle?) {
+                    val hypotheses = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+                    Log.i(TAG, "recognizer results: ${hypotheses.size} hypotheses ($languageTag)") // never the words
+                    listener.onResults(hypotheses)
+                }
+
+                override fun onError(error: Int) {
+                    Log.i(TAG, "recognizer error $error ($languageTag)")
+                    listener.onError(error)
+                }
+
+                override fun onBeginningOfSpeech() = Unit
+
+                override fun onRmsChanged(rmsdB: Float) = Unit
+
+                override fun onBufferReceived(buffer: ByteArray?) = Unit
+
+                override fun onEndOfSpeech() = Unit
+
+                override fun onPartialResults(partialResults: Bundle?) = Unit
+
+                override fun onEvent(eventType: Int, params: Bundle?) = Unit
+            },
         )
+        runCatching { r.startListening(intent) }.onFailure {
+            Log.w(TAG, "recognizer start failed: ${it.message}")
+            listener.onError(ERROR_CLIENT)
+        }
     }
 
-    override fun stopListening() {
-        Log.w(TAG, "TODO(FR-G2) AndroidRecognizerPort.stopListening: recognizer.stopListening() on MAIN")
+    override fun stopListening() = onMain { runCatching { recognizer?.stopListening() } }
+
+    override fun cancel() = onMain { runCatching { recognizer?.cancel() } }
+
+    override fun destroy() = onMain {
+        runCatching { recognizer?.destroy() }
+        recognizer = null
     }
 
-    override fun cancel() {
-        Log.w(TAG, "TODO(FR-G2) AndroidRecognizerPort.cancel: recognizer.cancel() on MAIN (8 s listening cap)")
+    private fun create(): SpeechRecognizer? {
+        if (!onDeviceAvailable) return null
+        return runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(app) }
+            .onFailure { Log.w(TAG, "on-device recognizer unavailable: ${it.message}") }
+            .getOrNull()
+            ?.also { recognizer = it }
     }
 
-    override fun destroy() {
-        Log.w(TAG, "TODO(FR-G2) AndroidRecognizerPort.destroy: recognizer.destroy() on MAIN (mandatory)")
+    private fun intent(languageTag: String) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
+        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, MAX_RESULTS)
+    }
+
+    /** Q12: log the installed on-device languages; request a supported pack that is not installed yet. */
+    private fun checkSupport(r: SpeechRecognizer, intent: Intent, languageTag: String) {
+        runCatching {
+            r.checkRecognitionSupport(
+                intent,
+                app.mainExecutor,
+                object : RecognitionSupportCallback {
+                    override fun onSupportResult(recognitionSupport: RecognitionSupport) {
+                        val installed = recognitionSupport.installedOnDeviceLanguages
+                        val supported = recognitionSupport.supportedOnDeviceLanguages
+                        Log.i(TAG, "A-7 on-device languages installed=$installed pending=${recognitionSupport.pendingOnDeviceLanguages}")
+                        val wanted = languageTag.lowercase()
+                        if (installed.none { it.lowercase() == wanted } && supported.any { it.lowercase() == wanted }) {
+                            Log.i(TAG, "A-7 requesting the on-device $languageTag pack")
+                            runCatching { r.triggerModelDownload(intent) }
+                        }
+                    }
+
+                    override fun onError(error: Int) {
+                        Log.i(TAG, "A-7 support check unavailable (error $error)")
+                    }
+                },
+            )
+        }
+    }
+
+    private fun onMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)
     }
 
     private companion object {
         const val TAG = "vysion"
+        const val MAX_RESULTS = 5
+        const val ERROR_CLIENT = SpeechRecognizer.ERROR_CLIENT
     }
 }
 
@@ -142,7 +232,7 @@ class SpeechCommandBus internal constructor(
 ) : CommandBus {
 
     /** The `AppGraph` constructor (ADR-0008). Main thread: `SpeechRecognizer` factories require it. */
-    constructor(app: Application, scope: CoroutineScope) : this(AndroidRecognizerPort(app), Earcons(app), scope)
+    constructor(app: Application, scope: CoroutineScope) : this(AndroidRecognizerPort(app), Earcons(), scope)
 
     private val _commands = MutableSharedFlow<CommandEvent>(
         extraBufferCapacity = COMMAND_BUFFER,

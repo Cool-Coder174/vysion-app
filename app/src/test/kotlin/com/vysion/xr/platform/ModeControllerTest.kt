@@ -119,6 +119,18 @@ class ModeControllerTest {
         )
     }
 
+    @Test
+    fun `next captures and reads again without announcing the mode twice (FR-T6)`() = controllerTest { f ->
+        startAndSettle(f)
+        f.commands.inject(Command.Read)
+        advanceUntilIdle()
+        f.commands.inject(Command.Next)
+        advanceUntilIdle()
+        assertEquals(2, f.frames.captures)
+        assertEquals(Mode.TEXT_READER, f.controller.mode.value)
+        assertEquals(listOf(TestPhrasebook.modeAnnounced(Mode.TEXT_READER), READ_ANSWER, READ_ANSWER), f.speaker.said)
+    }
+
     // ── NFR reliability ───────────────────────────────────────────────────────────────────────────
 
     @Test

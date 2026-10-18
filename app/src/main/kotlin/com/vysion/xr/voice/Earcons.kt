@@ -1,6 +1,8 @@
 package com.vysion.xr.voice
 
-import android.app.Application
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.util.Log
 import com.vysion.xr.core.Earcon
 import kotlin.math.PI
@@ -83,23 +85,48 @@ object EarconSynth {
  * non-spatial fallback for A-6 when SceneCore's point source is unavailable). Owner R4, due Sat 15:00
  * with the `Speaker`. Implements [EarconPlayer]; [AndroidSpeaker] and [SpeechCommandBus] delegate to it.
  *
- * Device API: `android.media.AudioTrack` (PCM 16-bit mono, `USAGE_ASSISTANCE_SONIFICATION`,
- * `MODE_STATIC`). It is a platform API not listed in `docs/stack.md` §3-R4 (which covers
- * `TextToSpeech.playEarcon`, unusable here because `addEarcon` needs a resource file); treat the exact
- * constructor as `// stack.md: UNVERIFIED` and check the artifact per AGENTS.md §8 before relying on it.
- * The tones are constants; [EarconSynth.pcm] is real and tested; only [play] is a stub.
+ * Device API: `android.media.AudioTrack` (PCM 16-bit mono, `USAGE_ASSISTANCE_SONIFICATION`, `MODE_STATIC`):
+ * platform API, not in `docs/stack.md` §3-R4 (which covers `TextToSpeech.playEarcon`, unusable here because
+ * `addEarcon` needs a resource file). One static track per kind is built on first use and replayed with
+ * `stop()` / `reloadStaticData()` / `play()`, so a repeat costs no synthesis (the proximity tone has a 300 ms
+ * budget). Never throws: an audio failure must not take a mode down.
  */
-class Earcons(private val app: Application) : EarconPlayer {
+class Earcons : EarconPlayer {
+
+    private val tracks = HashMap<Earcon, AudioTrack>()
 
     override fun play(kind: Earcon) {
-        val tone = toneFor(kind)
-        // stack.md: UNVERIFIED (AudioTrack is not in the R4 cheat-sheet; constants below are from the platform docs)
-        Log.w(
-            TAG,
-            "TODO(FR-N1) Earcons.play($kind): AudioTrack(AudioAttributes USAGE_ASSISTANCE_SONIFICATION, " +
-                "ENCODING_PCM_16BIT mono ${EarconSynth.SAMPLE_RATE_HZ} Hz, MODE_STATIC) <- EarconSynth.pcm($tone); " +
-                "play(); release() on completion; keep one track per kind to stay under the 300 ms proximity budget",
-        )
+        runCatching {
+            synchronized(tracks) {
+                val track = tracks.getOrPut(kind) { build(toneFor(kind)) }
+                track.stop()
+                track.reloadStaticData() // rewind the static buffer
+                track.play()
+            }
+        }.onFailure { Log.w(TAG, "earcon $kind failed: ${it.message}") }
+    }
+
+    private fun build(tone: Tone): AudioTrack {
+        val pcm = EarconSynth.pcm(tone)
+        val track = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build(),
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(EarconSynth.SAMPLE_RATE_HZ)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build(),
+            )
+            .setTransferMode(AudioTrack.MODE_STATIC)
+            .setBufferSizeInBytes(pcm.size * Short.SIZE_BYTES)
+            .build()
+        track.write(pcm, 0, pcm.size)
+        return track
     }
 
     companion object {
@@ -108,7 +135,7 @@ class Earcons(private val app: Application) : EarconPlayer {
         /** Short high beep when the recognizer is ready for speech (SpeechRecognizer `onReadyForSpeech`). */
         val LISTENING: Tone = Tone(startHz = 880, endHz = 880, durationMs = 120)
 
-        /** Two soft mid ticks; the controller repeats it every 4 s while INFERRING (NFR "never silent > 10 s"). */
+        /** Two soft mid ticks; the controller repeats it while INFERRING (`THINKING_EARCON_PERIOD_MS`; NFR "never silent > 10 s"). */
         val THINKING: Tone = Tone(startHz = 660, endHz = 660, durationMs = 80, repeats = 2, gapMs = 80)
 
         /** One high flat note. */

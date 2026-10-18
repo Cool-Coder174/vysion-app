@@ -1,6 +1,8 @@
 package com.vysion.xr.voice
 
 import android.app.Application
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import com.vysion.xr.core.Earcon
 import com.vysion.xr.core.Speaker
@@ -15,6 +17,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
@@ -25,7 +28,7 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * The thin device boundary under [AndroidSpeaker]: exactly the calls `android.speech.tts.TextToSpeech`
  * needs (`docs/stack.md` §3-R4), so the queue, interrupt and suspend logic above it is unit-tested with a
- * fake. [AndroidTtsPort] is the real one (stub bodies in the skeleton). Callbacks on [Listener] may arrive
+ * fake. [AndroidTtsPort] is the real one. Callbacks on [Listener] may arrive
  * on any thread ("can be called from multiple threads", stack.md); everything that receives them is
  * thread-safe.
  */
@@ -92,73 +95,146 @@ object VoiceSelection {
     fun pick(voices: Collection<VoiceCandidate>, requested: Locale): VoiceCandidate? {
         val preferred = preferredLocales(requested)
         fun rank(candidate: VoiceCandidate): Int {
-            val index = preferred.indexOfFirst { it.country == candidate.locale.country }
+            val country = normalize(candidate.locale).country
+            val index = preferred.indexOfFirst { it.country == country }
             return if (index < 0) preferred.size else index
         }
         return voices
-            .filter { it.locale.language == requested.language && !it.networkRequired && it.installed }
+            .filter { normalize(it.locale).language == requested.language && !it.networkRequired && it.installed }
             .sortedWith(compareBy<VoiceCandidate> { rank(it) }.thenByDescending { it.quality })
             .firstOrNull()
+    }
+
+    /**
+     * Two-letter language and country, whatever the engine reports: Google's engine says "en-US", Samsung's SMT
+     * engine on the Galaxy XR says ISO-3 "eng_USA" / "spa_ESP" (seen on the device 2026-10-17). Variants are dropped.
+     */
+    fun normalize(locale: Locale): Locale {
+        val language = locale.language.let { if (it.length == 3) iso3Languages[it] ?: it else it }
+        val country = locale.country.let { if (it.length == 3) iso3Countries[it] ?: it else it }
+        if (language == locale.language && country == locale.country && locale.variant.isEmpty()) return locale
+        return Locale.Builder().setLanguage(language).setRegion(country).build()
+    }
+
+    private val iso3Languages: Map<String, String> by lazy {
+        Locale.getISOLanguages().mapNotNull { code ->
+            runCatching { Locale.Builder().setLanguage(code).build().isO3Language to code }.getOrNull()
+        }.toMap()
+    }
+
+    private val iso3Countries: Map<String, String> by lazy {
+        Locale.getISOCountries().mapNotNull { code ->
+            runCatching { Locale.Builder().setRegion(code).build().isO3Country to code }.getOrNull()
+        }.toMap()
     }
 }
 
 /**
  * The real [TtsPort] over `android.speech.tts.TextToSpeech` (`docs/stack.md` §3-R4, all VERIFIED:
  * `TextToSpeech(Context, OnInitListener)`, `speak(CharSequence, queueMode, Bundle?, utteranceId)`,
- * `QUEUE_FLUSH` / `QUEUE_ADD`, `stop()`, `setSpeechRate`, `setLanguage`, `getVoices()` (null before init),
- * `setVoice`, `UtteranceProgressListener.onStart/onDone/onError/onStop/onRangeStart`). Construct on the
- * main thread (`AppGraph` does, from `Application.onCreate`). Owner R4, FR-G4, due Sat 15:00; A-8 is
- * checked in [setLocale] (log the es voices). Bodies are skeleton stubs; they return safe defaults instead
- * of throwing because `say(Cues.welcome)` runs on the launch path (FR-G1).
+ * `QUEUE_FLUSH` / `QUEUE_ADD`, `stop()`, `setSpeechRate`, `getVoices()` (null before init), `setVoice`,
+ * `UtteranceProgressListener.onStart/onDone/onError/onStop/onRangeStart`). Construct on the main thread
+ * (`AppGraph` does, from `Application.onCreate`). Owner R4, FR-G4. Uses the user's default engine (their
+ * accessibility setup wins); [setLocale] picks an offline voice of that engine and logs the Spanish candidates
+ * as A-8 evidence. Never throws: `say(Cues.welcome)` runs on the launch path (FR-G1).
  */
 class AndroidTtsPort(private val app: Application) : TtsPort {
 
+    @Volatile private var tts: TextToSpeech? = null
+
+    @Volatile private var ready = false
+
     override fun initialize(listener: TtsPort.Listener) {
-        Log.w(
-            TAG,
-            "TODO(FR-G4) AndroidTtsPort.initialize: tts = TextToSpeech(app) { status -> " +
-                "listener.onInit(status == SUCCESS) }; tts.setOnUtteranceProgressListener(UtteranceProgressListener " +
-                "forwarding onStart/onRangeStart/onDone/onError(id, code)/onStop(id, interrupted) to listener) " +
-                "(docs/stack.md §3-R4)",
+        val engine = runCatching {
+            TextToSpeech(app) { status ->
+                ready = status == TextToSpeech.SUCCESS
+                Log.i(TAG, "tts init ready=$ready engine=${tts?.defaultEngine}")
+                listener.onInit(ready)
+            }
+        }.onFailure { Log.w(TAG, "tts unavailable: ${it.message}") }.getOrNull() ?: run {
+            listener.onInit(false)
+            return
+        }
+        engine.setOnUtteranceProgressListener(
+            object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String) = listener.onStart(utteranceId)
+
+                override fun onDone(utteranceId: String) = listener.onDone(utteranceId)
+
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String) = listener.onError(utteranceId, TextToSpeech.ERROR)
+
+                override fun onError(utteranceId: String, errorCode: Int) = listener.onError(utteranceId, errorCode)
+
+                override fun onStop(utteranceId: String, interrupted: Boolean) = listener.onStop(utteranceId, interrupted)
+
+                override fun onRangeStart(utteranceId: String, start: Int, end: Int, frame: Int) =
+                    listener.onRangeStart(utteranceId, start, end)
+            },
         )
+        tts = engine
     }
 
     override fun speak(text: String, utteranceId: String, flush: Boolean): Boolean {
-        Log.w(
-            TAG,
-            "TODO(FR-G4) AndroidTtsPort.speak: tts.speak(text, if (flush) QUEUE_FLUSH else QUEUE_ADD, null, " +
-                "utteranceId) == TextToSpeech.SUCCESS; dropping utterance $utteranceId (${text.length} chars)",
-        )
-        return false
+        val engine = tts?.takeIf { ready } ?: return false
+        val mode = if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+        return runCatching { engine.speak(text, mode, null, utteranceId) == TextToSpeech.SUCCESS }.getOrDefault(false)
     }
 
     override fun stop() {
-        Log.w(TAG, "TODO(FR-G4) AndroidTtsPort.stop: tts.stop() (-> onStop(id, interrupted = true)); INV-6 ≤ 300 ms")
+        runCatching { tts?.stop() } // -> onStop(id, interrupted = true); INV-6
     }
 
     override fun setRate(rate: Float) {
-        Log.w(TAG, "TODO(FR-T3) AndroidTtsPort.setRate: tts.setSpeechRate($rate)")
+        runCatching { tts?.setSpeechRate(rate) }
     }
 
     override fun setLocale(requested: Locale): Locale? {
-        Log.w(
-            TAG,
-            "TODO(FR-G6) AndroidTtsPort.setLocale: tts.setLanguage(requested) not in {LANG_MISSING_DATA, " +
-                "LANG_NOT_SUPPORTED}; VoiceSelection.pick(tts.voices.map { VoiceCandidate(it.name, " +
-                "it.locale, it.isNetworkConnectionRequired, " +
-                "it.features?.contains(KEY_FEATURE_NOT_INSTALLED) != true, it.quality) }, requested)" +
-                "?.let { tts.setVoice(voice) }; log the es candidates for A-8; return the bound locale " +
-                "or null (requested=$requested)",
-        )
-        return null
+        val engine = tts?.takeIf { ready } ?: return null
+        val voices = runCatching { engine.voices }.getOrNull().orEmpty().toList()
+        val candidates = voices.map {
+            VoiceCandidate(
+                name = it.name,
+                locale = VoiceSelection.normalize(it.locale),
+                networkRequired = it.isNetworkConnectionRequired,
+                installed = it.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) != true,
+                quality = it.quality,
+            )
+        }
+        val pick = VoiceSelection.pick(candidates, requested)
+        if (requested.language == SPANISH || pick == null) { // A-8 evidence: what this engine offers for the language
+            val same = candidates.filter { it.locale.language == requested.language }
+            Log.i(
+                TAG,
+                "A-8 ${requested.language} voices (${same.size}): " + same.joinToString { c ->
+                    "${c.name} ${c.locale.toLanguageTag()} offline=${!c.networkRequired} installed=${c.installed} q=${c.quality}"
+                },
+            )
+        }
+        val voice = pick?.let { p -> voices.firstOrNull { it.name == p.name } }
+        if (voice == null) {
+            Log.i(TAG, "tts: no offline voice for ${requested.toLanguageTag()} among ${voices.size}")
+            return null
+        }
+        val bound = runCatching { engine.setVoice(voice) == TextToSpeech.SUCCESS }.getOrDefault(false)
+        val locale = VoiceSelection.normalize(voice.locale)
+        Log.i(TAG, "tts voice ${voice.name} ${locale.toLanguageTag()} bound=$bound")
+        return if (bound) locale else null
     }
 
     override fun shutdown() {
-        Log.w(TAG, "TODO(FR-G4) AndroidTtsPort.shutdown: tts.stop(); tts.shutdown()")
+        val engine = tts ?: return
+        tts = null
+        ready = false
+        runCatching {
+            engine.stop()
+            engine.shutdown()
+        }
     }
 
     private companion object {
         const val TAG = "vysion"
+        const val SPANISH = "es"
     }
 }
 
@@ -194,7 +270,7 @@ class AndroidSpeaker internal constructor(
 ) : Speaker {
 
     /** The `AppGraph` constructor (ADR-0008). Main thread: `TextToSpeech` is created here. */
-    constructor(app: Application, scope: CoroutineScope) : this(AndroidTtsPort(app), Earcons(app), scope)
+    constructor(app: Application, scope: CoroutineScope) : this(AndroidTtsPort(app), Earcons(), scope)
 
     internal enum class Outcome { DONE, INTERRUPTED, FAILED }
 
@@ -225,6 +301,9 @@ class AndroidSpeaker internal constructor(
 
     @Volatile private var ready = false
 
+    /** Completes on the engine's first `onInit`; utterances that arrive earlier (the launch welcome) wait for it. */
+    private val initialized = CompletableDeferred<Unit>()
+
     private val released = AtomicBoolean(false)
 
     @Volatile private var rate = 1.0f
@@ -254,6 +333,7 @@ class AndroidSpeaker internal constructor(
                 port.setRate(rate)
                 applyLocale(_locale.value)
             }
+            initialized.complete(Unit) // a failed init releases the waiters too; port.speak then reports FAILED
         }
 
         override fun onStart(utteranceId: String) {
@@ -394,7 +474,20 @@ class AndroidSpeaker internal constructor(
             utterance.complete(Outcome.INTERRUPTED)
             return
         }
-        current.set(utterance)
+        current.set(utterance) // from here a stop() completes it
+        if (!initialized.isCompleted) { // the engine binds asynchronously; the launch welcome must not be dropped
+            withTimeoutOrNull(INIT_WAIT_MS) {
+                select {
+                    initialized.onAwait {}
+                    utterance.outcome.onAwait {}
+                }
+            }
+            if (utterance.outcome.isCompleted || utterance.generation != generation.get() || released.get()) {
+                utterance.complete(Outcome.INTERRUPTED)
+                current.compareAndSet(utterance, null)
+                return
+            }
+        }
         _isSpeaking.value = true
         val accepted = port.speak(utterance.text, utterance.id, utterance.flush)
         when {
@@ -453,6 +546,9 @@ class AndroidSpeaker internal constructor(
         /** Watchdog: base plus a per-character allowance (a 60-token read at 0.7x fits with margin). */
         const val UTTERANCE_TIMEOUT_BASE_MS: Long = 10_000
         const val UTTERANCE_TIMEOUT_PER_CHAR_MS: Long = 150
+
+        /** How long an utterance waits for the engine to bind before it is spoken anyway (and fails if still unbound). */
+        const val INIT_WAIT_MS: Long = 5_000
 
         fun utteranceTimeoutMs(text: String): Long =
             UTTERANCE_TIMEOUT_BASE_MS + text.length * UTTERANCE_TIMEOUT_PER_CHAR_MS

@@ -368,6 +368,19 @@ class VoiceSelectionTest {
     }
 
     @Test
+    fun `engines that report ISO-3 locales still match (Samsung SMT on the Galaxy XR)`() {
+        val samsung = listOf(
+            VoiceCandidate("es-ES-default", Locale("spa", "ESP", "default"), false, true, 300),
+            VoiceCandidate("en-GB-SMTl02", Locale("eng", "GBR", "l02"), false, true, 400),
+            VoiceCandidate("en-US-SMTl01", Locale("eng", "USA", "l01"), false, true, 300),
+        )
+        assertEquals("es-ES-default", VoiceSelection.pick(samsung, Speaker.ES_MX)?.name)
+        assertEquals("en-US-SMTl01", VoiceSelection.pick(samsung, Speaker.EN_US)?.name)
+        assertEquals("es-ES", VoiceSelection.normalize(Locale("spa", "ESP", "default")).toLanguageTag())
+        assertEquals(Speaker.EN_US, VoiceSelection.normalize(Speaker.EN_US))
+    }
+
+    @Test
     fun `quality breaks ties within the same country`() {
         val voices = listOf(voice("es-MX", quality = 200), voice("es-MX", quality = 400))
         assertEquals("v-es-MX-400", VoiceSelection.pick(voices, Speaker.ES_MX)?.name)

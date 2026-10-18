@@ -67,10 +67,14 @@ object Ink {
 
 /** The two glass materials and the aurora ground. */
 object Glass {
-    /** Headset status window, rail, toolbar, diagnostics: smoked graphite over passthrough. */
+    /**
+     * Headset status window, rail, toolbar, diagnostics: smoked graphite over passthrough. Near-opaque on purpose:
+     * on the Galaxy XR the compositor thins panel alpha, and at 85% a busy room (people, windows) showed through
+     * and cost the secondary text its contrast (headset captures, 2026-10-17). Low vision first: 7:1 holds.
+     */
     val graphite = Color(0xFF2A2A2F)
-    val graphiteTop = Color(0xD93A3A40)
-    val graphiteBottom = Color(0xE6242428)
+    val graphiteTop = Color(0xF53A3A40)
+    val graphiteBottom = Color(0xFA242428)
 
     /** Onboarding cards: deep indigo. */
     val indigoTop = Color(0xD9232542)
@@ -90,7 +94,7 @@ object Glass {
     val white = Color(0xFFFFFFFF)
 
     /** Behind every orbiter and toolbar: the darker glass under the pills. */
-    val tray = Color(0xCC1C1C20)
+    val tray = Color(0xF21C1C20)
 }
 
 /** The aurora that sits behind onboarding "before the camera turns on" (designs pages 2-8). */

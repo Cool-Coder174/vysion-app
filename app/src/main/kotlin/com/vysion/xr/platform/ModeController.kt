@@ -170,7 +170,7 @@ class ModeController(
         run.launch { navigation.detections.collect { overlay.showDetections(it) } } // FR-N2
         run.launch {
             previousTeardown?.join() // a quick off/on must not stop the camera after it was started again
-            guarded { frames.start() } // A-1; the real source logs a TODO until bound
+            guarded { frames.start() } // A-1; CameraFrameSource logs the probe and the binding
         }
         run.launch { guarded { engine.warmUp() } } // A-11; a failure is recorded, never a crash at launch
 
@@ -267,7 +267,9 @@ class ModeController(
             Command.Detailed -> describeVariant = DescribeVariant.DETAILED // FR-D3 (P1)
             // TODO(FR-D2): re-run describe on the retained still with prompts.followUp(question) (P1)
             is Command.FollowUp -> Unit
-            Command.Next -> Unit // TODO(FR-T6): capture and read again without a new command (P2)
+            Command.Next -> launchOneShot(ModeState.CAPTURING) { // FR-T6: the next page or sign, same prompt
+                captureAndDescribe(Mode.TEXT_READER, prompts.read, event)
+            }
             is Command.SelectDoor -> Unit // TODO(FR-N7): choose among door candidates (P2)
             Command.Stop -> Unit // handled on its own lane
         }
