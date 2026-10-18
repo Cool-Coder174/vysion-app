@@ -1,5 +1,6 @@
 package com.vysion.xr
 
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -125,6 +126,18 @@ class MainActivity : ComponentActivity() {
             graph.modeController.lastError.filterNotNull().collect { error ->
                 Log.w(RELIABILITY_TAG, "recovered from ${error::class.java.simpleName}: ${error.message}")
             }
+        }
+    }
+
+    /**
+     * singleTask (manifest): a repeat launch reuses this instance instead of creating a second one. Keep its extras, and
+     * run a debug [EXTRA_COMMAND] at once if the graph is already running (otherwise [startGraph] picks it up).
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (graphStarted) {
+            debugCommand()?.let { command -> graph.commandBus.inject(command, CommandSource.TEST) }
         }
     }
 

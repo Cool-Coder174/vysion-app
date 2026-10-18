@@ -69,9 +69,13 @@
         <!-- configChanges: rotating the S25 Ultra (2D fallback) or resizing the Home Space window must not run
              onStop/onStart (which cancels an in-flight Read and re-speaks the welcome); Compose recomposes in
              place and the XR Session keeps its Activity. -->
+        <!-- singleTask: one MainActivity per task. A second `am start` (or a relaunch) while one exists created a second
+             instance whose Session.create hung in XrExtensions.getSpatialState, an ANR after 60 s (worn run 2026-10-18
+             07:52), and left perception on the first instance's session. Repeat launches arrive in onNewIntent. -->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboardHidden"
+            android:launchMode="singleTask"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
