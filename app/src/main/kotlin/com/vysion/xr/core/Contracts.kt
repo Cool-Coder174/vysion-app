@@ -100,8 +100,9 @@ data class FrameStats(
  * The world-facing camera, two streams (SRS §6):
  * - [analysisFrames]: the 640x480 analysis stream for the detector (≥ 5 fps, FR-N2). Backed by
  *   CameraX `ImageAnalysis` with the latest-frame strategy; collectors should `conflate()`.
- * - [captureStill]: one on-demand still, center-cropped and resized to the VLM input size
- *   (FR-T1, FR-D1). Returns a `Bitmap` that the caller owns and must `recycle()` when done.
+ * - [captureStill]: one on-demand square still, center-cropped, large enough for OCR on small print
+ *   (`CameraFrameSource.DEFAULT_STILL_EDGE`; FR-T1, FR-D1). The inference engine fits it to its VLM's fixed input
+ *   itself. Returns a `Bitmap` that the caller owns and must `recycle()` when done.
  *
  * Privacy (ADR-0003): frames exist only in memory. No implementation of this interface may write a
  * frame to storage or log its contents.
