@@ -57,6 +57,7 @@ interface InferenceEngine {
     suspend fun describe(bitmap: Bitmap, prompt: String, maxNewTokens: Int = DEFAULT_MAX_NEW_TOKENS): String   // throws InferenceException
     fun describeStreaming(bitmap: Bitmap, prompt: String, maxNewTokens: Int = DEFAULT_MAX_NEW_TOKENS): Flow<String>   // default wraps describe
     suspend fun detect(bitmap: Bitmap): List<Detection>
+    suspend fun readText(bitmap: Bitmap): List<String>? = null   // FR-T1 OCR fast path: lines in reading order, [] = no text, null = no OCR model (use describe + READ)
     suspend fun release()                                        // once, from AppGraph.release() (onDestroy when finishing), never onStop
     companion object { const val DEFAULT_MAX_NEW_TOKENS: Int = 60; const val VLM_TIMEOUT_MS: Long = 15_000 }
 }

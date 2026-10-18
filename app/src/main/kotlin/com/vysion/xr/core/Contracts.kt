@@ -181,6 +181,14 @@ interface InferenceEngine {
     /** Run the detector on one analysis frame (FR-N2). Must sustain ≥ 5 fps on the headset. */
     suspend fun detect(bitmap: Bitmap): List<Detection>
 
+    /**
+     * FR-T1 fast path: the text in [bitmap] from an OCR model, one entry per line in reading order; an empty list
+     * means "no text". `null` means no OCR model is loaded, and the caller reads with [describe] and the READ
+     * prompt instead. Same mutex as the other models (INV-1); [bitmap] is only read (INV-9).
+     * @throws InferenceException when the OCR model is loaded but fails.
+     */
+    suspend fun readText(bitmap: Bitmap): List<String>? = null
+
     /** Unload everything. Called once from `AppGraph.release()` (`onDestroy` when finishing), never from `onStop`. */
     suspend fun release()
 
