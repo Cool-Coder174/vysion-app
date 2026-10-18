@@ -66,6 +66,8 @@ import com.vysion.xr.core.CommandSource
 import com.vysion.xr.core.ListeningState
 import com.vysion.xr.core.Mode
 import com.vysion.xr.core.ModeState
+import com.vysion.xr.platform.ui.components.PillButton
+import com.vysion.xr.platform.ui.components.PillStyle
 import com.vysion.xr.platform.ui.components.ThinkingLines
 import com.vysion.xr.platform.ui.components.Waveform
 import com.vysion.xr.platform.ui.components.glass
@@ -187,13 +189,19 @@ private fun PhoneApp(graph: AppGraph, diagnostics: @Composable () -> Unit) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 ModeFlash(selected, modeFlash)
             }
-            AnswerBlock(shell)
+            AnswerBlock(shell, talkBack)
             ModeTabs(selected = selected, onSelect = { selected = it; modeFlash++ })
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
                 if (talkBack) {
-                    RoundIconButton(stringResource(R.string.action_again), selected = false, onClick = { commands.inject(Command.Repeat, CommandSource.PANEL) }) { tint ->
-                        Icon(VysionIcons.Repeat, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
-                    }
+                    // Designs page 23, "Same screen with TalkBack on": swipe up becomes a labeled Again button.
+                    PillButton(
+                        label = stringResource(R.string.action_again),
+                        onClick = { commands.inject(Command.Repeat, CommandSource.PANEL) },
+                        style = PillStyle.SECONDARY,
+                        textStyle = PhoneType.label,
+                        height = Target.phone,
+                        icon = VysionIcons.Repeat,
+                    )
                     Box(Modifier.size(Space.l))
                 }
                 Shutter(shell = shell, selected = selected, commands = commands, onRun = ::run)
@@ -292,7 +300,7 @@ private fun ModeFlash(mode: Mode, flash: Int) {
 
 /** One bold block for the current answer or state, colored by meaning (yellow read/describe, cyan navigation). */
 @Composable
-private fun AnswerBlock(shell: ShellState) {
+private fun AnswerBlock(shell: ShellState, talkBack: Boolean) {
     val reduceMotion = LocalReduceMotion.current
     AnimatedContent(
         targetState = shell.screen,
@@ -304,7 +312,13 @@ private fun AnswerBlock(shell: ShellState) {
     ) { screen ->
         when (screen) {
             is HeadsetScreen.Answer -> {
-                val label = if (screen.mode == Mode.TEXT_READER) R.string.phone_label_reading else R.string.phone_label_describing
+                // Under TalkBack the swipe hint does not apply (the Again button does the job).
+                val label = when {
+                    screen.mode == Mode.TEXT_READER && talkBack -> R.string.status_reading
+                    screen.mode == Mode.TEXT_READER -> R.string.phone_label_reading
+                    talkBack -> R.string.status_describing
+                    else -> R.string.phone_label_describing
+                }
                 ColorBlock(Accent.yellow, stringResource(label).uppercase()) {
                     // A long answer scrolls inside the block so the camera and the controls stay on screen.
                     Text(
