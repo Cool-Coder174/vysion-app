@@ -100,7 +100,7 @@ class OnboardingMetrics(
 )
 
 val SpatialOnboarding = OnboardingMetrics(
-    cardWidth = 900.dp, button = 64.dp, icon = 88.dp, chip = 40.dp, dot = 8.dp, pad = 48.dp, margin = 48.dp, soundColumns = 3,
+    cardWidth = 1040.dp, button = 64.dp, icon = 88.dp, chip = 40.dp, dot = 8.dp, pad = 56.dp, margin = 40.dp, soundColumns = 3,
 )
 val PhoneOnboarding = OnboardingMetrics(
     cardWidth = 560.dp, button = 52.dp, icon = 56.dp, chip = 30.dp, dot = 6.dp, pad = 24.dp, margin = 16.dp, soundColumns = 2,
@@ -202,7 +202,7 @@ private fun Card(
                 Waveform(color = Accent.blue, barWidth = metrics.icon * 0.07f, height = metrics.icon * 0.7f, bars = 9)
             }
             OnboardingStep.STOP -> Row(horizontalArrangement = Arrangement.spacedBy(metrics.icon * 0.6f), verticalAlignment = Alignment.CenterVertically) {
-                Icon(VysionIcons.Palm, contentDescription = null, tint = Ink.primary, modifier = Modifier.size(metrics.icon))
+                Icon(VysionIcons.Stop, contentDescription = null, tint = Accent.red, modifier = Modifier.size(metrics.icon * 0.8f)) // the Stop button, not a palm: no palm gesture exists
                 Column {
                     Text(stringResource(R.string.onboarding_or_say), color = Ink.secondary, style = type.footnote)
                     Text(stringResource(R.string.onboarding_stop_word), color = Accent.orange, style = type.windowTitle)

@@ -364,19 +364,20 @@ data class RailMore(val selected: Boolean, val onToggle: () -> Unit)
  * The mode rail: an orbiter that floats off the window's left edge. Every item shows its icon AND its label at all
  * times (a gaze-only label was clipped by the rail's glass and made the rail change width while you looked at it),
  * one outlined icon family, a white pill behind the selected mode, and a whole-item hit area of at least
- * [Target.spatial]. Read, Describe and Find door send the same command the voice would; the gauge opens the
- * measured-numbers window.
+ * [Target.spatial]. Read, Describe and Find door send the same command the voice would. Three items only: an
+ * orbiter is clipped to its window's height, and the shortest window (Listening) is ~300 dp tall, so the rail must
+ * fit in that (headset captures 2026-10-17 showed a 4-item rail cut off). Diagnostics is [DiagnosticsToggle].
  */
 @Composable
-fun ModeRail(mode: Mode?, commands: CommandBus, more: RailMore, itemSize: Dp, labelStyle: androidx.compose.ui.text.TextStyle, modifier: Modifier = Modifier) {
+fun ModeRail(mode: Mode?, commands: CommandBus, itemSize: Dp, labelStyle: androidx.compose.ui.text.TextStyle, modifier: Modifier = Modifier) {
     val railLabel = stringResource(R.string.a11y_mode_rail)
     Column(
-        verticalArrangement = Arrangement.spacedBy(Space.xs),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
             .glass(RoundedCornerShape(RAIL_CORNER))
             .semantics { contentDescription = railLabel }
-            .padding(vertical = Space.m, horizontal = Space.s),
+            .padding(vertical = Space.s, horizontal = Space.xs),
     ) {
         RailItem(stringResource(R.string.mode_read), VysionIcons.Read, mode == Mode.TEXT_READER, itemSize, labelStyle) {
             commands.inject(Command.Read, CommandSource.PANEL)
@@ -387,15 +388,22 @@ fun ModeRail(mode: Mode?, commands: CommandBus, more: RailMore, itemSize: Dp, la
         RailItem(stringResource(R.string.mode_find_door), VysionIcons.Door, mode == Mode.NAVIGATION, itemSize, labelStyle) {
             commands.inject(Command.FindDoor, CommandSource.PANEL)
         }
-        Box(
-            Modifier
-                .padding(vertical = Space.xs)
-                .width(itemSize * 0.6f)
-                .height(1.dp)
-                .background(Glass.edge),
-        )
-        RailItem(stringResource(R.string.mode_more), VysionIcons.Gauge, more.selected, itemSize, labelStyle, onClick = more.onToggle)
     }
+}
+
+/** The measured-numbers window's switch (FR-G5): a small labeled chip on the window's right edge. */
+@Composable
+fun DiagnosticsToggle(more: RailMore, height: Dp, labelStyle: androidx.compose.ui.text.TextStyle, modifier: Modifier = Modifier) {
+    PillButton(
+        label = stringResource(R.string.mode_more),
+        onClick = more.onToggle,
+        style = PillStyle.SECONDARY,
+        textStyle = labelStyle,
+        height = height,
+        modifier = modifier,
+        icon = VysionIcons.Gauge,
+        selected = more.selected,
+    )
 }
 
 /** One rail entry: indicator pill with the icon, the label under it, the whole column clickable. */
@@ -421,14 +429,14 @@ private fun RailItem(
     )
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(Space.xs),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier
             .width(size * RAIL_ITEM_WIDTH)
             .clip(RoundedCornerShape(Radius.tile))
             .hoverable(interaction)
             .selectable(selected = selected, interactionSource = interaction, indication = null, role = Role.Tab, onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = label }
-            .padding(vertical = Space.s),
+            .padding(vertical = 6.dp),
     ) {
         Box(
             contentAlignment = Alignment.Center,
@@ -447,9 +455,9 @@ private fun RailItem(
     }
 }
 
-private val RAIL_CORNER = 44.dp
-private const val RAIL_ITEM_WIDTH = 1.6f
-private const val RAIL_PILL_HEIGHT = 0.66f
+private val RAIL_CORNER = 36.dp
+private const val RAIL_ITEM_WIDTH = 1.65f
+private const val RAIL_PILL_HEIGHT = 0.7f
 
 // ── Obstacle (cuts in over everything) ──────────────────────────────────────────────────────────────────────────
 

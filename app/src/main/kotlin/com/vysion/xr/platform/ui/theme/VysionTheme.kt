@@ -139,7 +139,7 @@ val SpatialType = VysionType(
     body = style(28.sp, 38.sp, FontWeight.Normal),
     footnote = style(20.sp, 26.sp, FontWeight.Normal),
     label = style(22.sp, 26.sp, FontWeight.SemiBold),
-    railLabel = style(18.sp, 22.sp, FontWeight.SemiBold),
+    railLabel = style(17.sp, 20.sp, FontWeight.SemiBold),
     chip = style(18.sp, 22.sp, FontWeight.Medium),
     distance = style(104.sp, 108.sp, FontWeight.Bold, (-0.03).em),
 )

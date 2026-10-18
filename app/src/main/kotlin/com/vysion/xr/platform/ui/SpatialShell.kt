@@ -149,8 +149,21 @@ private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composa
                     ModeRail(
                         mode = shell.mode,
                         commands = graph.commandBus,
+                        itemSize = 56.dp,
+                        labelStyle = SpatialType.railLabel,
+                    )
+                }
+                // Above the window's top-right corner, clear of the answer text.
+                Orbiter(
+                    OrbiterPosition.TopEnd(
+                        OrbiterPosition.EdgeAlignment.Inside,
+                        OrbiterPosition.EdgeAlignment.Outside,
+                        DpVolumeOffset(12.dp, 12.dp, 0.dp),
+                    ),
+                ) {
+                    DiagnosticsToggle(
                         more = RailMore(diagnosticsShown) { diagnosticsShown = !diagnosticsShown },
-                        itemSize = 64.dp,
+                        height = 56.dp,
                         labelStyle = SpatialType.railLabel,
                     )
                 }
@@ -274,7 +287,8 @@ private val SIDE_GAP = 48.dp
 private val DIAGNOSTICS_WIDTH = 720.dp
 private val OVERLAY_WIDTH = 1100.dp
 private val OVERLAY_HEIGHT = 824.dp
-private val ONBOARDING_WIDTH = 1760.dp
-private val ONBOARDING_HEIGHT = 1080.dp
+/** Close to Android XR's default panel (~1024 x 720 dp): the card fills it instead of floating in a field of aurora. */
+private val ONBOARDING_WIDTH = 1240.dp
+private val ONBOARDING_HEIGHT = 860.dp
 private const val FULL_PASSTHROUGH = 1.0f
 private const val DIMMED_PASSTHROUGH = 0.55f
