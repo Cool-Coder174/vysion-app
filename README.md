@@ -87,6 +87,27 @@ flowchart LR
 | Speech in / out | headset | Whisper-tiny on ExecuTorch with Silero VAD (ADR-0011; Android `SpeechRecognizer` as fallback) / `TextToSpeech` |
 | Network | optional features only | `INTERNET` + `ACCESS_NETWORK_STATE` (ADR-0010); every network feature has an on-device fallback, and Read, Describe and Find the door never need it; printed on the overlay. The list of record, with what each one sends, is the ADR-0010 table: opt-in cloud Describe ("cloud on"; Gemini, `GEMINI_API_KEY` in the gitignored `local.properties`, `docs/setup.md` §6b; falls back to the headset VLM), the "where am I" map (FR-N9; falls back to the tiles already in memory and template sentences) and the system recognizer when the on-device one will not bind |
 
+## The headset (Samsung Galaxy XR, as probed)
+
+Read from our unit over `adb` and from the app's own probes (2026-10-17 and 18); what an app can and cannot reach
+matters more here than the spec sheet.
+
+| | What it is | What the app can use |
+|---|---|---|
+| Model, OS | SM-I610, Android 14 (API 34), build UML2.260301.001.I610UEU2AZF3 | everything below runs on this build |
+| Chip | Qualcomm Snapdragon XR2+ Gen 2 (`SXR2230P`), 6 CPU cores up to 2.36 GHz | **CPU only, through XNNPACK** (4 threads); every model runs here |
+| NPU | Hexagon HTP v69, 8 MB VTCM | **closed to apps**: FastRPC to the DSP is denied to third-party apps, no NNAPI driver, no AICore; only Google's own perception service uses it ([ADR-0002](docs/decisions/ADR-0002-xnnpack-ships.md)) |
+| GPU | Adreno 740 (OpenGL ES 3.2) | reachable by apps; not used for models yet (ExecuTorch Vulkan spike in progress) |
+| Memory, storage | 16 GB RAM, 256 GB (218 GB user data) | the app peaks at 1.84 GB with all five models resident |
+| Display | compositor 7104×3840 across both eyes; 60, 72 or 90 Hz (72 by default) | Full Space with passthrough, panels, world-anchored labels |
+| Cameras | 4: three world-facing (ids 0, 2, 3; 79.2° horizontal field of view) and one user-facing (id 1, 67.4°) | camera 0 through CameraX: 640×480 analysis at 22–25 fps, 1920×1440 stills center-cropped to 1280 square (63.6°) |
+| Depth and tracking | smooth depth map 320×320; head, hand and eye tracking; planes; anchors | head pose, hands (eyes-free gestures), depth (proximity, crosshair distance), anchors (door marker, read card) |
+| Audio | speakers, microphones, spatial audio | TTS, Whisper voice commands, spatialized door ping (the mic is silenced while nobody wears it) |
+| Motion sensors | accelerometer, gyroscope, gravity, game rotation vector; four magnetometers exposed only as a Samsung-private sensor type | no public compass, so no north reference (heading comes from tracking, not a compass) |
+| Location and radios | Wi-Fi (Aware, Direct), Bluetooth LE; **no GPS**, no Wi-Fi RTT | Wi-Fi network location through Play services once Location is on (used by "where am I") |
+| Geospatial (VPS) | not supported: the OpenXR runtime lacks `ANDROID_geospatial` | none; "where am I" uses OpenFreeMap tiles instead |
+| Battery | external pack on the pogo connector; the system estimates 9,600 mAh, last learned 3,300 mAh; reports 0 V | whole-device current only through the system battery log (how "Measured numbers" gets charge per call); the app idles at 966 mA with the display off |
+
 ## Measured numbers
 
 Measured on the Galaxy XR (SM-I610). The model table is the SRS protocol (airplane mode, headset unworn, fixed test
