@@ -20,7 +20,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -45,8 +44,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.xr.compose.platform.LocalSession
 import androidx.xr.compose.platform.LocalSpatialCapabilities
 import androidx.xr.compose.spatial.ExperimentalFollowingSubspaceApi
@@ -73,6 +72,7 @@ import androidx.xr.compose.unit.DpVolumeOffset
 import androidx.xr.runtime.DeviceTrackingMode
 import androidx.xr.runtime.Session
 import androidx.xr.scenecore.SpatialCapability
+import androidx.xr.scenecore.SpatialEnvironment.Companion.NO_PASSTHROUGH_OPACITY_PREFERENCE
 import androidx.xr.scenecore.Space as SceneSpace
 import androidx.xr.scenecore.scene
 import com.vysion.xr.AppGraph
@@ -102,6 +102,8 @@ import java.util.function.Consumer
 import kotlin.math.tan
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.channels.Channel
 
 /**
  * The Galaxy XR layout (Michelle Bui's designs, Headset 1-13): passthrough Full Space with one glass status
@@ -550,51 +552,79 @@ private fun MarkerTestTool(graph: AppGraph) {
 
 /**
  * Augmented reality needs the room: full passthrough, enforced rather than requested once. SceneCore keeps it only as
- * the app's *preference* and the system can change what is shown (sleep and wake, Home and back, a system toggle), so
- * the preference is re-applied on every resume and whenever the visible opacity drops below full, and no app
- * environment is ever requested (with one, passthrough blends with it). Each drop is logged under `vysion` so a dark
- * room can be traced. If the system keeps refusing (a user setting), the listener fires once per change, not in a loop.
+ * the app's *preference*; the system decides what is shown. Worn log, 2026-10-18 02:33: on resume the system queued the
+ * app's initial "passthrough off" while it was still loading, then queued our "full" request, then executed the stale
+ * "off" (SystemUI `MixedRealityOperation ... Executing(passthroughModeState=Disabled)`) and dropped ours. Re-setting the
+ * same 1.0 sends the system nothing, so a re-assert first clears the preference, then asks for full again.
+ *
+ * While resumed: ask for full at once, then wake on every reported drop and check every [PASSTHROUGH_CHECK_MS] anyway
+ * (the system can lose a request without a callback); after [PASSTHROUGH_FAST_TRIES] misses in a row it checks every
+ * [PASSTHROUGH_SLOW_CHECK_MS], so a user who turned passthrough off in system settings is not fought every second.
+ * No app environment is ever requested. Each re-assert is logged under `vysion`.
  */
 @Composable
 private fun KeepPassthroughOn(session: Session?) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(session, lifecycle) {
-        if (session == null) return@DisposableEffect onDispose { }
-        val environment = session.scene.spatialEnvironment
-        val onChanged = Consumer<Float> { visible ->
-            if (visible < FULL_PASSTHROUGH) {
-                Log.w(PASSTHROUGH_TAG, "passthrough dropped to $visible; asking for full passthrough again")
-                setPassthrough(session)
+    LaunchedEffect(session, lifecycle) {
+        if (session == null) return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            val environment = session.scene.spatialEnvironment
+            val drops = Channel<Float>(Channel.CONFLATED)
+            val onChanged = Consumer<Float> { visible -> if (visible < FULL_PASSTHROUGH) drops.trySend(visible) }
+            runCatching { environment.addPassthroughOpacityChangedListener(onChanged) }
+            try {
+                requestFullPassthrough(session)
+                var misses = 0
+                while (true) {
+                    val wait = if (misses < PASSTHROUGH_FAST_TRIES) PASSTHROUGH_CHECK_MS else PASSTHROUGH_SLOW_CHECK_MS
+                    val reported = withTimeoutOrNull(wait) { drops.receive() }
+                    val visible = runCatching { environment.currentPassthroughOpacity }.getOrDefault(FULL_PASSTHROUGH)
+                    if (visible >= FULL_PASSTHROUGH) {
+                        misses = 0
+                        continue
+                    }
+                    misses++
+                    Log.w(
+                        PASSTHROUGH_TAG,
+                        "passthrough at $visible (${if (reported != null) "reported" else "watchdog"}), re-asserting full ($misses)",
+                    )
+                    if (canControlPassthrough(session)) {
+                        runCatching { environment.preferredPassthroughOpacity = NO_PASSTHROUGH_OPACITY_PREFERENCE }
+                        delay(PASSTHROUGH_REASSERT_GAP_MS)
+                        requestFullPassthrough(session)
+                    }
+                }
+            } finally {
+                runCatching { environment.removePassthroughOpacityChangedListener(onChanged) }
             }
-        }
-        val onResume = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) setPassthrough(session)
-        }
-        runCatching { environment.addPassthroughOpacityChangedListener(onChanged) }
-        lifecycle.addObserver(onResume)
-        setPassthrough(session)
-        onDispose {
-            runCatching { environment.removePassthroughOpacityChangedListener(onChanged) }
-            lifecycle.removeObserver(onResume)
         }
     }
 }
 
+private fun canControlPassthrough(session: Session): Boolean =
+    session.scene.spatialCapabilities.contains(SpatialCapability.PASSTHROUGH_CONTROL)
+
 /** Full passthrough and no app environment, gated on the capability (A-2: passthrough works with our panels shown). */
-private fun setPassthrough(session: Session) {
-    val scene = session.scene
-    if (!scene.spatialCapabilities.contains(SpatialCapability.PASSTHROUGH_CONTROL)) {
-        Log.w(PASSTHROUGH_TAG, "no PASSTHROUGH_CONTROL capability; the system decides what is shown")
+private fun requestFullPassthrough(session: Session) {
+    if (!canControlPassthrough(session)) {
+        Log.w(PASSTHROUGH_TAG, "no PASSTHROUGH_CONTROL capability yet; the system decides what is shown")
         return
     }
     runCatching {
-        val environment = scene.spatialEnvironment
+        val environment = session.scene.spatialEnvironment
         if (environment.preferredSpatialEnvironment != null) environment.preferredSpatialEnvironment = null
         environment.preferredPassthroughOpacity = FULL_PASSTHROUGH
         Log.i(PASSTHROUGH_TAG, "passthrough requested: full (visible now ${environment.currentPassthroughOpacity})")
     }.onFailure { Log.w(PASSTHROUGH_TAG, "passthrough request failed: ${it.message}") }
 }
 
+/** Passthrough checks while resumed: every second at first, every 10 s after five misses in a row. */
+private const val PASSTHROUGH_CHECK_MS = 1_000L
+private const val PASSTHROUGH_SLOW_CHECK_MS = 10_000L
+private const val PASSTHROUGH_FAST_TRIES = 5
+
+/** Clear-then-set gap, so the system sees two distinct requests rather than one it can coalesce away. */
+private const val PASSTHROUGH_REASSERT_GAP_MS = 250L
 private const val PASSTHROUGH_TAG = "vysion"
 
 /** A heads-up display, not a monitor: about two thirds of Android XR's default panel, so the room stays the view. */
