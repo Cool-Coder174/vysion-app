@@ -139,7 +139,7 @@ new row plus `-Pdetector=`); (2) a door-only floor: decode at 0.15 for the door 
 |---|---|---|---|---|
 | Command recognized → action started | ≤ 1.5 s | not measured | | |
 | Text Reader capture → first spoken word | ≤ 6 s | dev runs, not the protocol: 1.27 s and 1.72 s whole frame; 1.48 s through the reading crosshair (OCR 1.48 s on the 554×365 crop, read "Q-TEES 8925" from the box it framed) | pass in 2 development runs (Wi-Fi on, not airplane mode) | `vysion.latency` read capture → first word, worn Galaxy XR SM-I610, 2026-10-17 |
-| Audio Description capture → first spoken word | ≤ 8 s | not measured | | |
+| Audio Description capture → first spoken word | ≤ 8 s | dev runs, not the protocol, worn, the headset VLM answering: 8.71, 9.79, 10.12 and 11.13 s (prefill 7.1–10.2 s; its vision encoder took 5.9–8.2 s, against 4.5 s in the 2026-10-17 dev runs, cause not measured). The cloud answering: not measured worn (every Gemini request at 11:41–11:43 got HTTP 429, free-tier quota; "Cloud Describe" below) | miss in 4 development runs (Wi-Fi on, not airplane mode) | `vysion.latency: describe capture->first-word`, worn Galaxy XR SM-I610, 2026-10-18: 02:33 and 07:59 with cloud off; 11:41 and 11:42 with cloud on, Gemini 429, headset fallback |
 | Detector throughput during Navigation | ≥ 5 fps | dev run, not the protocol: ~11 fps live (70–150 ms per frame) | pass in 1 development run (Wi-Fi on) | `vysion.latency` detect, worn Galaxy XR SM-I610, 2026-10-17 |
 | Proximity warning after threshold crossed | ≤ 300 ms | 16–40 ms depth copy → cue emitted (≈30 cues, 3 runs); a later worn run 17–114 ms; earcon/speech not included | pass for the R3 part (development runs, Wi-Fi on, not airplane mode) | `vysion.latency: proximity cue … after the depth sample`, Galaxy XR SM-I610, 2026-10-17 |
 | App resident memory with VLM loaded | ≤ 4 GB | not measured | | |
@@ -148,11 +148,13 @@ new row plus `-Pdetector=`); (2) a door-only floor: decode at 0.15 for the door 
 
 ## Cloud Describe (ADR-0010 row; opt-in, network on)
 
-Debug `ModelSmokeReceiver` on the 960×960 `files/smoke/scene.png` with nobody wearing the headset (the camera needs a
-wearer, so capture → first spoken word with the cloud is **not measured**). Wi-Fi on, Galaxy XR SM-I610, 2026-10-18,
-`gemini-3.6-flash`, thinking `minimal`, free tier (project `vysion-app`, no billing). Times are from the start of
-`describeScene` (`vysion.latency: describe …`), not from capture. Runs 1–4 used an API-restricted key; runs 5–7 the
-app-restricted key in `local.properties` (with `X-Android-Package` / `X-Android-Cert`).
+Runs 1–7: debug `ModelSmokeReceiver` on the 960×960 `files/smoke/scene.png` with nobody wearing the headset. Runs 8–9:
+worn by Isaac, "cloud on" then "describe" by voice; run 10 is a cloud-only smoke request right after them. Wi-Fi on,
+Galaxy XR SM-I610, 2026-10-18, `gemini-3.6-flash`, thinking `minimal`, free tier (project `vysion-app`, no billing).
+Times are from the start of `describeScene` (`vysion.latency: describe …`), not from capture; capture → first spoken
+word is in the Note column where a wearer made it. Runs 1–4 used an API-restricted key; runs 5–10 the app-restricted
+key in `local.properties` (with `X-Android-Package` / `X-Android-Cert`). Where am I's wording uses the same key and
+model, so it shares the quota.
 
 | Run | Path | Cloud first chunk | Headset | Who answered | Note |
 |---|---|---|---|---|---|
@@ -163,7 +165,11 @@ app-restricted key in `local.properties` (with `X-Android-Package` / `X-Android-
 | 5 `--es model cloud` (cloud only) | JPEG 61 172 B | 1.41 s; whole answer 1.86 s | not started | cloud | app-restricted key: 200 from the headset |
 | 6 `describe` | hedged | 0.90 s | never started | cloud | whole flow 1.25 s |
 | 7 `describe` | hedged | 1.15 s | started at 1.00 s, cancelled | cloud | flow ends at 8.9 s |
-| offline (airplane mode) | | | | | **not checked on the device** (JVM tests only: `CloudDescribeEngineTest`) |
+| 8 `describe`, worn, cloud on | hedged | HTTP 429 `RESOURCE_EXHAUSTED` at 0.52 s | started at 0.52 s; prefill 8.56 s; first chunk 9.36 s | headset | capture → first word 10.12 s: the fallback working on a refused request |
+| 9 `describe`, worn, cloud on | hedged | HTTP 429 at 0.34 s | started at 0.34 s; prefill 7.14 s; first chunk 7.77 s | headset | capture → first word 8.71 s |
+| 10 `--es model cloud` (cloud only), 65 s after run 9's request | JPEG | HTTP 429 `RESOURCE_EXHAUSTED` | not started | nobody | a per-minute limit would have reset by then, so it looks like the daily free-tier quota; the app does not log the response body that names the quota |
+| worn, the cloud answering | | | | | **not measured**: free-tier quota exhausted (runs 8–10). Needs the quota back (daily reset) or billing on `vysion-app` (Isaac's call) |
+| offline (airplane mode) | | | | | **not checked on the device**: skipped for the deadline (Isaac, 2026-10-18); JVM tests only (`CloudDescribeEngineTest`) |
 
 ## Where am I (FR-N9; ADR-0010 rows "Where am I map" and "Where am I wording"; network on)
 
