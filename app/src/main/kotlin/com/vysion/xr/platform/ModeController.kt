@@ -1,6 +1,7 @@
 package com.vysion.xr.platform
 
 import android.graphics.Bitmap
+import com.vysion.xr.core.AnchorId
 import com.vysion.xr.core.AnchorStore
 import com.vysion.xr.core.Command
 import com.vysion.xr.core.CommandBus
@@ -116,6 +117,14 @@ class ModeController(
 
     private val _transcript = MutableStateFlow<String?>(null)
 
+    private val _worldLabel = MutableStateFlow<WorldLabel?>(null)
+
+    /**
+     * Augmented layer: what to pin in the room, at which anchor. The door marker while guiding (FR-N3) and the text
+     * that was just read, next to the sign (FR-T1). `null` when there is nothing to pin; cleared on stop.
+     */
+    val worldLabel: StateFlow<WorldLabel?> = _worldLabel
+
     /** FR-T2: the last VLM text, for the transcript panel. `null` until the first result. */
     val transcript: StateFlow<String?> = _transcript
 
@@ -215,6 +224,7 @@ class ModeController(
     fun stop() {
         val run = runScope ?: return
         runScope = null
+        _worldLabel.value = null // anchors do not survive the XR session
         active?.cancel() // before silencing, as in [onStop]
         active = null
         speaker.stop()
@@ -337,6 +347,19 @@ class ModeController(
     }
 
     /**
+     * Augmented Read: an anchor where the wearer is looking (R3's `placeAtGaze`: depth along the gaze, else 1 m along
+     * it) and the text pinned there, so the words appear by the sign. Runs beside the speech; no anchor (no XR, no
+     * tracked head) simply means no card. The no-text sentinel is never pinned.
+     */
+    private fun pinReadText(text: String?) {
+        if (text.isNullOrBlank() || text == prompts.noTextSentinel) return
+        runScope?.launch {
+            val anchor = runCatching { anchors.placeAtGaze() }.getOrNull() ?: return@launch
+            _worldLabel.value = WorldLabel(anchor, WorldLabel.Kind.TEXT, text)
+        }
+    }
+
+    /**
      * FR-T1 / FR-D1 / FR-N6: the capture → infer → speak flow shared by Read, Describe and the
      * arrival check. Text Reader target: first spoken word ≤ 6 s after capture; Describe ≤ 8 s.
      */
@@ -361,9 +384,11 @@ class ModeController(
             }
             if (ocrText == null) {
                 speakWhileGenerating(mode, still, prompt, capturedAtNanos)
+                if (mode == Mode.TEXT_READER) pinReadText(_transcript.value)
             } else {
                 _transcript.value = ocrText // FR-T2
                 _state.value = ModeState.SPEAKING
+                pinReadText(ocrText) // in parallel with the speech, never before it
                 sayTimed(ocrText, mode, capturedAtNanos)
             }
         } catch (e: CancellationException) {
@@ -416,6 +441,7 @@ class ModeController(
                 return
             }
             navigation.guideTo(anchor) // R3 emits DoorBearing every 3 s; spoken in [onCue]
+            _worldLabel.value = WorldLabel(anchor, WorldLabel.Kind.DOOR, text = "") // the marker at the door
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -456,6 +482,7 @@ class ModeController(
     private suspend fun arrival() {
         captureAndDescribe(Mode.NAVIGATION, prompts.arrival, event = null)
         runCatching { navigation.clearTarget() }
+        if (_worldLabel.value?.kind == WorldLabel.Kind.DOOR) _worldLabel.value = null
     }
 
     // ── Navigation cues ───────────────────────────────────────────────────────────────────────────
@@ -801,4 +828,9 @@ internal object DoorHighlight {
             bottom = BAND_BOTTOM,
         )
     }
+}
+
+/** One thing pinned in the room by the augmented layer: a door marker or the text that was read, at [anchor]. */
+data class WorldLabel(val anchor: AnchorId, val kind: Kind, val text: String) {
+    enum class Kind { DOOR, TEXT }
 }

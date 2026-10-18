@@ -141,6 +141,22 @@ class XrAnchorStore internal constructor(
     }
 
     /**
+     * Augmented layer (read cards): an anchor where the wearer looks. Depth is sampled along the head's yaw AND pitch
+     * (a sign is often below eye level, where [placeFromBearing]'s level ray misses it); without a depth hit the anchor
+     * goes [fallbackDistanceM] along the gaze, so the card still appears in front of what was read. `null` without a
+     * tracked head pose. Never throws.
+     */
+    override suspend fun placeAtGaze(fallbackDistanceM: Float): AnchorId? {
+        source.ensureStarted()
+        val head = source.headPose.value?.takeIf { it.tracking == Tracking.TRACKING } ?: return null
+        val point = source.sampleDepthAlongBearing(head.yawDeg, head.pitchDeg)
+            ?: GazeGeometry.pointAlong(head.position, head.yawDeg, head.pitchDeg, fallbackDistanceM)
+        val id = source.createAnchor(point) ?: return null
+        Log.i(XrPerceptionSession.TAG, "anchor ${id.value} placed at gaze (yaw ${head.yawDeg}°, pitch ${head.pitchDeg}°)")
+        return id
+    }
+
+    /**
      * Relative target every time the anchor pose or the head pose changes; emits only while the anchor
      * is [Tracking.TRACKING] and the head pose is tracked, and **completes** when the anchor is
      * [Tracking.STOPPED] (detached, lost, or an id the session never created), which [XrNavigationEngine]
@@ -170,5 +186,20 @@ class XrAnchorStore internal constructor(
 
     override suspend fun clear() {
         source.detachAllAnchors()
+    }
+}
+
+/** Gaze rays in the conventions of [RawHeadPose]: yaw 0 = −Z, positive yaw = right, positive pitch = up. Pure. */
+internal object GazeGeometry {
+    fun pointAlong(origin: Vec3, yawDeg: Float, pitchDeg: Float, distanceM: Float): Vec3 {
+        val yaw = Math.toRadians(yawDeg.toDouble())
+        val pitch = Math.toRadians(pitchDeg.toDouble())
+        val horizontal = kotlin.math.cos(pitch)
+        val dir = Vec3(
+            (kotlin.math.sin(yaw) * horizontal).toFloat(),
+            kotlin.math.sin(pitch).toFloat(),
+            (-kotlin.math.cos(yaw) * horizontal).toFloat(),
+        )
+        return origin + dir * distanceM
     }
 }

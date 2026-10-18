@@ -39,6 +39,24 @@ crash with `NoSuchMethodError`. Our own orbiter rail follows the same spec.
 Known platform crash we cannot fix in app code: `ActivitySpaceImpl.onBoundsChanged` NPE inside SceneCore during fast
 force-restarts (we are on the newest Jetpack XR: compose beta01, scenecore rc02).
 
+## Augmented layer (Galaxy XR, 2026-10-17)
+
+The app is an augmented experience: the room stays visible and the UI lives in it (`platform/ui/SpatialShell.kt`).
+
+| Piece | How | Status |
+|---|---|---|
+| Window follows the wearer | `FollowingSubspace(FollowTarget.ArDevice, FollowBehavior.Soft(600 ms))`, yaw and position only, 220 dp below eye line; needs head tracking on (`DeviceTrackingMode.SPATIAL`), else a fixed `Subspace` | ✓ seen on the worn headset |
+| Door marker at the door | Find the door creates an anchor (R3), the marker is a panel in `FollowingSubspace(FollowTarget.Anchor(AnchorSpace), Tight)`; anchors face the wearer so the label is readable | built; not seen yet (the test run found no door) |
+| Read card at the sign | `AnchorStore.placeAtGaze()`: depth along the head's yaw AND pitch, else 1 m along the gaze; the text is pinned there in large yellow type | built and unit-tested; not yet seen on a worn headset (the first build used a level ray, which missed a sign below eye level) |
+
+Geospatial (the Maps Immersive View tour guide): `XrDevice.isGeospatialModeSupported` returned
+`spatial=false, vpsAndGps=false` on the Galaxy XR (SM-I610, 2026-10-17). It also needs the network (VPS, Maps tiles),
+which ADR-0003 forbids, and Immersive View is not an embeddable SDK. So it is not built. Offline alternative, if wanted:
+GPS bearing to a saved latitude/longitude feeding the existing spatial ping.
+
+Next augmented features that stay on device: ARCore for Jetpack XR rc02 tracks QR codes (data + pose), which could
+label doors ("Room 204") without a model; anchor persistence could remember a door between sessions.
+
 ## Meta smart glasses (Ray-Ban Meta, Oakley Meta, Meta Ray-Ban Display)
 
 - **Wearables Device Access Toolkit 1.0.1** (Maven Central `com.meta.wearable:mwdat-core|camera|display|…`), an SDK for

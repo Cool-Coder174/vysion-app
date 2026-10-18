@@ -56,6 +56,42 @@ class XrAnchorStoreTest {
     }
 
     @Test
+    fun `placeAtGaze samples depth along yaw and pitch, so a sign below eye level is hit`() = runTest {
+        val source = FakePerceptionSource().apply {
+            headPose.value = head(yawDeg = 15f, pitchDeg = -30f)
+            depthPoint = Vec3(0.3f, 1.0f, -1.2f)
+        }
+        assertEquals(AnchorId("anchor-1"), store(source).placeAtGaze())
+        assertEquals(listOf(15f), source.sampledYawDeg)
+        assertEquals(listOf(-30f), source.sampledPitchDeg)
+        assertEquals(listOf(Vec3(0.3f, 1.0f, -1.2f)), source.createdAt)
+    }
+
+    @Test
+    fun `placeAtGaze without depth falls back along the gaze, and needs a tracked head`() = runTest {
+        val source = FakePerceptionSource()
+        val store = store(source)
+        assertNull(store.placeAtGaze())
+        source.headPose.value = head(x = 1f, z = 2f, pitchDeg = -90f) // looking straight down, no depth hit
+        assertEquals(AnchorId("anchor-1"), store.placeAtGaze(fallbackDistanceM = 0.5f))
+        val p = source.createdAt.single()
+        assertEquals(1f, p.x, 1e-4f)
+        assertEquals(head().position.y - 0.5f, p.y, 1e-4f)
+        assertEquals(2f, p.z, 1e-4f)
+    }
+
+    @Test
+    fun `gaze geometry matches the head pose conventions`() {
+        val o = Vec3(0f, 1.6f, 0f)
+        val ahead = GazeGeometry.pointAlong(o, 0f, 0f, 2f)
+        assertEquals(0f, ahead.x, 1e-4f); assertEquals(1.6f, ahead.y, 1e-4f); assertEquals(-2f, ahead.z, 1e-4f)
+        val right = GazeGeometry.pointAlong(o, 90f, 0f, 1f)
+        assertEquals(1f, right.x, 1e-4f); assertEquals(0f, right.z, 1e-4f)
+        val up = GazeGeometry.pointAlong(o, 0f, 30f, 1f)
+        assertEquals(1.6f + 0.5f, up.y, 1e-4f); assertEquals(-0.8660f, up.z, 1e-3f)
+    }
+
+    @Test
     fun `track follows the head turning and completes when the anchor stops tracking`() = runTest {
         val source = FakePerceptionSource()
         val store = store(source)

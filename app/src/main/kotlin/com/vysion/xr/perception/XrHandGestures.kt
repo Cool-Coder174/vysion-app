@@ -1,5 +1,7 @@
 package com.vysion.xr.perception
 
+import android.util.Log
+import com.vysion.xr.BuildConfig
 import com.vysion.xr.core.HandGesture
 import com.vysion.xr.core.HandGestureSource
 import kotlinx.coroutines.flow.Flow
@@ -18,9 +20,22 @@ class XrHandGestures internal constructor(private val source: PerceptionSource) 
 
     override val gestures: Flow<HandGesture> = flow {
         val recognizer = HandGestureRecognizer()
+        var lastProbeNanos = 0L
         source.hands.collect { hand ->
-            for (gesture in recognizer.onFrame(hand, source.headPose.value?.position)) emit(gesture)
+            val head = source.headPose.value?.position
+            for (gesture in recognizer.onFrame(hand, head)) emit(gesture)
+            // Threshold tuning on real hands (docs/xr-and-glasses.md): once a second, how close each finger came
+            // to the thumb and which way the palm faced. Joint distances only; no image, no identity.
+            if (BuildConfig.DEBUG && hand.timestampNanos - lastProbeNanos > PROBE_PERIOD_NANOS) {
+                lastProbeNanos = hand.timestampNanos
+                Log.d(TAG, recognizer.describe(hand, head))
+            }
         }
+    }
+
+    private companion object {
+        const val TAG = "vysion.gesture"
+        const val PROBE_PERIOD_NANOS = 1_000_000_000L
     }
 }
 

@@ -18,6 +18,7 @@ import com.vysion.xr.platform.ui.PreviewScreen
 import androidx.activity.result.ActivityResultLauncher
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.delay
 import com.vysion.xr.diagnostics.DiagnosticsOverlay
 import com.vysion.xr.platform.Permissions
 import com.vysion.xr.platform.ui.FlatShell
@@ -192,10 +193,29 @@ class MainActivity : ComponentActivity() {
      * first `session.start` finds no XR grant (UNAVAILABLE) and the call from [onPermissionResult] is the
      * retry. `XrPerceptionSession.start` returns at once while RUNNING or STARTING.
      */
+    /** [EXTRA_COMMAND] in a debug build, else `null`. Consumed once, so a restart does not repeat it. */
+    private fun debugCommand(): Command? {
+        if (!BuildConfig.DEBUG) return null
+        val word = intent.getStringExtra(EXTRA_COMMAND) ?: return null
+        intent.removeExtra(EXTRA_COMMAND)
+        return when (word.lowercase()) {
+            "read" -> Command.Read
+            "describe" -> Command.Describe
+            "door" -> Command.FindDoor
+            else -> null
+        }
+    }
+
     private fun startGraph(speakWelcome: Boolean = true) {
         if (!graphStarted) {
             graphStarted = true
             graph.start(speakWelcome) // → ModeController.start(): welcome (FR-G1), frames, warm-up
+            debugCommand()?.let { command ->
+                lifecycleScope.launch {
+                    delay(DEBUG_COMMAND_DELAY_MS)
+                    graph.commandBus.inject(command, CommandSource.TEST)
+                }
+            }
         }
         // R3: the ARCore for Jetpack XR session needs this Activity (stack.md D7); a no-op on the S25 Ultra.
         // AppGraph orders it after the previous onStop's perception teardown (quick headset off/on).
@@ -209,6 +229,11 @@ class MainActivity : ComponentActivity() {
         const val SECURITY_TAG = "vysion.security"
         const val NANOS_PER_MS = 1_000_000L
         const val EXTRA_PREVIEW = "vysion.preview"
+
+        /** DEBUG ONLY: a command run a few seconds after launch (`--es vysion.command read|describe|door`), so device
+         *  checks of the augmented layer (pinned read card, door marker) need nobody to talk or pinch. */
+        const val EXTRA_COMMAND = "vysion.command"
+        private const val DEBUG_COMMAND_DELAY_MS = 6_000L
         const val EXTRA_ONBOARDING_PAGE = "vysion.onboarding"
     }
 }

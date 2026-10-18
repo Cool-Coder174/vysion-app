@@ -43,6 +43,16 @@ class ModelSmokeReceiver : BroadcastReceiver() {
         }
         val prompt = intent.getStringExtra(EXTRA_PROMPT) ?: DEFAULT_PROMPT
         val threads = intent.getIntExtra("threads", 0)
+        if (model == "tts") { // how long one short sentence takes to come back from Speaker.say (callback health)
+            val pending = goAsync()
+            app.graph.scope.launch {
+                val t0 = System.nanoTime()
+                app.graph.speaker.say(app.graph.phrasebook.holdStill, interrupt = true) // a real cue, so the gate stays green
+                Log.i(TAG, "tts say returned after ${(System.nanoTime() - t0) / 1_000_000} ms")
+                pending.finish()
+            }
+            return
+        }
         if (model == "vlm-probe") {
             val pending = goAsync()
             Thread { runCatching { probeVlm(File(app.getExternalFilesDir(null), "models/vlm.pte"), intent.getIntExtra("pad", 0)) }
@@ -121,7 +131,7 @@ class ModelSmokeReceiver : BroadcastReceiver() {
         const val EXTRA_PROMPT = "prompt"
         const val DIR = "smoke"
         const val DEFAULT_PROMPT = "Describe what is in front of me in one short sentence."
-        val MODELS = setOf("ocr", "vlm", "detector", "vlm-probe")
+        val MODELS = setOf("ocr", "vlm", "detector", "vlm-probe", "tts")
         val NAME = Regex("[A-Za-z0-9._-]{1,64}")
     }
 }

@@ -45,6 +45,8 @@ internal class FakePerceptionSource : PerceptionSource {
 
     var ensureStartedCalls = 0
     var sampledYawDeg = mutableListOf<Float>()
+    val sampledPitchDeg = mutableListOf<Float>()
+    val createdAt = mutableListOf<Vec3>()
     var depthPoint: Vec3? = null
     var nextAnchorId: AnchorId? = AnchorId("anchor-1")
     val anchorPoses = HashMap<AnchorId, MutableStateFlow<AnchorPoseSample?>>()
@@ -56,11 +58,13 @@ internal class FakePerceptionSource : PerceptionSource {
 
     override suspend fun sampleDepthAlongBearing(worldYawDeg: Float, pitchDeg: Float): Vec3? {
         sampledYawDeg += worldYawDeg
+        sampledPitchDeg += pitchDeg
         return depthPoint
     }
 
     override suspend fun createAnchor(position: Vec3): AnchorId? {
         val id = nextAnchorId ?: return null
+        createdAt += position
         anchorPoses.getOrPut(id) { MutableStateFlow(null) }
         return id
     }

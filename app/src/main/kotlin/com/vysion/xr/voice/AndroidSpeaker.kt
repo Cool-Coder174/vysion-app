@@ -157,16 +157,25 @@ class AndroidTtsPort(private val app: Application) : TtsPort {
         }
         engine.setOnUtteranceProgressListener(
             object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String) = listener.onStart(utteranceId)
+                override fun onStart(utteranceId: String) {
+                    Log.d(TAG, "tts onStart $utteranceId")
+                    listener.onStart(utteranceId)
+                }
 
-                override fun onDone(utteranceId: String) = listener.onDone(utteranceId)
+                override fun onDone(utteranceId: String) {
+                    Log.d(TAG, "tts onDone $utteranceId")
+                    listener.onDone(utteranceId)
+                }
 
                 @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String) = listener.onError(utteranceId, TextToSpeech.ERROR)
 
                 override fun onError(utteranceId: String, errorCode: Int) = listener.onError(utteranceId, errorCode)
 
-                override fun onStop(utteranceId: String, interrupted: Boolean) = listener.onStop(utteranceId, interrupted)
+                override fun onStop(utteranceId: String, interrupted: Boolean) {
+                    Log.d(TAG, "tts onStop $utteranceId interrupted=$interrupted")
+                    listener.onStop(utteranceId, interrupted)
+                }
 
                 override fun onRangeStart(utteranceId: String, start: Int, end: Int, frame: Int) =
                     listener.onRangeStart(utteranceId, start, end)
@@ -502,6 +511,7 @@ class AndroidSpeaker internal constructor(
             else -> {
                 val result = withTimeoutOrNull(utteranceTimeoutMs(utterance.text)) { utterance.outcome.await() }
                 if (result == null) { // engine never called back: reliability guard, never hang SPEAKING
+                    android.util.Log.w("vysion.reliability", "tts watchdog: no callback for ${utterance.id} (${utterance.text.length} chars)")
                     port.stop()
                     emitProgress(utterance, utterance.lastCharEnd.get(), utterance.lastCharEnd.get(), done = true)
                     utterance.complete(Outcome.FAILED)

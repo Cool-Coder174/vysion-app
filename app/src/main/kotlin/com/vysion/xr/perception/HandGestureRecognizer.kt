@@ -126,6 +126,14 @@ internal class HandGestureRecognizer(
         return tips.all { tip -> (tip!! - wrist).length >= OPEN_TIP_FROM_WRIST_M && (tip - thumb).length >= OPEN_TIP_FROM_THUMB_M }
     }
 
+    /** One line for threshold tuning: thumb-to-finger distances in cm and the palm direction. */
+    fun describe(hand: HandObservation, head: Vec3?): String {
+        val thumb = hand.thumbTip ?: return "${hand.side} ${hand.tracking} no thumb"
+        fun cm(tip: Vec3?) = tip?.let { "%.1f".format((it - thumb).length * 100f) } ?: "-"
+        return "${hand.side} ${hand.tracking} index=${cm(hand.indexTip)} middle=${cm(hand.middleTip)} " +
+            "ring=${cm(hand.ringTip)} little=${cm(hand.littleTip)} cm palm=${palmFacing(hand, head)} open=${isOpen(hand)}"
+    }
+
     enum class Facing { TOWARD_USER, AWAY, SIDEWAYS, UNKNOWN }
 
     /**

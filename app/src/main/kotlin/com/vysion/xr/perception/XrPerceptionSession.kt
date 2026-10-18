@@ -20,6 +20,7 @@ import androidx.xr.runtime.AnchorPersistenceMode
 import androidx.xr.runtime.Config
 import androidx.xr.runtime.DepthEstimationMode
 import androidx.xr.runtime.DeviceTrackingMode
+import androidx.xr.runtime.GeospatialMode
 import androidx.xr.runtime.HandTrackingMode
 import androidx.xr.runtime.PlaneTrackingMode
 import androidx.xr.runtime.RenderingMode
@@ -29,6 +30,7 @@ import androidx.xr.runtime.SessionCreateSuccess
 import androidx.xr.runtime.XrDevice
 import androidx.xr.runtime.math.FloatSize2d
 import androidx.xr.runtime.math.Pose
+import androidx.xr.runtime.math.Quaternion
 import androidx.xr.runtime.math.Vector3
 import androidx.xr.scenecore.AnchorSpace
 import androidx.xr.scenecore.Entity
@@ -606,6 +608,14 @@ class XrPerceptionSession(
                     _depthSupported.value =
                         XrDevice.getCurrentDevice(app).isDepthEstimationModeSupported(DepthEstimationMode.SMOOTH_ONLY)
                     Log.i(TAG, "probe depthSmooth=${_depthSupported.value} spatialAudio=${_spatialAudioSupported.value} (A-5, A-6)")
+                    // Geospatial (online navigation, docs/xr-and-glasses.md): Google lists only the Play Services and
+                    // Projected runtimes, not the headset's; this line settles it on the device.
+                    val device = XrDevice.getCurrentDevice(app)
+                    Log.i(
+                        TAG,
+                        "probe geospatial spatial=${runCatching { device.isGeospatialModeSupported(GeospatialMode.SPATIAL) }.getOrDefault(false)} " +
+                            "vpsAndGps=${runCatching { device.isGeospatialModeSupported(GeospatialMode.VPS_AND_GPS) }.getOrDefault(false)}",
+                    )
                     feeders = scope.launch {
                         launchDepthFeed(xrSession)
                         launchHeadPoseFeed(xrSession)
@@ -920,8 +930,14 @@ class XrPerceptionSession(
      */
     override suspend fun createAnchor(position: Vec3): AnchorId? {
         val xrSession = session ?: return null
+        // Turned to face the wearer (yaw only), so a label pinned here (world-anchored UI) reads face-on, not edge-on.
+        // Only the position matters to navigation; the rotation is for the augmented layer.
+        val facing = _headPose.value?.position?.let { head ->
+            val yawDeg = Math.toDegrees(kotlin.math.atan2((head.x - position.x).toDouble(), (head.z - position.z).toDouble())).toFloat()
+            Quaternion.fromAxisAngle(Vector3(0f, 1f, 0f), yawDeg)
+        } ?: Quaternion.Identity
         val result = try {
-            Anchor.create(xrSession, Pose(Vector3(position.x, position.y, position.z)))
+            Anchor.create(xrSession, Pose(Vector3(position.x, position.y, position.z), facing))
         } catch (e: IllegalStateException) {
             Log.e(TAG, "anchor creation failed", e)
             return null
@@ -974,8 +990,29 @@ class XrPerceptionSession(
     /** Anchor spaces parenting the ping entities, by anchor; disposed with the entity. */
     private val anchorSpaces = HashMap<AnchorId, AnchorSpace>()
 
+    /** Spaces handed to world-anchored UI ([anchorSpaceFor]); a few per run, never disposed mid-composition. */
+    private val uiAnchorSpaces = HashMap<AnchorId, AnchorSpace>()
+
     /** For [SpatialAudioPinger]'s `SoundPool.load(assets.openFd(...))`; package-internal (ADR-0005). */
     internal val assets: AssetManager get() = app.assets
+
+    /**
+     * The scene-graph space of a native anchor, for world-anchored UI (`Subspace(FollowTarget.Anchor(space))`): the
+     * door marker and the read card sit where the door / sign is. Its own space, not the spatial ping's (the pinger
+     * disposes that one when it stops). Kept until the session ends: disposing it on detach could pull it from under a
+     * frame still composing it. `null` without a session or a known native anchor.
+     */
+    fun anchorSpaceFor(id: AnchorId): AnchorSpace? {
+        uiAnchorSpaces[id]?.let { return it }
+        val xrSession = session ?: return null
+        val anchor = nativeAnchors[id] ?: return null
+        return try {
+            AnchorSpace.create(xrSession, anchor).also { uiAnchorSpaces[id] = it }
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "anchor space for ${id.value} not created", e)
+            null
+        }
+    }
 
     /**
      * An entity parented under `AnchorSpace.create(session, anchor)` so a sound played from it comes

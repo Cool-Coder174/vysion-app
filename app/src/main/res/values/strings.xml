@@ -95,6 +95,7 @@
     <string name="clock_face">%1$d o’clock</string>
     <string name="meters_short">%1$s m</string>
     <string name="overlay_door">door</string>
+    <string name="world_door">Door</string>
     <string name="overlay_last_seen">last seen</string>
 
     <!-- Onboarding chrome (the page words themselves come from voice/Cues.kt). -->

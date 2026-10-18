@@ -122,6 +122,35 @@ class ModeControllerTest {
     }
 
     @Test
+    fun `read pins the text in the room where the wearer looks, but never the no-text sentinel`() = controllerTest { f ->
+        startAndSettle(f)
+        f.engine.cannedText = listOf("Meeting rooms", "Floor 2")
+        f.commands.inject(Command.Read)
+        advanceUntilIdle()
+        val label = f.controller.worldLabel.value
+        assertEquals(WorldLabel.Kind.TEXT, label?.kind)
+        assertEquals("Meeting rooms\nFloor 2", label?.text)
+        assertEquals(f.anchors.lastId, label?.anchor)
+        assertEquals(1, f.anchors.gazePlacements)
+
+        f.engine.cannedText = emptyList()
+        f.commands.inject(Command.Read)
+        advanceUntilIdle()
+        assertEquals(1, f.anchors.gazePlacements) // "No text found" is not pinned
+    }
+
+    @Test
+    fun `find the door pins a door marker at its anchor, and stopping the app clears it`() = controllerTest { f ->
+        startAndSettle(f)
+        f.engine.cannedAnswers[TestPrompts.door] = "Left."
+        f.commands.inject(Command.FindDoor)
+        advanceUntilIdle()
+        assertEquals(WorldLabel(f.anchors.lastId!!, WorldLabel.Kind.DOOR, ""), f.controller.worldLabel.value)
+        f.controller.stop()
+        assertNull(f.controller.worldLabel.value)
+    }
+
+    @Test
     fun `read with OCR that finds no text shows the no-text sentinel, and describe never runs OCR`() = controllerTest { f ->
         startAndSettle(f)
         f.engine.cannedText = emptyList()
@@ -999,6 +1028,13 @@ private class TestAnchorStore : AnchorStore {
         placed += bearing
         if (failPlacement) return null
         return AnchorId("door-${placed.size}").also { lastId = it }
+    }
+
+    var gazePlacements = 0
+
+    override suspend fun placeAtGaze(fallbackDistanceM: Float): AnchorId? {
+        gazePlacements++
+        return AnchorId("gaze-$gazePlacements").also { lastId = it }
     }
 
     override fun track(id: AnchorId): Flow<RelativeTarget> = emptyFlow()

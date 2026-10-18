@@ -3,6 +3,7 @@ package com.vysion.xr
 import android.app.Activity
 import android.util.Log
 import android.app.Application
+import com.vysion.xr.core.AnchorId
 import com.vysion.xr.core.AnchorStore
 import com.vysion.xr.core.CommandBus
 import com.vysion.xr.core.DiagnosticsSource
@@ -39,6 +40,7 @@ import com.vysion.xr.platform.PassthroughOverlayRenderer
 import com.vysion.xr.voice.AndroidSpeaker
 import com.vysion.xr.voice.CuesPhrasebook
 import com.vysion.xr.voice.SpeechCommandBus
+import androidx.xr.scenecore.AnchorSpace
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -161,6 +163,12 @@ class AppGraph(private val app: Application) {
         phrasebook = phrasebook,
         prompts = prompts,
     )
+
+    /**
+     * World-anchored UI (augmented layer): the scene space of an anchor, for `FollowingSubspace(FollowTarget.Anchor(…))`.
+     * `null` off the headset or for an unknown anchor. Main thread.
+     */
+    fun anchorSpace(id: AnchorId): AnchorSpace? = perception?.anchorSpaceFor(id)
 
     /** Hand gestures → the same commands as voice and panels (`platform.GestureCommands`). */
     val gestureCommands: GestureCommands =

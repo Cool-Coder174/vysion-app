@@ -4,12 +4,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -23,20 +26,29 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.xr.compose.platform.LocalSession
 import androidx.xr.compose.platform.LocalSpatialCapabilities
+import androidx.xr.compose.spatial.ExperimentalFollowingSubspaceApi
+import androidx.xr.compose.spatial.FollowingSubspace
 import androidx.xr.compose.spatial.Orbiter
 import androidx.xr.compose.spatial.OrbiterPosition
 import androidx.xr.compose.spatial.Subspace
-import androidx.xr.compose.subspace.SpatialPanel
+import androidx.xr.compose.subspace.FollowBehavior
+import androidx.xr.compose.subspace.FollowTarget
 import androidx.xr.compose.subspace.SpatialBox
+import androidx.xr.compose.subspace.SpatialBoxScope
+import androidx.xr.compose.subspace.SpatialPanel
+import androidx.xr.compose.subspace.SubspaceComposable
+import androidx.xr.compose.subspace.TrackedDimensions
 import androidx.xr.compose.subspace.layout.SpatialRoundedCornerShape
 import androidx.xr.compose.subspace.layout.SubspaceModifier
 import androidx.xr.compose.subspace.layout.height
@@ -44,6 +56,7 @@ import androidx.xr.compose.subspace.layout.movable
 import androidx.xr.compose.subspace.layout.offset
 import androidx.xr.compose.subspace.layout.width
 import androidx.xr.compose.unit.DpVolumeOffset
+import androidx.xr.runtime.DeviceTrackingMode
 import androidx.xr.runtime.Session
 import androidx.xr.scenecore.SpatialCapability
 import androidx.xr.scenecore.scene
@@ -52,18 +65,21 @@ import com.vysion.xr.BuildConfig
 import com.vysion.xr.R
 import com.vysion.xr.core.Command
 import com.vysion.xr.core.CommandSource
+import com.vysion.xr.platform.WorldLabel
 import com.vysion.xr.platform.ui.components.PillButton
 import com.vysion.xr.platform.ui.components.PillStyle
 import com.vysion.xr.platform.ui.components.glass
+import com.vysion.xr.platform.ui.theme.Accent
 import com.vysion.xr.platform.ui.theme.Ink
 import com.vysion.xr.platform.ui.theme.LocalReduceMotion
 import com.vysion.xr.platform.ui.theme.Radius
 import com.vysion.xr.platform.ui.theme.Space
 import com.vysion.xr.platform.ui.theme.SpatialType
 import com.vysion.xr.platform.ui.theme.Target
+import com.vysion.xr.platform.ui.theme.VysionIcons
 import com.vysion.xr.platform.ui.theme.rememberReduceMotion
-import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlinx.coroutines.launch
 
 /**
  * The Galaxy XR layout (Michelle Bui's designs, Headset 1-13): passthrough Full Space with one glass status
@@ -129,7 +145,8 @@ private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composa
 
     val doorWord = stringResource(R.string.overlay_door)
     val lastSeenWord = stringResource(R.string.overlay_last_seen)
-    Subspace {
+    WorldLabelLayer(graph)
+    FollowingWearer(session) {
         // The status window stays centered in front of the wearer; the diagnostics window and the outline layer open
         // beside it without moving it (a SpatialRow centered the whole row, so opening diagnostics pushed the window
         // left). The rail and toolbar float just outside its edges, never over its text.
@@ -210,6 +227,90 @@ private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composa
     }
 }
 
+
+/**
+ * Augmented: the main window travels with the wearer (soft follow, position and turning only, never tilt or roll)
+ * and sits below eye level, so it stays in reach while walking without covering the sign being read. Head-locked
+ * following needs `DeviceTrackingMode.SPATIAL` (configured by the perception session); without it the window stays
+ * where it opened, as before, instead of not appearing at all.
+ */
+@OptIn(ExperimentalFollowingSubspaceApi::class)
+@Composable
+private fun FollowingWearer(session: Session?, content: @Composable @SubspaceComposable SpatialBoxScope.() -> Unit) {
+    val tracked = session != null && session.config.deviceTracking != DeviceTrackingMode.DISABLED
+    if (tracked) {
+        FollowingSubspace(
+            target = FollowTarget.ArDevice(session!!),
+            behavior = FollowBehavior.Soft(FOLLOW_DURATION_MS),
+            modifier = SubspaceModifier.offset(y = -BELOW_EYE_LINE),
+            dimensions = TrackedDimensions(
+                isTranslationXTracked = true,
+                isTranslationYTracked = true,
+                isTranslationZTracked = true,
+                isRotationXTracked = false,
+                isRotationYTracked = true,
+                isRotationZTracked = false,
+            ),
+            content = content,
+        )
+    } else {
+        Subspace(content = content)
+    }
+}
+
+/**
+ * Augmented: what the controller pinned in the room (`ModeController.worldLabel`), drawn AT its anchor: a large door
+ * marker where the door is, or the text just read beside the sign. Linked to the anchor in the scene graph
+ * (`FollowTarget.Anchor` + `FollowBehavior.Tight`), so it stays put as the wearer moves.
+ */
+@OptIn(ExperimentalFollowingSubspaceApi::class)
+@Composable
+private fun WorldLabelLayer(graph: AppGraph) {
+    val label by graph.modeController.worldLabel.collectAsStateWithLifecycle()
+    val current = label ?: return
+    val space = remember(current.anchor) { graph.anchorSpace(current.anchor) } ?: return
+    FollowingSubspace(target = FollowTarget.Anchor(space), behavior = FollowBehavior.Tight) {
+        when (current.kind) {
+            WorldLabel.Kind.DOOR -> SpatialPanel(
+                SubspaceModifier.width(DOOR_LABEL_WIDTH).height(DOOR_LABEL_HEIGHT),
+                shape = SpatialRoundedCornerShape(CornerSize(Radius.window)),
+            ) { DoorMarker() }
+            WorldLabel.Kind.TEXT -> AutoHeightPanel(width = READ_CARD_WIDTH, min = 160.dp, max = 560.dp) {
+                ReadCard(current.text)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DoorMarker() {
+    val label = stringResource(R.string.world_door)
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(Space.l, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxSize()
+            .glass(RoundedCornerShape(Radius.window), edge = Accent.cyan)
+            .semantics { contentDescription = label },
+    ) {
+        Icon(VysionIcons.Door, contentDescription = null, tint = Accent.cyan, modifier = Modifier.size(72.dp))
+        Text(label, color = Ink.primary, style = SpatialType.display)
+    }
+}
+
+@Composable
+private fun ReadCard(text: String) {
+    Text(
+        text,
+        color = Accent.yellow,
+        style = SpatialType.answer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .glass(RoundedCornerShape(Radius.window), edge = Accent.yellow)
+            .padding(horizontal = Space.xl, vertical = Space.l),
+    )
+}
+
 /**
  * A spatial panel whose height follows its content (the designs' window grows with the answer and shrinks
  * back for Ready). The content is measured unbounded and the panel resized within [min]..[max].
@@ -287,6 +388,16 @@ private val ORBITER_GAP = 20.dp
 
 /** Space between side-by-side windows. */
 private val SIDE_GAP = 48.dp
+
+/** Soft follow: the window catches up with the wearer's head in about half a second, not instantly. */
+private const val FOLLOW_DURATION_MS = 600
+
+/** The following window sits this far below the line of sight, leaving the view of signs and doors clear. */
+private val BELOW_EYE_LINE = 220.dp
+
+private val DOOR_LABEL_WIDTH = 520.dp
+private val DOOR_LABEL_HEIGHT = 180.dp
+private val READ_CARD_WIDTH = 760.dp
 private val DIAGNOSTICS_WIDTH = 720.dp
 private val OVERLAY_WIDTH = 1100.dp
 private val OVERLAY_HEIGHT = 824.dp
