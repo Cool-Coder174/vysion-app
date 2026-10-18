@@ -140,10 +140,10 @@ object Cues {
             "It is not validated for unassisted travel by blind users.",
         Key.MODE_TEXT_READER to "Reading",
         Key.MODE_AUDIO_DESCRIPTION to "Describing",
-        Key.MODE_NAVIGATION to "Finding the door",
+        Key.MODE_NAVIGATION to "Navigating",
         Key.PAGE_TEXT_READER to "Read. Tap your thumb to your middle finger to read.",
         Key.PAGE_AUDIO_DESCRIPTION to "Describe. Tap your thumb to your middle finger to describe.",
-        Key.PAGE_NAVIGATION to "Find the door. Tap your thumb to your middle finger to find the door.",
+        Key.PAGE_NAVIGATION to "Navigation. Tap your thumb to your middle finger to find the door.",
         Key.LISTENING to "Listening",
         Key.DONE to "Done",
         Key.BUSY to "One moment, still working",
@@ -189,10 +189,10 @@ object Cues {
             "No está validado para que personas ciegas viajen sin asistencia.",
         Key.MODE_TEXT_READER to "Leyendo",
         Key.MODE_AUDIO_DESCRIPTION to "Describiendo",
-        Key.MODE_NAVIGATION to "Buscando la puerta",
+        Key.MODE_NAVIGATION to "Navegando",
         Key.PAGE_TEXT_READER to "Leer. Toca el pulgar con el dedo medio para leer.",
         Key.PAGE_AUDIO_DESCRIPTION to "Describir. Toca el pulgar con el dedo medio para describir.",
-        Key.PAGE_NAVIGATION to "Buscar la puerta. Toca el pulgar con el dedo medio para buscarla.",
+        Key.PAGE_NAVIGATION to "Navegación. Toca el pulgar con el dedo medio para buscar la puerta.",
         Key.LISTENING to "Escuchando",
         Key.DONE to "Listo",
         Key.BUSY to "Un momento, sigo trabajando",
@@ -595,7 +595,7 @@ private class OnboardingCopy(
             modeRows = listOf(
                 OnboardingItem("Read", "“Read this”"),
                 OnboardingItem("Describe", "“What’s here?”"),
-                OnboardingItem("Navigate", "“Find the door”"),
+                OnboardingItem("Navigation", "“Find the door”"),
             ),
             allSetSpokenTail = "Say read this, what’s here, or find the door.",
             stopPractice = "This is a long sentence so you can practice stopping me. Make the hang loose sign, " +
@@ -636,7 +636,7 @@ private class OnboardingCopy(
             modeRows = listOf(
                 OnboardingItem("Leer", "“Lee esto”"),
                 OnboardingItem("Describir", "“¿Qué hay aquí?”"),
-                OnboardingItem("Navegar", "“Busca la puerta”"),
+                OnboardingItem("Navegación", "“Busca la puerta”"),
             ),
             allSetSpokenTail = "Di lee esto, qué hay aquí, o busca la puerta.",
             stopPractice = "Esta es una frase larga para que practiques detenerme. Extiende el pulgar y el meñique, " +

@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Eyes-free control for blind users: hand gestures ([HandGestureSource]) become the same commands the voice and the
- * panels send, so nothing needs gaze. Pages are Read → Describe → Find door; [page] is the current one (the rail
+ * panels send, so nothing needs gaze. Pages are Read → Describe → Navigation; [page] is the current one (the rail
  * shows it) and follows the mode last used by any input.
  *
  * - TALK_START / TALK_END: open and close the microphone (a push-to-talk the system cannot steal).

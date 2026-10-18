@@ -25,8 +25,8 @@ So the app's gestures never use the index finger and are ignored while the palm 
 | Gesture | Does | Spoken / shown |
 |---|---|---|
 | Thumb to middle finger, hold | Talk (mic open while held, sends on release) | Listening earcon, Listening window |
-| Thumb to middle finger, quick tap | Run the current page (Read, Describe or Find door) | The page's answer |
-| Thumb to ring finger, tap | Next page (Read → Describe → Find door) | Ping + "Describe. Tap your thumb to your middle finger to describe." |
+| Thumb to middle finger, quick tap | Run the current page (Read, Describe or Navigation, which finds the door) | The page's answer |
+| Thumb to ring finger, tap | Next page (Read → Describe → Navigation) | Ping + "Describe. Tap your thumb to your middle finger to describe." |
 | Hang loose (thumb and little finger out, other three folded), hold ½ s, palm either way | Stop | Silence |
 
 Thresholds: pinch on < 2.2 cm, off > 3.5 cm; tap < 400 ms, and a second tap within 400 ms is dropped (one tap fired twice

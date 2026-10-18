@@ -55,6 +55,12 @@ object VysionIcons {
         )
     }
 
+    /**
+     * Navigation on the rail: the GPS heading arrow, outlined with the rail's one stroke (Isaac, 2026-10-18: an arrow,
+     * not a door, for Navigation mode). [Navigate] is the same arrow filled.
+     */
+    val NavigationArrow: ImageVector by lazy { stroked("NavigationArrow", "M12 3.5l6.25 16.75L12 16.6l-6.25 3.65z") }
+
     /** Navigation: a heading needle pointing the way. */
     val Navigate: ImageVector by lazy { filled("Navigate", "M12 2.75l6.25 17.5L12 16.6l-6.25 3.65z") }
 

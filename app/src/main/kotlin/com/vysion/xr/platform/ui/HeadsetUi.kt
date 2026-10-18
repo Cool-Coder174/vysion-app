@@ -385,7 +385,7 @@ data class RailMore(val selected: Boolean, val onToggle: () -> Unit)
  * The mode rail: an orbiter that floats off the window's left edge. Every item shows its icon AND its label at all
  * times (a gaze-only label was clipped by the rail's glass and made the rail change width while you looked at it),
  * one outlined icon family, a white pill behind the selected mode, and a whole-item hit area of at least
- * [Target.spatial]. Read, Describe and Find door send the same command the voice would. Three items only: an
+ * [Target.spatial]. Read, Describe and Navigation send the same command the voice would (Navigation: find the door). Three items only: an
  * orbiter is clipped to its window's height, and the shortest window (Listening) is ~300 dp tall, so the rail must
  * fit in that (headset captures 2026-10-17 showed a 4-item rail cut off). Diagnostics is [DiagnosticsToggle].
  */
@@ -406,7 +406,7 @@ fun ModeRail(mode: Mode?, page: Mode?, commands: CommandBus, itemSize: Dp, label
         RailItem(stringResource(R.string.mode_describe), VysionIcons.Eye, mode == Mode.AUDIO_DESCRIPTION, page == Mode.AUDIO_DESCRIPTION, itemSize, labelStyle) {
             commands.inject(Command.Describe, CommandSource.PANEL)
         }
-        RailItem(stringResource(R.string.mode_find_door), VysionIcons.Door, mode == Mode.NAVIGATION, page == Mode.NAVIGATION, itemSize, labelStyle) {
+        RailItem(stringResource(R.string.mode_navigation), VysionIcons.NavigationArrow, mode == Mode.NAVIGATION, page == Mode.NAVIGATION, itemSize, labelStyle) {
             commands.inject(Command.FindDoor, CommandSource.PANEL)
         }
     }

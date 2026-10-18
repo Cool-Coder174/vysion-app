@@ -136,8 +136,8 @@ class CuesTest {
         // held the first word back 0.8 s on the worn headset.
         assertEquals("Reading", Cues.modeAnnouncement(Mode.TEXT_READER, en))
         assertEquals("Describing", Cues.modeAnnouncement(Mode.AUDIO_DESCRIPTION, en))
-        assertEquals("Finding the door", Cues.modeAnnouncement(Mode.NAVIGATION, en))
-        assertEquals("Buscando la puerta", Cues.modeAnnouncement(Mode.NAVIGATION, es))
+        assertEquals("Navigating", Cues.modeAnnouncement(Mode.NAVIGATION, en))
+        assertEquals("Navegando", Cues.modeAnnouncement(Mode.NAVIGATION, es))
     }
 
     @Test
@@ -152,7 +152,7 @@ class CuesTest {
             assertEquals(Cues.holdStill(es), CuesPhrasebook.holdStill)
             assertEquals(Cues.permissionExplanation(es), CuesPhrasebook.permissionExplanation)
             assertEquals(Cues.permissionDenied(es), CuesPhrasebook.permissionDenied)
-            assertEquals("Buscando la puerta", CuesPhrasebook.modeAnnounced(Mode.NAVIGATION))
+            assertEquals("Navegando", CuesPhrasebook.modeAnnounced(Mode.NAVIGATION))
             assertEquals("obstáculo adelante", CuesPhrasebook.navigationCue(NavigationCue.Proximity(0.7f)))
             assertEquals(null, CuesPhrasebook.navigationCue(NavigationCue.Arrived))
         } finally {

@@ -28,7 +28,7 @@
     <string name="mode_read">Read</string>
     <string name="mode_describe">Describe</string>
     <string name="mode_navigate">Navigate</string>
-    <string name="mode_find_door">Find door</string>
+    <string name="mode_navigation">Navigation</string>
     <string name="mode_more">Diagnostics</string>
 
     <!-- Toolbar and onboarding buttons. -->

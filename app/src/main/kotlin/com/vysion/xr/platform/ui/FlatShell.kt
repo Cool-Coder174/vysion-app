@@ -224,7 +224,7 @@ private fun Mode.label(): String = stringResource(
     when (this) {
         Mode.TEXT_READER -> R.string.mode_read
         Mode.AUDIO_DESCRIPTION -> R.string.mode_describe
-        Mode.NAVIGATION -> R.string.mode_navigate
+        Mode.NAVIGATION -> R.string.mode_navigation
     },
 )
 
