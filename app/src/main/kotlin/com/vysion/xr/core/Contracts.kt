@@ -265,6 +265,33 @@ interface HeadPoseSource {
 }
 
 /**
+ * Eyes-free hand gestures (blind users cannot aim gaze at a button). Chosen so none collides with a Galaxy XR system
+ * gesture: the system owns the index-finger pinch (select), the 2 s index pinch (options) and any pinch with the palm
+ * facing the user (Home), so every gesture here is ignored while the palm faces the user and none uses the index.
+ */
+enum class HandGesture {
+    /** Thumb to middle finger, held past the tap window: start listening. */
+    TALK_START,
+
+    /** The held middle-finger pinch released: send what was heard. */
+    TALK_END,
+
+    /** A quick thumb-to-middle tap: run the current page (Read, Describe or Find door). */
+    ACTIVATE,
+
+    /** A thumb-to-ring-finger tap: move to the next page and say its name. */
+    NEXT_PAGE,
+
+    /** Open hand, palm facing away, held still for half a second: stop. */
+    STOP,
+}
+
+/** Provided by R3 from hand tracking; a no-op off the headset. */
+interface HandGestureSource {
+    val gestures: Flow<HandGesture>
+}
+
+/**
  * Holds the door target (SRS §8 R3 "AnchorStore: given a bearing (left/center/right from the VLM)
  * and a depth sample along it, create an anchor; expose bearing and distance from the current head
  * pose"). Anchors are native XR anchors so they persist out of view (FR-N4).

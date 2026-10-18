@@ -21,6 +21,7 @@ Rules (ADR-0005):
 | `NavigationEngine` | R3 `perception.XrNavigationEngine` | R1 `ModeController`, R4 (cues → words), R1 overlay | 5 (Sat 19:00) | "NavigationCues flow (proximity, bearing, distance)" |
 | `AnchorStore` | R3 `perception.XrAnchorStore` | R1 `ModeController`, R3 `NavigationEngine` | 5 | "AnchorStore" |
 | `HeadPoseSource` | R3 | R1 (FR-T5), R3 | 5 | implied by "head pose" |
+| `HandGestureSource` | R3 `perception.XrHandGestures` | R1 `GestureCommands` | added 2026-10-17 | eyes-free control for blind users (FR-G2) |
 | `CommandBus` | R4 `voice.SpeechCommandBus` | R1 `ModeController`, panels; `AppGraph.release()` (`release()`) | 3 (Sat 15:00) | "CommandBus (parsed commands as a flow)" |
 | `Speaker` | R4 `voice.AndroidSpeaker` | R1 `ModeController`, R3 (through R1), transcript panel; `AppGraph.release()` (`release()`) | 3 | "Speaker (queue, interrupt, rate, locale)" |
 | `ModePhrasebook` (seam in `core`) | R4 `voice.CuesPhrasebook` (object; every sentence comes from `voice.Cues`, follows `Speaker.locale` after `bind(speaker)`) | R1 `ModeController(phrasebook = …)`; R3 never builds strings, R1 turns each `NavigationCue` into words through `navigationCue(cue)`. Wired by `AppGraph`: `phrasebook = CuesPhrasebook.also { it.bind(speaker) }` | 3 | "every cue string in Cues.kt, nothing hardcoded elsewhere" |
@@ -73,6 +74,8 @@ sealed interface NavigationCue {
 data class RelativeTarget(val bearingDeg: Float, val clock: Int, val distanceM: Float, val inView: Boolean)
 data class HeadPose(val yawDeg: Float, val pitchDeg: Float, val rollDeg: Float, val angularSpeedDegPerS: Float, val timestampNanos: Long)
 interface HeadPoseSource { val pose: StateFlow<HeadPose?> }
+enum class HandGesture { TALK_START, TALK_END, ACTIVATE, NEXT_PAGE, STOP }   // middle pinch hold/tap, ring tap, palm out; never index, never palm-toward-user
+interface HandGestureSource { val gestures: Flow<HandGesture> }
 interface AnchorStore {
     suspend fun placeFromBearing(bearing: HorizontalBearing): AnchorId?; fun track(id: AnchorId): Flow<RelativeTarget>
     suspend fun remove(id: AnchorId); suspend fun clear()
