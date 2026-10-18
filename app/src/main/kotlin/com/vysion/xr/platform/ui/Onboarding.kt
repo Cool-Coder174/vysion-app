@@ -164,7 +164,7 @@ fun OnboardingFlow(graph: AppGraph, host: OnboardingHost, type: VysionType, metr
     }
 }
 
-private fun pageTransition(forward: Boolean, reduceMotion: Boolean): ContentTransform =
+internal fun pageTransition(forward: Boolean, reduceMotion: Boolean): ContentTransform =
     if (reduceMotion) {
         fadeIn(vysionSpring(response = 0.25f)) togetherWith fadeOut(vysionSpring(response = 0.2f))
     } else {

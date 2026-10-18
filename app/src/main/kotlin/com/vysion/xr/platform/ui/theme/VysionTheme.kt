@@ -95,6 +95,27 @@ object Glass {
 
     /** Behind every orbiter and toolbar: the darker glass under the pills. */
     val tray = Color(0xF21C1C20)
+
+    // Phone v6 (designs "Phone v6 · End-to-end"): iOS-style glass floating over the live camera.
+
+    /** A floating control over the camera (settings, mode, stop, hint, the sheet's pills): white at 16 %. */
+    val control = Color(0x29FFFFFF)
+
+    /** The hairline around a floating control: white at 28 %. */
+    val controlEdge = Color(0x47FFFFFF)
+
+    /** The answer sheet: near-black at 74 %, so the camera shows through without costing the text its contrast. */
+    val sheet = Color(0xBD1C1C1E)
+
+    /** The hairline around the sheet: white at 16 %. */
+    val sheetEdge = Color(0x29FFFFFF)
+
+    /** The sheet's grabber: white at 35 %. */
+    val grabber = Color(0x59FFFFFF)
+
+    /** The scrim over the camera: 55 % black at the top edge, 80 % at the bottom, clear in between. */
+    val scrimTop = Color(0x8C000000)
+    val scrimBottom = Color(0xCC000000)
 }
 
 /** The aurora that sits behind onboarding "before the camera turns on" (designs pages 2-8). */
@@ -107,8 +128,8 @@ object Aurora {
 }
 
 /**
- * Type ramp in sp so it follows the user's font size. Answer text is ≥ 48 sp (SRS §3 rule 4) on both
- * devices; the headset values are sized for a panel at the default 1.75 m.
+ * Type ramp in sp so it follows the user's font size. The headset's answer text is ≥ 48 sp (FR-T2, a panel at the
+ * default 1.75 m); the phone's answer sheet follows the v6 designs at 30 sp bold, held at reading distance ([VysionType.sheet]).
  */
 @Immutable
 data class VysionType(
@@ -124,6 +145,10 @@ data class VysionType(
     val railLabel: TextStyle,
     val chip: TextStyle,
     val distance: TextStyle,
+    /** The answer in the phone's bottom sheet (designs v6: 30 sp bold); the headset keeps its 48 sp+ panel (FR-T2). */
+    val sheet: TextStyle,
+    /** The camera-style mode switcher's labels (READ · DESCRIBE · NAVIGATE). */
+    val switcher: TextStyle,
 )
 
 private fun style(size: TextUnit, line: TextUnit, weight: FontWeight, tracking: TextUnit = 0.em) =
@@ -142,6 +167,8 @@ val SpatialType = VysionType(
     railLabel = style(17.sp, 20.sp, FontWeight.SemiBold),
     chip = style(18.sp, 22.sp, FontWeight.Medium),
     distance = style(104.sp, 108.sp, FontWeight.Bold, (-0.03).em),
+    sheet = style(52.sp, 62.sp, FontWeight.SemiBold, (-0.015).em),
+    switcher = style(17.sp, 20.sp, FontWeight.SemiBold, 0.08.em),
 )
 
 /** The S25 Ultra held at reading distance. */
@@ -157,6 +184,8 @@ val PhoneType = VysionType(
     railLabel = style(13.sp, 16.sp, FontWeight.SemiBold),
     chip = style(12.sp, 16.sp, FontWeight.SemiBold, 0.06.em),
     distance = style(72.sp, 76.sp, FontWeight.Bold, (-0.03).em),
+    sheet = style(30.sp, 35.sp, FontWeight.Bold, (-0.01).em),
+    switcher = style(14.sp, 18.sp, FontWeight.SemiBold, 0.08.em),
 )
 
 /** 8-dp spacing scale and the shapes' radii. */
@@ -173,6 +202,12 @@ object Radius {
     /** The status window and onboarding card: a soft, large corner like the designs' glass. */
     val window: Dp = 44.dp
     val tile: Dp = 20.dp
+
+    /** The phone's answer sheet (designs v6). */
+    val sheet: Dp = 34.dp
+
+    /** The reading frame drawn over the camera. */
+    val frame: Dp = 18.dp
 }
 
 /** Touch targets: Android XR visual design asks ≥ 56 dp; phones ≥ 48 dp. */

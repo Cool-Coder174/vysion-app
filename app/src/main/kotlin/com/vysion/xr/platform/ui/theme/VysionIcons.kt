@@ -94,6 +94,9 @@ object VysionIcons {
 
     val Plus: ImageVector by lazy { stroked("Plus", "M12 5v14", "M5 12h14") }
 
+    /** Settings (phone v6): two sliders. */
+    val Sliders: ImageVector by lazy { stroked("Sliders", "M4 7.5h16", "M14.5 4.5v6", "M4 16.5h16", "M9.5 13.5v6") }
+
     val Check: ImageVector by lazy { stroked("Check", "M5.5 12.5l4.25 4.25L18.5 8") }
 
     val Alert: ImageVector by lazy { stroked("Alert", "M12 6.5v7", "M12 17.5v0.01") }

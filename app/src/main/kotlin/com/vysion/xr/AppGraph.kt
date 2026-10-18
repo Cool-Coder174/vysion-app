@@ -74,7 +74,7 @@ import kotlin.math.roundToInt
  *
  * | Role | Class (package)                                   | Constructor                                   |
  * |------|---------------------------------------------------|-----------------------------------------------|
- * | R1   | platform.CameraFrameSource                        | (Application, CoroutineScope)                 |
+ * | R1   | platform.CameraFrameSource                        | (Application, CoroutineScope, withPreview)    |
  * | R1   | platform.FakeFrameSource                          | (Application)                                 |
  * | R1   | platform.PassthroughOverlayRenderer               | ()                                            |
  * | R1   | platform.ModeController                           | (frames, engine, commands, speaker, navigation, anchors, headPose, overlay, scope, phrasebook, prompts, places) |
@@ -147,8 +147,9 @@ class AppGraph(private val app: Application) {
     )
 
     // R1 — camera and overlay
+    // FR-N2: the phone shows the live camera behind its controls (designs "Phone v6"); the headset has passthrough.
     val frameSource: FrameSource =
-        if (useFakes) FakeFrameSource(app) else CameraFrameSource(app, scope)
+        if (useFakes) FakeFrameSource(app) else CameraFrameSource(app, scope, withPreview = !deviceProfile.isXr)
     val overlay: OverlayRenderer = PassthroughOverlayRenderer()
 
     // R4 — voice in / out (real on both devices; fakes inject via CommandBus.inject)

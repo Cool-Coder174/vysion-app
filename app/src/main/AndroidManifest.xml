@@ -18,6 +18,8 @@
          requested with a spoken explanation (FR-G1, platform/Permissions.kt). -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Phone v6: every state has a haptic twin of its sound (platform/Haptics.kt). Normal permission, no prompt. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Android XR permissions. All "dangerous": declared here AND requested at runtime.
          https://developer.android.com/develop/xr/permissions
