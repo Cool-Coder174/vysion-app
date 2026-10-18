@@ -25,6 +25,10 @@ android {
         // Shipping default: the int8 export (Isaac, 2026-10-18; docs/benchmarks.md). -Pdetector=detector tries FP32 first.
         buildConfigField("String", "DETECTOR", "\"${project.findProperty("detector")?.toString() ?: "detector-int8"}\"")
 
+        // Which OCR lockfile row the engine tries first; "ocr" (PP-OCRv6 int8, XNNPACK) is always the fallback.
+        // -Pocr=ocr-vulkan (with -Pexecutorch=vulkan) tries the fp16 Vulkan export on the Adreno GPU (docs/benchmarks.md).
+        buildConfigField("String", "OCR", "\"${project.findProperty("ocr")?.toString() ?: "ocr"}\"")
+
         // ADR-0010 cloud Describe: GEMINI_API_KEY from the gitignored local.properties (or the environment); never
         // committed. Blank = cloud Describe "not set up" and Describe stays on the headset. The key ends up inside the
         // APK, so restrict it to the Generative Language API in Cloud Console.
@@ -95,7 +99,9 @@ dependencies {
     implementation(libs.androidx.xr.arcore)
 
     // R2: ExecuTorch runtime, XNNPACK flavor, includes LlmModule. No network permission in its manifest (ADR-0003).
-    implementation(libs.executorch.android)
+    // -Pexecutorch=vulkan: the same runtime with the Vulkan (Adreno GPU) delegate added, for the GPU-vs-CPU measurement
+    // in docs/benchmarks.md; XNNPACK models load on it unchanged. The shipping build stays on the XNNPACK AAR (ADR-0002).
+    implementation(if (project.findProperty("executorch") == "vulkan") libs.executorch.android.vulkan else libs.executorch.android)
 
     testImplementation(libs.junit4)
     testImplementation(libs.kotlinx.coroutines.test)

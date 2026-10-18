@@ -44,6 +44,7 @@ androidx-xr-scenecore = { group = "androidx.xr.scenecore", name = "scenecore", v
 androidx-xr-arcore = { group = "androidx.xr.arcore", name = "arcore", version.ref = "xrArcore" }
 androidx-xr-runtime = { group = "androidx.xr.runtime", name = "runtime", version.ref = "xrRuntime" }
 executorch-android = { group = "org.pytorch", name = "executorch-android", version.ref = "executorch" }
+executorch-android-vulkan = { group = "org.pytorch", name = "executorch-android-vulkan", version.ref = "executorch" }   # -Pexecutorch=vulkan only (docs/benchmarks.md "Adreno GPU")
 junit4 = { group = "junit", name = "junit", version.ref = "junit4" }
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestJunit" }
 androidx-test-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }

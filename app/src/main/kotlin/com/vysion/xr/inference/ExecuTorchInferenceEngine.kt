@@ -86,9 +86,15 @@ class ExecuTorchInferenceEngine(
      * `detector.pte` on the headset, or when the int8 file is refused or will not load.
      */
     detectorRows: List<String> = listOf(ModelCatalog.DETECTOR),
+    /**
+     * OCR lockfile rows in preference order (`BuildConfig.OCR` from AppGraph). [ModelCatalog.OCR], the int8 XNNPACK
+     * export, is always appended as the fallback, as for the detector (e.g. `ocr-vulkan` on a runtime without Vulkan).
+     */
+    ocrRows: List<String> = listOf(ModelCatalog.OCR),
 ) : InferenceEngine {
 
     private val detectorRows: List<String> = (detectorRows + ModelCatalog.DETECTOR).distinct()
+    private val ocrRows: List<String> = (ocrRows + ModelCatalog.OCR).distinct()
 
     // ADR-0004: ONE mutex around all inference; INV-1/INV-2/INV-8.
     private val mutex = Mutex()
@@ -111,6 +117,7 @@ class ExecuTorchInferenceEngine(
     private var detectorEntry: ModelCatalog.Entry? = null
     private var vlmEntry: ModelCatalog.Entry? = null
     private var ocr: Module? = null
+    private var ocrRow: String? = null
     private var ocrFile: File? = null
     private var ocrCharsetFile: File? = null
 
@@ -464,7 +471,7 @@ class ExecuTorchInferenceEngine(
         tokenizerFile = resolveOrNull(ModelCatalog.VLM_TOKENIZER)
         resolveDetectorLocked(detectorRows)
         vlmEntry = catalog.entry(ModelCatalog.VLM)
-        ocrFile = resolveOrNull(ModelCatalog.OCR)
+        resolveOcrLocked(ocrRows)
         ocrCharsetFile = resolveOrNull(ModelCatalog.OCR_CHARSET)
         // FR-G5: quantization/name from the lockfile (export metadata, ADR-0002), size from the file. LlmModule
         // exposes no metadata API; for the detector the real load replaces `backend` with
@@ -479,6 +486,13 @@ class ExecuTorchInferenceEngine(
         detectorFile = found?.second
         detectorEntry = catalog.entry(found?.first ?: ModelCatalog.DETECTOR)
         detectorInfoPending = found?.let { (row, file) -> infoOrNull(row, file) }
+    }
+
+    /** The first of [rows] whose file resolves becomes the OCR program. */
+    private fun resolveOcrLocked(rows: List<String>) {
+        val found = rows.firstNotNullOfOrNull { row -> resolveOrNull(row)?.let { row to it } }
+        ocrRow = found?.first
+        ocrFile = found?.second
     }
 
     private fun infoOrNull(name: String, file: File): ModelInfo? =
@@ -535,8 +549,8 @@ class ExecuTorchInferenceEngine(
     }
 
     /**
-     * Load the OCR program (one `.pte`, methods `detect` and `recognize`) and its charset. Idempotent. A missing or
-     * broken file is logged and Read falls back to the VLM.
+     * Load the OCR program (one `.pte`, methods `detect` and `recognize`) and its charset. Idempotent. A file that
+     * will not load falls back to the next of [ocrRows]; with none left, Read falls back to the VLM.
      */
     private fun loadOcrLocked() {
         if (ocr != null) return
@@ -553,20 +567,40 @@ class ExecuTorchInferenceEngine(
             return
         }
         val module = try {
-            Module.load(file.absolutePath, Module.LOAD_MODE_MMAP, DETECTOR_THREADS)
+            Module.load(file.absolutePath, Module.LOAD_MODE_MMAP, DETECTOR_THREADS).also { module ->
+                val methods = module.getMethods().toList()
+                if (!methods.containsAll(listOf("detect", "recognize"))) {
+                    runCatching { module.close() }
+                    throw InferenceException("${file.name} has methods $methods, need detect + recognize")
+                }
+                // As for the detector: the delegate (XNNPACK or Vulkan) initializes here, so a file this runtime
+                // cannot run fails at load and falls back below instead of failing every Read.
+                try {
+                    module.loadMethod("detect")
+                    module.loadMethod("recognize")
+                } catch (t: Throwable) {
+                    runCatching { module.close() }
+                    throw t
+                }
+            }
         } catch (t: Throwable) {
-            Log.w(TAG, "ocr load failed: ${t.message}")
-            return
-        }
-        val methods = runCatching { module.getMethods().toList() }.getOrDefault(emptyList())
-        if (!methods.containsAll(listOf("detect", "recognize"))) {
-            Log.w(TAG, "ocr not loaded: ${file.name} has methods $methods, need detect + recognize")
-            runCatching { module.close() }
+            Log.w(TAG, "ocr load failed: ${ocrRow ?: file.name}: ${t.message}")
+            val rest = ocrRows.dropWhile { it != ocrRow }.drop(1)
+            if (rest.isNotEmpty()) {
+                resolveOcrLocked(rest) // the int8 XNNPACK fallback
+                loadOcrLocked()
+            }
             return
         }
         ocr = module
         ocrCharset = charset
-        Log.i(TAG_LATENCY, "ocr load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} charset=${charset.size}")
+        val backends = runCatching {
+            listOf("detect", "recognize").flatMap { module.getMethodMetadata(it).backends.toList() }.distinct().joinToString()
+        }.getOrDefault("")
+        Log.i(
+            TAG_LATENCY,
+            "ocr load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} row=$ocrRow backends=$backends charset=${charset.size}",
+        )
     }
 
     /**

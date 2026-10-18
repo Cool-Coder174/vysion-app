@@ -140,7 +140,11 @@ class AppGraph(private val app: Application) {
         headset = if (useFakes) {
             FakeInferenceEngine()
         } else {
-            ExecuTorchInferenceEngine(app, modelCatalog, scope, detectorRows = listOf(BuildConfig.DETECTOR))
+            ExecuTorchInferenceEngine(
+                app, modelCatalog, scope,
+                detectorRows = listOf(BuildConfig.DETECTOR),
+                ocrRows = listOf(BuildConfig.OCR),
+            )
         },
         cloud = cloudDescriber(app),
         isOnline = NetworkStatus(app)::isOnline,

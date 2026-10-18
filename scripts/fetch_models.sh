@@ -6,7 +6,7 @@
 # Usage:
 #   scripts/fetch_models.sh                 # download every row whose url is not TBD
 #   scripts/fetch_models.sh --from ~/exports  # copy <dest> files from a local directory (after ml/export/*.sh)
-#   scripts/fetch_models.sh --only detector   # one artifact
+#   scripts/fetch_models.sh --only detector   # one artifact (also the only way to fetch an "optional": true row)
 #   scripts/fetch_models.sh --force           # re-fetch even if the file exists and verifies
 #
 # Exit codes: 0 all artifacts present and verified · 2 some artifacts missing (url TBD and no --from) · 1 error.
@@ -40,13 +40,14 @@ fi
 
 mkdir -p "$DEST_DIR"
 
-# name|dest|url|sha256|bytes|export  (pipe-separated; none of the fields may contain '|')
+# name|dest|url|sha256|bytes|export|optional  (pipe-separated; none of the fields may contain '|')
 ROWS="$(python3 - "$LOCK" <<'PY'
 import json, sys
 with open(sys.argv[1]) as f:
     lock = json.load(f)
 for m in lock["models"]:
-    print("|".join(str(m.get(k, "")) for k in ("name", "dest", "url", "sha256", "bytes", "export")))
+    print("|".join([str(m.get(k, "")) for k in ("name", "dest", "url", "sha256", "bytes", "export")]
+                   + ["1" if m.get("optional") is True else "0"]))
 PY
 )"
 
@@ -54,9 +55,11 @@ missing=0
 fetched=0
 verified=0
 
-while IFS='|' read -r name dest url sha256 bytes export; do
+while IFS='|' read -r name dest url sha256 bytes export optional; do
   [ -n "$name" ] || continue
   if [ -n "$ONLY" ] && [ "$ONLY" != "$name" ]; then continue; fi
+  # A measurement artifact the shipping build never loads (e.g. ocr-vulkan): not bundled unless asked for by name.
+  if [ "$optional" = "1" ] && [ "$ONLY" != "$name" ]; then continue; fi
   target="$DEST_DIR/$dest"
 
   if [ -f "$target" ] && [ "$FORCE" -eq 0 ]; then

@@ -1,5 +1,5 @@
 {
-  "_comment": "ml/models.lock: source of truth for model artifacts (ADR-0007). scripts/fetch_models.sh reads this; the app reads the copy placed in assets/models/ to print name, quantization, backend and size on the diagnostics overlay (FR-G5). JSON on purpose: bash parses it with python3, Android with ModelCatalog's LockJson. A url of \"TBD\" means: not published yet; build it with the `export` script and run fetch_models.sh --from <dir>. Replace TBD sha256 with the value the script prints after the first verified copy.",
+  "_comment": "ml/models.lock: source of truth for model artifacts (ADR-0007). scripts/fetch_models.sh reads this; the app reads the copy placed in assets/models/ to print name, quantization, backend and size on the diagnostics overlay (FR-G5). JSON on purpose: bash parses it with python3, Android with ModelCatalog's LockJson. A url of \"TBD\" means: not published yet; build it with the `export` script and run fetch_models.sh --from <dir>. Replace TBD sha256 with the value the script prints after the first verified copy. A row with \"optional\": true (a measurement artifact the shipping build never loads) is fetched only with --only <name>.",
   "schema": 1,
   "executorch_python": "see ml/requirements.txt",
   "executorch_android": "see gradle/libs.versions.toml [executorch]",
@@ -114,6 +114,21 @@
       "input_width": 0,
       "input_height": 0,
       "export": "prebuilt by Software Mansion (Apache-2.0), exported with ExecuTorch 1.4.1: check it loads on the 1.3.1 runtime",
+      "source_model": "PP-OCRv6 small (PaddleOCR; Software Mansion ExecuTorch export)"
+    },
+    {
+      "name": "ocr-vulkan",
+      "role": "the ocr row's PP-OCRv6 small as a Vulkan fp16 export, for the Adreno GPU vs CPU measurement (docs/benchmarks.md \"Adreno GPU\"); loaded only by a -Pexecutorch=vulkan -Pocr=ocr-vulkan build, with ocr as the fallback",
+      "dest": "ocr-vulkan.pte",
+      "optional": true,
+      "url": "https://huggingface.co/software-mansion/react-native-executorch-pp-ocrv6/resolve/91bd390053f7e743af8f5274de20a6bb985346bb/vulkan/pp_ocrv6_vulkan_fp16.pte",
+      "sha256": "71a26547bb71bbc66d829648183ea112d4d5c1ec71295cea847e6c4d6ffad818",
+      "bytes": 26176856,
+      "backend": "Vulkan",
+      "quantization": "fp16",
+      "input_width": 0,
+      "input_height": 0,
+      "export": "prebuilt by Software Mansion (Apache-2.0), exported for ExecuTorch 1.4.1, same methods and shapes as the ocr row (vulkan/config.json)",
       "source_model": "PP-OCRv6 small (PaddleOCR; Software Mansion ExecuTorch export)"
     },
     {
