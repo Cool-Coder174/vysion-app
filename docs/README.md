@@ -16,6 +16,8 @@ Read in this order if you are new: [`../README.md`](../README.md) → [`../AGENT
 | [`risks.md`](risks.md) | SRS risks with decide-by times, plus skeleton-added risks | when a check fails; deciding a fallback |
 | [`assumptions.md`](assumptions.md) | Verify-before-coding checklist with result/evidence columns and the fallback per failure | Saturday morning, before writing module code |
 | [`benchmarks.md`](benchmarks.md) | The measured-numbers tables (models, NFRs, soak, test matrix) | after every benchmark run; before the README numbers |
+| [`roadmap-research.md`](roadmap-research.md) | Ten prioritized next steps from research: offline voice (ExecuTorch ASR), the NPU, free map grounding, localization, accessibility gaps; with sources | when choosing the next feature |
+| [`xr-and-glasses.md`](xr-and-glasses.md) | Galaxy XR design rules, eyes-free gestures, the augmented layer, Geospatial findings, smart-glasses options | before UI or gesture work |
 | [`demo.md`](demo.md) | 90 s script, diagnostics fields, pitch outline, submission checklist | Sunday |
 | [`decisions/`](decisions/README.md) | ADR-0001..0008: the SRS decisions with rationale, plus skeleton decisions | before proposing a structural change |
 | [`modules/r1-xr-platform.md`](modules/r1-xr-platform.md) | R1: app shell, passthrough, camera, panels, overlay, mode state machine | you are R1 |
