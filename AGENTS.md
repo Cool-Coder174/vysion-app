@@ -59,7 +59,7 @@ If you are unsure which role you are: the FR id's **Owner** column in `docs/requ
 │   ├── src/test/        JVM unit tests (pure logic + fakes), one folder per package; no device needed
 │   └── src/testDebug/   JVM tests of src/debug classes (BenchmarkReceiverTest); run by testDebugUnitTest
 ├── ml/                models.lock, README.md (VLM decision, export recipes, sideload), export/export_{vlm,detector}.sh,
-│                      requirements.txt
+│                      requirements.txt, qnn-probe/ (NPU go/no-go probe: no-go for apps, docs/stack.md Corrections)
 ├── scripts/           fetch_models.sh, push_models.sh, install_headset.sh, benchmark.sh,
 │                      check_privacy.sh, check_cues.sh
 └── .github/           workflows/ci.yml (unit tests, assemble, privacy gate, cue gate, lint report),

@@ -19,6 +19,9 @@ Exports run in Docker on any laptop (PyTorch has no Intel-Mac wheels): `docker b
 Check a model on the headset with nobody wearing it (debug builds): push a test image to `files/smoke/` and
 `adb shell am broadcast -a com.vysion.xr.SMOKE -n com.vysion.xr/.diagnostics.ModelSmokeReceiver --es model ocr|vlm|detector --es image sign.png`.
 
+Every model here is XNNPACK (CPU). The NPU is out of reach: an app cannot open the Hexagon cDSP on the Galaxy XR
+(`docs/stack.md` Corrections 2026-10-18), so there is no QNN export. `qnn-probe/probe.sh` re-checks that after an OTA.
+
 ## 0. The VLM decision you must make first (Sat 11:00, plan.md Q6, RK-13)
 
 The SRS says "Gemma 4 edge multimodal … `examples/models/gemma4` … Android multimodal runner". Research on 2026-10-17 (`docs/stack.md` D5) showed the export exists and works, **but the Android `LlmModule(MODEL_TYPE_MULTIMODAL, …)` cannot load it** (the gemma4 `.pte` has no `token_embedding` method and a 3-input `text_decoder`; `MultimodalPrefiller::load()` fails with `Error::InvalidArgument` = 18; no gemma4 code exists in the Android JNI at 1.3.1, 1.5.1 or main). The SRS fallback "SmolVLM-500M via the Qualcomm VLM example" has no runnable example at v1.3.1 either.

@@ -10,7 +10,7 @@ source and Maven, GitHub projects Isaac pointed to), plus probes run with `adb` 
 | # | What | Why it matters | Effort | Evidence |
 |---|---|---|---|---|
 | 1 | **Offline voice commands**: Whisper through the AAR's `AsrModule`, Silero VAD to cut the clip, the system recognizer as fallback | Voice never worked on the worn headset (every on-device bind failed, error 10); commit 84c3e15 only adds a fallback to the system recognizer | M | `AsrModule` ships in our 1.4.0 AAR; whisper-tiny int8 1.17 s p50 on a fast phone (Arm); XR2 not measured |
-| 2 | **NPU spike** (Qualcomm HTP v69): prove a normal app reaches the DSP, then move the detector and the VLM vision encoder | Describe's vision encoder takes 4.5 s on CPU; the detector 95-160 ms | M, risky | The headset ships `libQnnHtp.so` + `libQnnHtpV69Stub.so`; `SXR2230P` is a listed ExecuTorch QNN target; same HTP generation runs YOLOv8 in 1.6 ms (w8a8) and ViT-B in 199 ms (fp16) |
+| 2 | ~~**NPU spike** (Qualcomm HTP v69)~~ **closed 2026-10-18: no-go**. A normal app cannot reach the DSP (§2), so the detector and the VLM vision encoder stay on XNNPACK | Describe's vision encoder takes 4.5 s on CPU; the detector 95-160 ms | done | Probe on the headset: `deviceCreate` fails (14001), FastRPC is denied to `untrusted_app` (`docs/stack.md` Corrections 2026-10-18) |
 | 3 | **Runtime 1.5.1 + `ImageProcessor`** for detector and OCR preprocessing | Our letterbox and normalize loops are Kotlin; `ImageProcessor` is NEON and reads camera NV12 directly | S | AAR source; `.pte` version checks are new in 1.5, so re-check the sideloaded models load |
 | 4 | **"Where am I" on device**: Wi-Fi location + OpenFreeMap tiles decoded on the headset + Overpass entrances/crossings + Wikipedia, worded by Gemini (free tier) or by templates offline | Google's Geospatial API is glasses-only; Maps grounding needs billing | M | One z14 tile = 559 KB, 0.33 s, 3,315 named places, 241 street segments, 165 footpaths, 2,433 house numbers (decoded with a 60-line decoder) |
 | 5 | **Heading and position without a compass**: match the ARCore path to OpenStreetMap footways; read street signs through the crosshair and match them to OSM names; saved anchors for repeat routes | No public compass on the headset; Wi-Fi location is 20-50 m | L | Lost! 3.1 m / 1.3° from path shape alone; HMM map matching survives 50 m noise; SignLoc 10/10 routes; CARA 7/7 blind users on a 36 m route |
@@ -34,17 +34,30 @@ source and Maven, GitHub projects Isaac pointed to), plus probes run with `adb` 
   hold. The command grammar stays as is; Whisper's text goes to `CommandGrammar.parse`.
 - Not measured: Whisper latency on the XR2+ Gen 2 CPU. Measure before switching the default.
 
-## 2. The NPU (Qualcomm QNN / HTP v69)
+## 2. The NPU (Qualcomm QNN / HTP v69): no-go for apps (measured 2026-10-18)
 
-- Maven: `org.pytorch:executorch-android-qnn` (1.4.0, 1.5.1; arm64; keeps XNNPACK; depends on
-  `com.qualcomm.qti:qnn-runtime:2.37.0`). Export needs the QAIRT SDK 2.37 on the host; runtime and export versions must
-  match (error 5000 otherwise).
-- App side: bundle `libQnnHtp.so`, `libQnnSystem.so`, `libQnnHtpV69Stub.so`, `libQnnHtpV69Skel.so`; set
-  `ADSP_LIBRARY_PATH` to the native library dir; `extractNativeLibs="true"`; `<uses-native-library libcdsprpc.so>`.
-- **First step**: run ExecuTorch's `qnn-htp-test` app on the Galaxy XR. Nobody has confirmed a third-party app reaches
-  the DSP on this device.
-- v69 gets 16a4w block quantization, not the v73 LLM features (weight sharing, 16-bit KV cache). Targets in order:
-  YOLOv8n (w8a8), the LFM2.5-VL vision encoder (the 4.5 s step), PP-OCR detect. No published PP-OCR or LFM numbers on HTP.
+- **Result**: a third-party app cannot run anything on the Galaxy XR's NPU (I610UEU2AZF3). `ml/qnn-probe/probe.sh`
+  builds ExecuTorch v1.4.0's `qnn-htp-test` with the QAIRT 2.37 libraries and goes on past `backendCreate` (which opens
+  nothing, so upstream's "SUCCESS" is a false positive here) to `deviceCreate`, which fails with 14001: FastRPC cannot
+  open the cDSP from `untrusted_app` (EACCES on `/dev/adsprpc-smd`, which `adb shell` can open; no DSP-HAL fallback on
+  the device). Even `adb shell` cannot start an unsigned PD (the cDSP shell in `/vendor/dsp/` is unreadable). Exact
+  logcat: `docs/stack.md` Corrections 2026-10-18.
+- No other route: SNPE (`libSNPE.so`) and FastCV (`libfastcvopt.so`) are public vendor libraries but use the same
+  FastRPC; there is no NNAPI HAL; the NPU's client is Google's `com.google.xr.hardware.dnn.IDnnService`, a vendor
+  service with no app API. The only accelerator an app reaches is the Adreno GPU (`libOpenCL.so` is public; QNN GPU or
+  `executorch-android-vulkan`), not measured.
+- So nothing below was built: no `executorch-android-qnn` dependency, no QNN export, ADR-0002 unchanged. The facts
+  stay true and are what a re-run needs if an OTA opens the DSP (re-run `ml/qnn-probe/probe.sh` after each update):
+  - Maven: `org.pytorch:executorch-android-qnn` (1.4.0, 1.5.1; arm64; keeps XNNPACK; depends on
+    `com.qualcomm.qti:qnn-runtime:2.37.0`, which carries `libQnnHtp`, `libQnnSystem`, `libQnnHtpV69Stub` and
+    `libQnnHtpV69Skel`). The `executorch==1.4.0` Linux wheel has the QNN AOT bindings and pins QAIRT `2.37.0.250724`
+    (public zip, 1.35 GB), the same build as that AAR: export and runtime match (error 5000 otherwise).
+  - App side: bundle the four libraries; `ADSP_LIBRARY_PATH` = native library dir; `extractNativeLibs` through
+    `packaging.jniLibs.useLegacyPackaging = true` (AGP 9 refuses the manifest attribute);
+    `<uses-native-library libcdsprpc.so>`.
+  - v69 gets 16a4w block quantization, not the v73 LLM features (weight sharing, 16-bit KV cache). Targets would be
+    YOLOv8n (w8a8; split box and score outputs, an 8-bit tensor cannot hold 0-320 px and 0-1 scores together), the
+    LFM2.5-VL vision encoder, PP-OCR detect.
 - Vulkan (`executorch-android-vulkan`) is not worth it now: fp16 Vulkan was slower than int8 XNNPACK for ViT in the
   ExecuTorch paper.
 
@@ -81,6 +94,7 @@ ADR-0010 row; keep tiles in memory and store only areas the wearer chooses to ke
 
 ## 5. Not possible or not worth it now
 
+- The NPU (Hexagon HTP v69) from an app: FastRPC to the cDSP is denied to `untrusted_app` (§2, measured 2026-10-18).
 - Google Geospatial / VPS on the Galaxy XR: the runtime lacks `ANDROID_geospatial`; the DP4 preview is wired XR glasses only.
 - Maps grounding without billing on `vysion-app` (429).
 - Parakeet ASR: needs a custom AAR with a `ParakeetModule` that no release ships.
