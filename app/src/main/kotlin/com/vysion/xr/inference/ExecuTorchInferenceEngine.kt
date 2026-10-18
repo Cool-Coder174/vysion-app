@@ -80,7 +80,15 @@ class ExecuTorchInferenceEngine(
     // Kept: the constructor is part of R2's contract in AppGraph. Nothing is launched on it any more (the detector
     // reloads lazily inside detect()), so no work can outlive release() or reload the detector after it.
     @Suppress("unused") private val scope: CoroutineScope,
+    /**
+     * Detector lockfile rows in preference order (`BuildConfig.DETECTOR` from AppGraph). [ModelCatalog.DETECTOR],
+     * the FP32 export, is always appended as the fallback: a build that asks for `detector-int8` still runs with only
+     * `detector.pte` on the headset, or when the int8 file is refused or will not load.
+     */
+    detectorRows: List<String> = listOf(ModelCatalog.DETECTOR),
 ) : InferenceEngine {
+
+    private val detectorRows: List<String> = (detectorRows + ModelCatalog.DETECTOR).distinct()
 
     // ADR-0004: ONE mutex around all inference; INV-1/INV-2/INV-8.
     private val mutex = Mutex()
@@ -98,6 +106,7 @@ class ExecuTorchInferenceEngine(
     private var detector: Module? = null
     private var vlmFile: File? = null
     private var tokenizerFile: File? = null
+    private var detectorRow: String? = null
     private var detectorFile: File? = null
     private var detectorEntry: ModelCatalog.Entry? = null
     private var vlmEntry: ModelCatalog.Entry? = null
@@ -453,8 +462,7 @@ class ExecuTorchInferenceEngine(
     private fun resolveLocked() {
         vlmFile = resolveOrNull(ModelCatalog.VLM)
         tokenizerFile = resolveOrNull(ModelCatalog.VLM_TOKENIZER)
-        detectorFile = resolveOrNull(ModelCatalog.DETECTOR)
-        detectorEntry = catalog.entry(ModelCatalog.DETECTOR)
+        resolveDetectorLocked(detectorRows)
         vlmEntry = catalog.entry(ModelCatalog.VLM)
         ocrFile = resolveOrNull(ModelCatalog.OCR)
         ocrCharsetFile = resolveOrNull(ModelCatalog.OCR_CHARSET)
@@ -462,7 +470,15 @@ class ExecuTorchInferenceEngine(
         // exposes no metadata API; for the detector the real load replaces `backend` with
         // module.getMethodMetadata("forward").backends.joinToString() ("XnnpackBackend").
         vlmInfoPending = vlmFile?.let { infoOrNull(ModelCatalog.VLM, it) }
-        detectorInfoPending = detectorFile?.let { infoOrNull(ModelCatalog.DETECTOR, it) }
+    }
+
+    /** The first of [rows] whose file resolves becomes the detector; its row supplies dims, classes and overlay info. */
+    private fun resolveDetectorLocked(rows: List<String>) {
+        val found = rows.firstNotNullOfOrNull { row -> resolveOrNull(row)?.let { row to it } }
+        detectorRow = found?.first
+        detectorFile = found?.second
+        detectorEntry = catalog.entry(found?.first ?: ModelCatalog.DETECTOR)
+        detectorInfoPending = found?.let { (row, file) -> infoOrNull(row, file) }
     }
 
     private fun infoOrNull(name: String, file: File): ModelInfo? =
@@ -566,16 +582,26 @@ class ExecuTorchInferenceEngine(
         }
         val t0 = System.nanoTime()
         val module = try {
-            Module.load(file.absolutePath, Module.LOAD_MODE_MMAP, DETECTOR_THREADS)
+            // loadMethod: the XNNPACK delegate initializes here, so a file the runtime cannot run fails at load and
+            // falls back below, instead of failing every detect().
+            Module.load(file.absolutePath, Module.LOAD_MODE_MMAP, DETECTOR_THREADS).also { it.loadMethod("forward") }
         } catch (t: Throwable) {
-            Log.w(TAG, "detector load failed (Q7): ${t.message}")
+            Log.w(TAG, "detector load failed (Q7): ${detectorRow ?: file.name}: ${t.message}")
+            val rest = detectorRows.dropWhile { it != detectorRow }.drop(1)
+            if (rest.isNotEmpty()) {
+                resolveDetectorLocked(rest) // FP32 fallback
+                loadDetectorLocked()
+            }
             return
         }
         detector = module
         val backend = runCatching { module.getMethodMetadata("forward").backends.joinToString() }.getOrDefault("")
         _detectorInfo.value = detectorInfoPending?.let { if (backend.isNotEmpty()) it.copy(backend = backend) else it }
         _stats.update { it.copy(detectorLoaded = true) }
-        Log.i(TAG_LATENCY, "detector load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} backend=$backend") // INV-2
+        Log.i(
+            TAG_LATENCY,
+            "detector load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} row=$detectorRow backend=$backend", // INV-2
+        )
     }
 
     /**

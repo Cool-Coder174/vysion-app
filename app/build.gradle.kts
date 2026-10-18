@@ -21,6 +21,10 @@ android {
         // ADR-0008 / AppGraph.kt: -PuseFakes=true wires the Fake* modules (laptop emulator, S25 Ultra without models).
         buildConfigField("boolean", "USE_FAKES", (project.findProperty("useFakes")?.toString() ?: "false"))
 
+        // Which detector lockfile row the engine tries first; the FP32 row "detector" is always the fallback.
+        // -Pdetector=detector-int8 builds with the int8 export (docs/benchmarks.md). Shipping default: FP32.
+        buildConfigField("String", "DETECTOR", "\"${project.findProperty("detector")?.toString() ?: "detector"}\"")
+
         // ADR-0010 cloud Describe: GEMINI_API_KEY from the gitignored local.properties (or the environment); never
         // committed. Blank = cloud Describe "not set up" and Describe stays on the headset. The key ends up inside the
         // APK, so restrict it to the Generative Language API in Cloud Console.

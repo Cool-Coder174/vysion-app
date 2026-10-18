@@ -12,6 +12,7 @@ Tags on commands below: **VERIFIED** = the flag set was checked against the Exec
 |---|---|---|---|
 | `ocr` + `ocr-charset` | `ocr.pte`, `ocr-charset.json` | PP-OCRv6 small, prebuilt by Software Mansion (Apache-2.0), URL in `models.lock` | loads 0.2 s; read a 960×720 test sign exactly in 1.1 s |
 | `detector` | `detector.pte` | YOLOv8n Open Images V7 (Door 164, Stairs 489, people, furniture): `ml/export/export_detector_oiv7.sh` | loads; `[1, 605, 2100]` decoded as columns + Kotlin NMS |
+| `detector-int8` | `detector-int8.pte` | the same model, int8: `ml/export/export_detector_oiv7.sh --int8` (§2a) | `detect()` median 54–55 ms vs 93 ms FP32, door recall 8.9% vs 9.6% (`docs/benchmarks.md`); used only in a `-Pdetector=detector-int8` build, FP32 is the fallback and the shipping default |
 | `vlm` + `vlm-tokenizer` | `vlm.pte`, `vlm-tokenizer.json` | LFM2.5-VL-450M, prebuilt by Software Mansion v0.11.0 (LFM Open License v1.0) | answers on the headset via `ModuleVlmRunner` (`runner: module`): 7.8 s for 60 tokens |
 
 Exports run in Docker on any laptop (PyTorch has no Intel-Mac wheels): `docker build -t vysion-ml:1.3.1 ml/export`, then
@@ -76,6 +77,39 @@ python export_and_validate.py --model_name yolo26n --backend xnnpack --quantize 
 Facts the Kotlin side relies on (VERIFIED): input float32 NCHW `[1,3,640,640]`, RGB, letterboxed, `/255`; output `[1, N, 6]` rows `[x1, y1, x2, y2, confidence, class_id]` **already post-NMS**, in letterboxed-input pixels; COCO80 ids (`person` = 0, `chair` = 56, `couch` = 57). `--quantize` requires `--video_path`. `YoloPostProcessor.OutputLayout.XYXY_CONF_CLS_ROWS` decodes exactly this; the lockfile row says `input_width/height = 640/640`.
 
 Expected size: *estimated* 5–10 MB (plan.md capacity table), **not measured**. Record the real `bytes` from the script's printout.
+
+## 2a. Detector int8: `detector-int8` (YOLOv8n Open Images V7, the detector the app runs)
+
+```bash
+ml/export/export_detector_oiv7.sh            # FP32 detector.pte first (the reference and the fallback)
+ml/export/export_detector_oiv7.sh --int8     # -> ml/out/detector-int8.pte, lockfile fields, recall table
+```
+
+Ultralytics' `format=executorch` is FP32 only, so `--int8` runs its own PT2E flow in the `vysion-ml:1.3.1` image
+(`ml/export/export_detector_int8.py`): `XNNPACKQuantizer` with `get_symmetric_quantization_config(is_per_channel=True)`
+(static int8 activations, symmetric per-channel int8 weights), `prepare_pt2e`, calibration, `convert_pt2e`,
+`to_edge_transform_and_lower` with `XnnpackPartitioner`. Facts it relies on:
+
+- **The head's decode stays float32.** Detect concatenates boxes (0–320 px) with sigmoid scores (0–1) into one
+  `[1, 605, 2100]` tensor; quantized as one tensor, the scores would share a ~1.25 px step and round to 0. The export
+  quantizes everything before Detect and Detect's box/class convs (`cv2`, `cv3`), then strips the annotations from
+  the ops that run in Detect itself and in its DFL. Output layout and dtype are the FP32 file's, so the app decodes
+  both with the same code.
+- **`set_module_name` cannot scope this.** torchao's module-name filter must match every node of a pattern, including
+  the conv's weight, and a lifted weight has no `nn_module_stack`, so no conv gets annotated (the first try produced
+  a 14 MB "int8" file with only cat/add quantized). Global config minus the decode works: 63 of 64 convs int8 (the
+  float one is the DFL's fixed 1×1), 3.7 MB.
+- **Calibration** = 300 Open Images V7 *validation* images with Navigation classes, 204 of them with a door (all the
+  split has), preprocessed exactly like the headset (`ml/export/yolo_app.py` mirrors `YoloPostProcessor.kt`:
+  nearest-neighbor letterbox, 114 gray pad, RGB /255). The static config's histogram observers are slow: ~40 min
+  for 300 images on an Intel MacBook in Docker.
+- **The check** (`compare_detectors.py`) runs both `.pte` files through the ExecuTorch runtime and the app's decode on
+  every Open Images V7 *test* image with a door (held out from calibration), and prints recall/precision per label
+  and how many FP32 detections int8 reproduces. Results in `docs/benchmarks.md`.
+
+On the headset the engine tries the build's row first (`BuildConfig.DETECTOR`, `-Pdetector=detector-int8`), then
+`detector`: a missing, refused or unloadable `detector-int8.pte` logs `detector-int8 unavailable …` or
+`detector load failed …` and loads `detector.pte`. `vysion.latency: detector load ms=… row=…` names the file in use.
 
 ## 3. VLM: 4-bit weights, XNNPACK, plus the tokenizer
 

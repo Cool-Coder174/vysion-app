@@ -134,7 +134,11 @@ class AppGraph(private val app: Application) {
      * "Cloud Describe"). Without `GEMINI_API_KEY` in `local.properties` the wrapper never leaves the headset.
      */
     val inferenceEngine: InferenceEngine = CloudDescribeEngine(
-        headset = if (useFakes) FakeInferenceEngine() else ExecuTorchInferenceEngine(app, modelCatalog, scope),
+        headset = if (useFakes) {
+            FakeInferenceEngine()
+        } else {
+            ExecuTorchInferenceEngine(app, modelCatalog, scope, detectorRows = listOf(BuildConfig.DETECTOR))
+        },
         cloud = cloudDescriber(app),
         isOnline = NetworkStatus(app)::isOnline,
     )

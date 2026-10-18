@@ -9,9 +9,55 @@ Protocol (SRS §7): **20 runs per model on the headset in airplane mode; report 
 | VLM: LFM2.5-VL-450M (Software Mansion v0.11.0, `ModuleVlmRunner`) | 8da4w | XNNPACK | 648.9 MB | 3.4 s (with tokenizer parse) | dev runs, not the protocol: 7.7–7.8 s for a 60-token answer (prefill 6.0 s = vision encoder 4.5 s + 261-token decoder 1.5 s; then 36 tok/s) | not measured | not measured | 3 (dev) | Galaxy XR | 2026-10-17 | no |
 | OCR: PP-OCRv6 small (Software Mansion) | int8 | XNNPACK | 23.9 MB | 0.2 s | dev runs: 1.15 s for a 960×720 sign, 3 lines read exactly | not measured | not measured | 2 (dev) | Galaxy XR | 2026-10-17 | no |
 | Detector: YOLOv8n Open Images V7, 320×320 (`ml/export/export_detector_oiv7.sh`) | fp32 | XNNPACK | 14.1 MB | 2 ms (mmap) | dev runs: 95–160 ms per `detect()` incl. Kotlin letterbox + decode + NMS (960×960 input) | not measured | not measured | 3 (dev) | Galaxy XR | 2026-10-17 | no |
+| Detector: same model, FP32 (`detector` row), paired with the int8 row below | fp32 | XNNPACK | 14.1 MB | 22 ms (mmap + `loadMethod`) | dev runs, not the protocol: 93.0 ms per `detect()` (960×960 input) | 111 ms | not measured | 30 (dev) | Galaxy XR | 2026-10-18 | no |
+| Detector: same model, int8 (`detector-int8` row, `export_detector_oiv7.sh --int8`; only in a `-Pdetector=detector-int8` build) | int8 (static 8-bit activations, per-channel 8-bit weights, decode fp32) | XNNPACK | 3.7 MB | 12 ms (mmap + `loadMethod`) | dev runs, not the protocol: 55.0 / 54.0 ms per `detect()` (960×960 input) | 70 / 62 ms | not measured | 2 × 30 (dev) | Galaxy XR | 2026-10-18 | no |
 | VLM fallback (smaller `LlmModule`-compatible export), only if RK-2 triggers | not measured | not measured | not measured | not measured | not measured | not measured | not measured | 0 | Galaxy XR | | |
 
 VLM median/p90 = wall time of `InferenceEngine.describe(still, READ, 60)` from the debug `BenchmarkReceiver` (a fresh `Bitmap` per run, full generation, no TTS). The input is a live `captureStill()`, so point the headset at a printed sign for the whole run; without a camera the receiver uses a synthetic dark-gray frame (`vysion.bench: input: captureStill unavailable; synthetic …`), on which READ answers "No text found" in a few tokens: such a run is not pasted here. No bundled frame exists yet (r5 page P1 item). Capture → first spoken word is the NFR row below, taken from the `vysion.latency: read capture->first-word <ms> ms` / `describe capture->first-word <ms> ms` lines (`MainActivity`, from `ModeController.firstWordLatency`; the VLM answer is spoken sentence by sentence while it generates, so this is prefill + the first sentence, not the whole answer). Detector median/p90 = wall time of one `detect()` on one frame.
+
+## Detector int8 vs FP32 (2026-10-18)
+
+**Latency on the headset.** Debug `ModelSmokeReceiver` (`--es model detector --es image scene.png --ei runs 30`): one
+untimed warm-up `detect()`, then 30 timed calls of the whole `InferenceEngine.detect()` (getPixels of the 960×960
+test image, letterbox to 320, forward, decode, NMS) on 4 threads. Nobody wearing the headset, so no camera and no
+Navigation loop; Wi-Fi on (dev runs, not the SRS §7 protocol). One build (`-Pdetector=detector-int8`), legs in the
+order int8 → FP32 → int8 in one minute: FP32 is the same build with `detector-int8.pte` moved away, which is also the
+fallback check (`detector-int8 unavailable …`, then `detector load … row=detector`). Galaxy XR SM-I610, thermal
+status 0 before and after.
+
+| Leg | Row loaded | Median | p90 | Min | Max |
+|---|---|---|---|---|---|
+| 1 | `detector-int8` | 55.0 ms | 70 ms | 51 ms | 75 ms |
+| 2 | `detector` (FP32, fallback) | 93.0 ms | 111 ms | 89 ms | 226 ms |
+| 3 | `detector-int8` | 54.0 ms | 62 ms | 51 ms | 71 ms |
+
+An earlier A-B-A the same night with an 8-image-calibration build of the same graph gave 55.0 / 93.5 / 55.0 ms
+(p90 61 / 112 / 60). One 30-run int8 leg that overlapped another app's Whisper inference read 89 ms median; it is
+not in the table. Single `detect()` calls on the two door images below: int8 56 and 54 ms, FP32 115 and 100 ms.
+
+**Same detections on the headset as on the laptop.** Two held-out Open Images test images (768×1024, pushed as PNG):
+int8 found `door 0.31, person 0.30` and `door 0.27`; FP32 `door 0.33, person 0.28` and `door 0.25`, the values
+`compare_detectors.py`'s decode gives in Docker for the same files.
+
+**Recall (laptop, ExecuTorch runtime in Docker, the app's decode; not a headset number).** Every Open Images V7 *test*
+image with a door (544 images, 784 door boxes: 2 of the split's 546 failed to download in that run; calibration
+used the *validation* split). A detection counts when it
+overlaps a ground-truth box of its label at IoU ≥ 0.5. Input 320×320, as on the headset.
+
+| Confidence floor | Door recall FP32 | Door recall int8 | Door precision FP32 | Door precision int8 | FP32 door detections int8 reproduces | Person recall FP32 / int8 | Window recall FP32 / int8 |
+|---|---|---|---|---|---|---|---|
+| 0.25 (the app's) | 9.6% (75/784) | 8.9% (70/784) | 72.1% | 73.7% | 82.7% (86/104) | 22.5% / 21.4% (of 173) | 13.6% / 12.4% (of 832) |
+| 0.10 | 19.4% (152/784) | 18.5% (145/784) | 56.9% | 57.3% | 90.3% (241/267) | 34.1% / 33.5% | 26.8% / 26.3% |
+
+On anchors where FP32 scores a door ≥ 0.1, the int8 door score differs by 0.030 (median) and 0.076 (p90). On a mixed
+300-image test set (210 with doors), door recall is 10.4% FP32 vs 9.7% int8 and person recall 27.4% vs 27.1%.
+
+What this says: int8 costs about 5 of every 75 doors FP32 finds (and its door precision is no worse), for 40% less
+time per `detect()`. The larger problem is FP32's own door recall on these photos at 320 px and 0.25: about 1 door in
+10 (Ultralytics' own predictor at 320 agrees: 5 vs 6 doors on the first 60 images). Open Images doors are often
+small or partly hidden, unlike a door in front of a wearer, so this is not the headset's recall, but it is the
+headroom question for any speed spent: a larger input or a door-specific threshold. **Shipping default stays FP32**
+until Isaac switches it (`app/build.gradle.kts` `DETECTOR`, or `-Pdetector=detector-int8`).
 
 ## NFR targets vs measured
 

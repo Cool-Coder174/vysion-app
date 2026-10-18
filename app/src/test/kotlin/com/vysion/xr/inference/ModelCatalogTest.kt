@@ -70,8 +70,17 @@ class ModelCatalogTest {
         val repoLock = File("../ml/models.lock")
         if (!repoLock.isFile) return // running outside the repo layout
         val entries = ModelCatalog.parse(repoLock.readText())
-        assertEquals(setOf("vlm", "vlm-tokenizer", "detector", "ocr", "ocr-charset"), entries.map { it.name }.toSet())
-        assertTrue(entries.first { it.name == "detector" }.dest.endsWith(".pte"))
+        assertEquals(
+            setOf("vlm", "vlm-tokenizer", "detector", "detector-int8", "ocr", "ocr-charset"),
+            entries.map { it.name }.toSet(),
+        )
+        val det = entries.first { it.name == ModelCatalog.DETECTOR }
+        assertTrue(det.dest.endsWith(".pte"))
+        // The engine decodes whichever detector row loaded with that row's facts; the int8 export must match FP32's.
+        val int8 = entries.first { it.name == ModelCatalog.DETECTOR_INT8 }
+        assertEquals(det.classMap, int8.classMap)
+        assertEquals(det.outputLayout, int8.outputLayout)
+        assertEquals(det.inputWidth to det.inputHeight, int8.inputWidth to int8.inputHeight)
         val vlm = entries.first { it.name == "vlm" }
         assertTrue("{prompt}" in vlm.chatTemplate)
         assertEquals(512, vlm.inputWidth)

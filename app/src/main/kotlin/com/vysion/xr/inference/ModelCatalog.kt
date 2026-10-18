@@ -279,6 +279,12 @@ class ModelCatalog(private val app: Application) {
         const val VLM: String = "vlm"
         const val VLM_TOKENIZER: String = "vlm-tokenizer"
         const val DETECTOR: String = "detector"
+
+        /**
+         * The same detector exported int8 (`ml/export/export_detector_oiv7.sh --int8`); used only when the build asks
+         * for it (`-Pdetector=detector-int8`), and [DETECTOR] stays the fallback when its file is missing or will not load.
+         */
+        const val DETECTOR_INT8: String = "detector-int8"
         const val OCR: String = "ocr"
         const val OCR_CHARSET: String = "ocr-charset"
 

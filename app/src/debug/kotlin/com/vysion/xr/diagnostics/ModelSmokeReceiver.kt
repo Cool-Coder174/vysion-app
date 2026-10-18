@@ -31,6 +31,11 @@ import kotlinx.coroutines.launch
  * (ADR-0010). `vysion.latency: describe source=…` says which answered. `--es model cloud` sends the same request to
  * the cloud only (no headset hedge) and logs its time to the first chunk, to tell a slow network from a slow model.
  *
+ * `--es model detector --ei runs 20` times [InferenceEngine.detect] on the image: one untimed warm-up call, then `runs`
+ * calls, logged as `detector runs=… median=… p90=… min=… max=… ms` (the whole `detect()`: pixels, letterbox, forward,
+ * decode, NMS). The row comes from the build (`-Pdetector=detector-int8`); `vysion.latency: detector load … row=` says
+ * which file loaded.
+ *
  * `--es model whereami [--ez cold true]` runs FR-N9 at a fixed test point (the Civic Center tile in the unit tests,
  * never the wearer's location, which needs a worn headset and Location on): the tiles (cold = dropped from memory
  * first), the on-device finder, the cloud wording and the template, with their times. No image is needed.
@@ -103,7 +108,23 @@ class ModelSmokeReceiver : BroadcastReceiver() {
                 val t0 = System.nanoTime()
                 val result: String = when (model) {
                     "ocr" -> engine.readText(bitmap)?.joinToString(" | ") ?: "<no OCR model loaded>"
-                    "detector" -> engine.detect(bitmap).joinToString { "${it.label} ${"%.2f".format(it.confidence)}" }
+                    "detector" -> {
+                        val runs = intent.getIntExtra(EXTRA_RUNS, 1).coerceIn(1, MAX_RUNS)
+                        var found = engine.detect(bitmap) // warm-up: XNNPACK's first-run allocations
+                        if (runs > 1) {
+                            val ms = List(runs) {
+                                val r0 = System.nanoTime()
+                                found = engine.detect(bitmap)
+                                (System.nanoTime() - r0) / 1_000_000
+                            }.sorted()
+                            Log.i(
+                                TAG,
+                                "detector runs=$runs median=${BenchmarkStats.median(ms)} p90=${BenchmarkStats.p90(ms)} " +
+                                    "min=${ms.first()} max=${ms.last()} ms",
+                            )
+                        }
+                        found.joinToString { "${it.label} ${"%.2f".format(it.confidence)}" }
+                    }
                     "cloud" -> {
                         val cloud = com.vysion.xr.cloudDescriber(app) ?: throw IllegalStateException("no GEMINI_API_KEY built in")
                         val jpeg = com.vysion.xr.inference.CloudJpeg.encode(bitmap)
@@ -208,6 +229,8 @@ class ModelSmokeReceiver : BroadcastReceiver() {
         const val EXTRA_PROMPT = "prompt"
         const val EXTRA_CLOUD = "cloud"
         const val EXTRA_COLD = "cold"
+        const val EXTRA_RUNS = "runs"
+        const val MAX_RUNS = 200
 
         /** Larkin Street by the Main Library, San Francisco: the unit tests' Civic Center tile (FR-N9 smoke). */
         const val TEST_LAT = 37.779136

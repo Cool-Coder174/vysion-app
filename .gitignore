@@ -38,6 +38,7 @@ ml/out/
 ml/.venv/
 ml/.venv-*/
 ml/.executorch-src/
+ml/.cache/
 ml/**/__pycache__/
 *.pyc
 

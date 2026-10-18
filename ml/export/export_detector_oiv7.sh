@@ -13,24 +13,59 @@
 #   only the class ids the lockfile names ("classes": {"164": "door", ...}).
 #
 # Usage:   ml/export/export_detector_oiv7.sh [--imgsz 320] [--out ml/out]
+#          ml/export/export_detector_oiv7.sh --int8 [--calib-images 300] [--imgsz 320] [--out ml/out]
 # Prereq:  Docker running. Downloads: python:3.12-slim, the CPU wheels, and yolov8n-oiv7.pt (Ultralytics release).
 # Output:  <out>/detector.pte, and the lockfile fields (bytes, sha256, classes map) printed at the end.
+#
+# --int8 (row detector-int8): PT2E + XNNPACKQuantizer, static int8 activations, symmetric per-channel int8 weights,
+#   calibrated on Open Images V7 *validation* images with Navigation classes (70% with a door), preprocessed exactly
+#   like the app (ml/export/yolo_app.py). The head's decode stays float32, so the output is the FP32 layout and
+#   scores are not crushed by the boxes' scale (export_detector_int8.py). Then compare_detectors.py checks it against
+#   <out>/detector.pte on every Open Images *test* image with a door (held out). Runs in the vysion-ml:1.3.1 image
+#   (built from ml/export/Dockerfile if missing); images and weights are cached in ml/.cache/ (gitignored, ~300 MB).
+#   Output: <out>/detector-int8.pte, its lockfile fields, and the recall table for docs/benchmarks.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_DIR="$ROOT/ml/out"
 IMGSZ=320
+INT8=0
+CALIB=300
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --imgsz) IMGSZ="$2"; shift 2 ;;
+    --int8) INT8=1; shift ;;
+    --calib-images) CALIB="$2"; shift 2 ;;
     --out) OUT_DIR="$2"; shift 2 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 mkdir -p "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+
+if [ "$INT8" = 1 ]; then
+  IMAGE=vysion-ml:1.3.1
+  docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" "$ROOT/ml/export"
+  CACHE="$ROOT/ml/.cache"
+  mkdir -p "$CACHE/weights"
+  run() {
+    docker run --rm -v "$ROOT/ml/export":/tools:ro -v "$CACHE":/data -v "$OUT_DIR":/out \
+      -v "$ROOT/ml/models.lock":/lock/models.lock:ro -w /data/weights -e PYTHONUNBUFFERED=1 "$IMAGE" "$@"
+  }
+  run python -I /tools/oiv7_subset.py --split validation --n "$CALIB" --out /data/calib
+  run python -I /tools/oiv7_subset.py --split test --n 100000 --door-share 1.0 --out /data/heldout-doors
+  run python /tools/export_detector_int8.py --calib /data/calib --n "$CALIB" --imgsz "$IMGSZ" --out /out/detector-int8.pte
+  if [ -f "$OUT_DIR/detector.pte" ]; then
+    run python /tools/compare_detectors.py --a /out/detector.pte --b /out/detector-int8.pte \
+      --images /data/heldout-doors --lock /lock/models.lock --imgsz "$IMGSZ"
+  else
+    echo "no $OUT_DIR/detector.pte to compare against; run this script without --int8 first" >&2
+  fi
+  echo "wrote $OUT_DIR/detector-int8.pte"
+  exit 0
+fi
 
 docker run --rm -v "$OUT_DIR":/out -e IMGSZ="$IMGSZ" python:3.12-slim bash -euo pipefail -c '
   apt-get update -qq && apt-get install -y -qq --no-install-recommends libgl1 libglib2.0-0 >/dev/null
