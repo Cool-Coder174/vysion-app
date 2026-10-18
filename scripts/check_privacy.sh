@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Privacy gate (ADR-0003, NFR Offline + Privacy). Run locally before every push and in CI.
+# Privacy gate (ADR-0003 as amended by ADR-0010, NFR Privacy). Run locally before every push and in CI.
 #
-#   1. No network permission in our manifest.
-#   2. No network permission in the MERGED manifest (a dependency cannot smuggle one in).
+#   1. Network permissions: only INTERNET and ACCESS_NETWORK_STATE (ADR-0010), in our manifest.
+#   2. The same in the MERGED manifest (a dependency cannot smuggle in another one).
 #   3. No code path that persists camera frames or logs their contents, in main AND debug Kotlin sources
 #      (the debug BenchmarkReceiver captures stills and ships in the APK install_headset.sh installs).
+#   4. No frame contents in logs.
+#   5. No analytics or crash-reporter SDK.
+#   6. Every line that opens a network connection names its on-device fallback: `network-fallback: <what runs
+#      offline>` on the same line (ADR-0010: every network feature has one).
 #
-# A line that legitimately needs a flagged API (e.g. copying model files with openFileOutput)
+# A line that legitimately needs a flagged storage API (e.g. copying model files with openFileOutput)
 # carries the marker `privacy-allow: <reason>` on the same line, which this script honors.
 #
 # Exit 0 = clean, 1 = violation. Prints every hit so the PR reviewer can see it.
@@ -21,14 +25,12 @@ for d in "$ROOT/app/src/main/kotlin" "$ROOT/app/src/debug/kotlin"; do
 done
 fail=0
 
-NET_PERMS='android\.permission\.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE)'
+# ADR-0010 allows INTERNET and ACCESS_NETWORK_STATE; any other network permission still fails.
+NET_PERMS='android\.permission\.(ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE|CHANGE_WIFI_STATE|NEARBY_WIFI_DEVICES)'
 
 echo "== 1. network permissions in source manifests =="
-# The one allowed form is the manifest-merger GUARD that strips a network permission from libraries:
-#   <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
-#   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
 if grep -rnE "$NET_PERMS" "$APP_SRC" --include=AndroidManifest.xml | grep -v 'tools:node="remove"'; then
-  echo "FAIL: a network permission is declared in app/src (ADR-0003)"
+  echo "FAIL: a network permission beyond ADR-0010's two is declared in app/src"
   fail=1
 else
   echo "ok"
@@ -74,18 +76,29 @@ if [ "${#KOTLIN_DIRS[@]}" -gt 0 ]; then
   fi
 fi
 
-echo "== 5. analytics / crash reporter / network SDKs in Gradle files =="
-SDKS='firebase|crashlytics|sentry|bugsnag|okhttp|retrofit|ktor-client|analytics|mixpanel|amplitude'
+echo "== 5. analytics / crash reporter SDKs in Gradle files =="
+SDKS='crashlytics|firebase-analytics|sentry|bugsnag|analytics|mixpanel|amplitude|segment'
 if grep -rniE "$SDKS" "$ROOT/app/build.gradle.kts" "$ROOT/gradle/libs.versions.toml" 2>/dev/null; then
-  echo "FAIL: a dependency with a network path is declared (ADR-0003)"
+  echo "FAIL: an analytics or crash-reporter dependency is declared (ADR-0003 rule 3)"
   fail=1
 else
   echo "ok"
 fi
 
+echo "== 6. network calls name their on-device fallback (ADR-0010) =="
+NETCALL='openConnection\(|HttpURLConnection|HttpsURLConnection|OkHttpClient|HttpClient\(|Socket\(|URL\("http'
+if [ "${#KOTLIN_DIRS[@]}" -gt 0 ]; then
+  if grep -rnE "$NETCALL" "${KOTLIN_DIRS[@]}" | grep -v 'network-fallback:'; then
+    echo "FAIL: a network call without a 'network-fallback: <what runs offline>' marker on the same line"
+    fail=1
+  else
+    echo "ok"
+  fi
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo
-  echo "Privacy gate FAILED. See docs/decisions/ADR-0003-no-network-no-storage.md"
+  echo "Privacy gate FAILED. See docs/decisions/ADR-0003-no-network-no-storage.md and ADR-0010-network-with-fallback.md"
   exit 1
 fi
 echo

@@ -12,7 +12,7 @@ Vysion XR: a native Android XR (Kotlin, Jetpack Compose for XR, SceneCore, ARCor
 - Backlog in code: `grep -rn "TODO(" app/src/main/kotlin`.
 
 ## Non-negotiables
-1. No network permission, no analytics; camera frames never persisted or logged (`scripts/check_privacy.sh`).
+1. Network only for optional features, each with an on-device fallback (ADR-0010); no analytics; camera frames never persisted or logged (`scripts/check_privacy.sh`).
 2. Spoken strings only in `voice/Cues.kt` (`scripts/check_cues.sh`); prompts only in `inference/PromptLibrary.kt`. Other packages reach them through the `core` seams `ModePhrasebook` / `PromptSet`.
 3. Numbers shown or documented are measured on the device; otherwise "not measured".
 4. Cross-package calls only through `core` contracts; only the root package (`AppGraph`) imports every role; contract changes are announced and merged alone.

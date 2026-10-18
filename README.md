@@ -2,7 +2,7 @@
 
 **Read a sign, understand a room, find the door. On a headset, with every model running on the headset, without sending a single frame to a server.**
 
-Vysion XR is a native Android XR app for the Samsung Galaxy XR with three voice-driven modes: **Text Reader**, **Audio Description** and **Navigation**. A vision-language model (4-bit; the exact model is decided Sat 11:00, `plan.md` Q6, default Gemma 3 4B via optimum-executorch) and a light object detector (YOLO26-n, int8) run entirely on the headset through [ExecuTorch](https://github.com/pytorch/executorch) with the XNNPACK backend. The manifest declares no network permission; the demo runs in airplane mode with a live diagnostics panel showing measured latency, memory and backend.
+Vysion XR is a native Android XR app for the Samsung Galaxy XR with three voice-driven modes: **Text Reader**, **Audio Description** and **Navigation**. A vision-language model (4-bit; the exact model is decided Sat 11:00, `plan.md` Q6, default Gemma 3 4B via optimum-executorch) and a light object detector (YOLO26-n, int8) run entirely on the headset through [ExecuTorch](https://github.com/pytorch/executorch) with the XNNPACK backend. Everything runs without a connection, so the demo works in airplane mode; network is allowed only for optional features that have an on-device fallback (ADR-0010). A live diagnostics panel shows measured latency, memory and backend.
 
 > **Vysion XR helps you read, understand, and move through a space. It is not validated for unassisted travel by blind users.**
 
@@ -69,7 +69,7 @@ flowchart LR
 | Depth, planes, anchors, hands, head pose | headset | ARCore for Jetpack XR |
 | Panels, passthrough, spatial audio | headset | Jetpack Compose for XR + SceneCore |
 | Speech in / out | headset | Android `SpeechRecognizer` (on-device) / `TextToSpeech` |
-| Network | nowhere | no network permission (`INTERNET`, `ACCESS_NETWORK_STATE` stripped from libraries); checked in CI and printed on the overlay |
+| Network | optional features only | `INTERNET` + `ACCESS_NETWORK_STATE` (ADR-0010); every network feature has an on-device fallback, and Read, Describe and Find the door never need it; printed on the overlay |
 
 ## Measured numbers
 
@@ -156,7 +156,7 @@ plan.md         roadmap and gates (engineer-workflow); executor.md: phase specs;
 
 - **Humans:** [`CONTRIBUTING.md`](CONTRIBUTING.md) (branches, 15-minute merge cadence, definition of done, review checklist). Roles and tasks: [`docs/modules/`](docs/modules/). Schedule and gates: [`docs/schedule.md`](docs/schedule.md).
 - **Coding agents:** [`AGENTS.md`](AGENTS.md) is the operating manual (read order, repo map, hard rules, commands, where every fact lives). `CLAUDE.md` summarizes it.
-- **Hard rules, enforced by CI or review:** no network permission; camera frames never persisted or logged; every spoken string in `voice/Cues.kt`; every prompt in `inference/PromptLibrary.kt`; every displayed number measured on the device; modules talk only through `core` contracts.
+- **Hard rules, enforced by CI or review:** network only with an on-device fallback (ADR-0010); camera frames never persisted or logged; every spoken string in `voice/Cues.kt`; every prompt in `inference/PromptLibrary.kt`; every displayed number measured on the device; modules talk only through `core` contracts.
 - **Backlog in code:** `grep -rn "TODO(" app/src/main/kotlin` lists every stub with its FR id.
 
 ## Limitations

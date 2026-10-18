@@ -613,8 +613,9 @@ class XrPerceptionSession(
                     val device = XrDevice.getCurrentDevice(app)
                     Log.i(
                         TAG,
-                        "probe geospatial spatial=${runCatching { device.isGeospatialModeSupported(GeospatialMode.SPATIAL) }.getOrDefault(false)} " +
-                            "vpsAndGps=${runCatching { device.isGeospatialModeSupported(GeospatialMode.VPS_AND_GPS) }.getOrDefault(false)}",
+                        // An exception is logged by class, not folded into "false": unsupported and refused differ.
+                        "probe geospatial spatial=${probeResult { device.isGeospatialModeSupported(GeospatialMode.SPATIAL) }} " +
+                            "vpsAndGps=${probeResult { device.isGeospatialModeSupported(GeospatialMode.VPS_AND_GPS) }}",
                     )
                     feeders = scope.launch {
                         launchDepthFeed(xrSession)
@@ -1072,3 +1073,7 @@ class XrPerceptionSession(
         private const val DEPTH_COPY_PERIOD_NANOS = 80_000_000L
     }
 }
+
+/** A capability probe for the log: its value, or the exception's class and message when it threw. */
+private inline fun probeResult(block: () -> Boolean): String =
+    runCatching(block).fold({ it.toString() }, { "${it.javaClass.simpleName}(${it.message})" })

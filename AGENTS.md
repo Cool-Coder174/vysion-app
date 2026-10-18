@@ -37,8 +37,8 @@ If you are unsure which role you are: the FR id's **Owner** column in `docs/requ
 │   └── setup.md       fresh clone → headset in ≤ 30 min
 ├── app/
 │   ├── build.gradle.kts, proguard-rules.pro
-│   ├── src/main/AndroidManifest.xml   no network permission, ever; tools:node="remove" guards strip
-│   │                                  INTERNET and ACCESS_NETWORK_STATE that libraries add
+│   ├── src/main/AndroidManifest.xml   INTERNET + ACCESS_NETWORK_STATE only (ADR-0010); every network
+│   │                                  feature has an on-device fallback
 │   ├── src/main/assets/models/        README.md; model files + lockfile copy fetched, not committed (ml/models.lock)
 │   ├── src/main/res/values/strings.xml
 │   ├── src/main/kotlin/com/vysion/xr/
@@ -92,7 +92,7 @@ One package per role. A package imports from `com.vysion.xr.core` and from itsel
 
 | Rule | Why | Where enforced |
 |---|---|---|
-| No `android.permission.INTERNET` (or any network permission), no analytics/crash SDK | 15 rubric points; ADR-0003 | `scripts/check_privacy.sh` (source + merged manifest), overlay audit |
+| Network only for optional features, each with an on-device fallback (`network-fallback:` on the line that connects); only `INTERNET` and `ACCESS_NETWORK_STATE`; no analytics/crash SDK | ADR-0010 (amends ADR-0003): the three core features never wait on a connection | `scripts/check_privacy.sh` §1, §2, §5, §6; overlay audit |
 | Camera frames never written to storage, never logged | privacy NFR; INV-3 | `check_privacy.sh` §3–4; PR checklist |
 | Every spoken string lives in `voice/Cues.kt` or comes from the VLM; `ModeController` speaks only through `ModePhrasebook` | SRS §8 R4; INV-4 | `scripts/check_cues.sh` (CI); review |
 | Every prompt lives in `inference/PromptLibrary.kt`; other packages read it through `PromptSet` (`AppGraph.prompts`) | SRS §7 | review |
@@ -103,7 +103,7 @@ One package per role. A package imports from `com.vysion.xr.core` and from itsel
 | Latencies on monotonic clocks (`System.nanoTime`, `SystemClock.elapsedRealtimeNanos`) | H-21 | review |
 | A `Bitmap` from `captureStill()` has one owner who recycles it | memory budget; INV-9 | KDoc |
 | `AppGraph.stop()` is reversible, `AppGraph.release()` is once: `start`/`stop` follow `onStart`/`onStop` and keep the scope, models and TTS (`warmUp()` is idempotent; `FrameSource.stop()` keeps its executor); `release()` (recognizer, TTS, models, scope) runs only from `onDestroy` when `isFinishing`, and a finished activity in a cached process gets a fresh graph from `VysionApplication.graph` (`AppGraph.isReleased`) | headset off and on restarts without a model reload; `SpeechRecognizer.destroy()` / `TextToSpeech.shutdown()` cannot be undone | `AppGraph`, `VysionApplication`, `MainActivity`; `docs/contracts.md` Lifecycle row |
-| New dependency only with a line in `docs/stack.md` (what for, no network path) | ADR-0003 | review |
+| New dependency only with a line in `docs/stack.md` (what for; any network path and its fallback) | ADR-0003, ADR-0010 | review |
 | UI uses the tokens and components in `platform/ui/theme` and `platform/ui/components` (Michelle Bui's designs, recorded in `DESIGN.md`); no ad-hoc colors, sizes or icons | one visual system; meaning colors have one job each | review |
 | No DI framework, no product flavors, no new Gradle modules | ADR-0006/0008 | review |
 
@@ -160,7 +160,7 @@ To check an API against the real artifact instead of docs: after one Gradle sync
 - The detector is unloaded while the VLM runs, so Navigation outlines pause during a one-shot command. That is by design (ADR-0004), not a bug.
 - `ml/models.lock` rows with `url: "TBD"` make `fetch_models.sh` exit 2 with instructions. That is expected until R2 publishes artifacts.
 - The SRS's VLM line (Gemma 4 through the Android multimodal runner) is blocked: the `examples/models/gemma4` `.pte` has no `token_embedding` method, so `LlmModule` refuses it at ExecuTorch 1.3.1, 1.5.1 and main (`docs/stack.md` D5, `plan.md` Q6, RK-13). R2 decides the VLM path (default option C, Gemma 3 4B via optimum-executorch; alternative A, a Kotlin `Gemma4Runner` port over `Module`; recipes in `ml/README.md` §0/§3) before writing any engine code. The `InferenceEngine` contract and the lockfile dests are the same either way.
-- Libraries can add network permissions transitively (SceneCore → `media3-exoplayer` adds `ACCESS_NETWORK_STATE`). The manifest guards strip them; if `check_privacy.sh` fails on the merged manifest after a dependency change, add another `tools:node="remove"` guard after checking the library tolerates it (`javap`, §8). Never relax the gate.
+- Libraries can add network permissions transitively. `INTERNET` and `ACCESS_NETWORK_STATE` are allowed since ADR-0010; if `check_privacy.sh` fails on the merged manifest after a dependency change (Wi-Fi state, changing networks), add a `tools:node="remove"` guard after checking the library tolerates it (`javap`, §8). Never relax the gate.
 
 ## 11. Working with the engineer-workflow commands
 

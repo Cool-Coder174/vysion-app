@@ -26,15 +26,11 @@
     <uses-permission android:name="android.permission.HAND_TRACKING" />              <!-- pinch-and-hold push-to-talk (FR-G2, P1) -->
     <uses-permission android:name="android.permission.HEAD_TRACKING" />              <!-- DeviceTrackingMode.SPATIAL → head pose (FR-N3/N4) -->
 
-    <!-- This app declares NO network permission (ADR-0003).
-         The next two lines are manifest-merger GUARDS, not grants: they strip the permission if a library
-         adds it, so the overlay's "Network permission: none" (FR-G5) stays true on the merged APK.
-         ACCESS_NETWORK_STATE arrives transitively from androidx.media3:media3-exoplayer (pulled in by
-         SceneCore); we never use ExoPlayer, and media3's NetworkTypeObserver catches the SecurityException
-         (verified with javap on media3-common 1.10.0, 2026-10-17). scripts/check_privacy.sh accepts only
-         the tools:node="remove" form. -->
-    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+    <!-- Network is allowed for optional features, each with an on-device fallback (ADR-0010, amends ADR-0003).
+         Read, Describe and Find the door always run on the headset; nothing here may make them depend on a
+         connection. ACCESS_NETWORK_STATE lets a feature skip the network at once when offline. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Package visibility (targetSdk ≥ 30): the on-device SpeechRecognizer service and the TextToSpeech engines. -->
     <queries>
