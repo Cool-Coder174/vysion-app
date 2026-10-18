@@ -59,6 +59,7 @@ object Cues {
         INFERENCE_FAILED,
         CAMERA_LOST,
         MODEL_NOT_FOUND,
+        READING_WHOLE_VIEW,
 
         /** FR-T5. */
         HOLD_STILL,
@@ -119,6 +120,7 @@ object Cues {
         Key.INFERENCE_FAILED to "That did not work. Say it again.",
         Key.CAMERA_LOST to "I lost the camera. Voice commands still work.",
         Key.MODEL_NOT_FOUND to "Model files not found. Run the fetch models script.",
+        Key.READING_WHOLE_VIEW to "No text at the crosshair. Reading everything in view.",
         Key.HOLD_STILL to "Hold still",
         Key.OBSTACLE_AHEAD to "obstacle ahead",
         Key.DOOR_NOT_FOUND to "I can't find a door, turn slowly",
@@ -155,6 +157,7 @@ object Cues {
         Key.INFERENCE_FAILED to "Eso no funcionó. Dilo otra vez.",
         Key.CAMERA_LOST to "Perdí la cámara. Los comandos de voz siguen funcionando.",
         Key.MODEL_NOT_FOUND to "No encontré los archivos del modelo. Ejecuta el script fetch models.",
+        Key.READING_WHOLE_VIEW to "No hay texto en la mira. Leo todo lo que se ve.",
         Key.HOLD_STILL to "Quédate quieto",
         Key.OBSTACLE_AHEAD to "obstáculo adelante",
         Key.DOOR_NOT_FOUND to "No encuentro una puerta, gira despacio",
@@ -189,6 +192,9 @@ object Cues {
     fun error(locale: Locale = Speaker.EN_US): String = inferenceFailed(locale)
     fun cameraLost(locale: Locale = Speaker.EN_US): String = text(Key.CAMERA_LOST, locale)
     fun modelNotFound(locale: Locale = Speaker.EN_US): String = text(Key.MODEL_NOT_FOUND, locale)
+
+    /** Reading crosshair: nothing readable inside it, so the whole view is read next. */
+    fun readingWholeView(locale: Locale = Speaker.EN_US): String = text(Key.READING_WHOLE_VIEW, locale)
     fun holdStill(locale: Locale = Speaker.EN_US): String = text(Key.HOLD_STILL, locale)
     fun obstacleAhead(locale: Locale = Speaker.EN_US): String = text(Key.OBSTACLE_AHEAD, locale)
     fun doorNotFound(locale: Locale = Speaker.EN_US): String = text(Key.DOOR_NOT_FOUND, locale)
@@ -358,6 +364,7 @@ object CuesPhrasebook : ModePhrasebook {
     override val voiceCommandsUnavailable: String get() = Cues.voiceCommandsUnavailable(locale())
     override val cameraLost: String get() = Cues.cameraLost(locale())
     override val modelNotFound: String get() = Cues.modelNotFound(locale())
+    override val readingWholeView: String get() = Cues.readingWholeView(locale())
     override fun modeAnnounced(mode: Mode): String = Cues.modeAnnouncement(mode, locale())
     override fun pageFocused(mode: Mode): String = Cues.pageFocused(mode, locale())
     override fun navigationCue(cue: NavigationCue): String? =

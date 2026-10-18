@@ -8,6 +8,7 @@ import com.vysion.xr.core.InferenceEngine
 import com.vysion.xr.core.InferenceException
 import com.vysion.xr.core.InferenceStats
 import com.vysion.xr.core.ModelInfo
+import com.vysion.xr.core.NormalizedBox
 import java.io.File
 import java.lang.ref.WeakReference
 import java.util.Locale
@@ -232,17 +233,26 @@ class ExecuTorchInferenceEngine(
      * VLM). At most [OCR_MAX_BOXES] boxes, the most confident first, so a busy scene cannot stall the reader. Pixels
      * stay in local arrays (INV-3); the [bitmap] is only read (INV-9).
      */
-    override suspend fun readText(bitmap: Bitmap): List<String>? = withContext(Dispatchers.Default) {
+    override suspend fun readText(bitmap: Bitmap): List<String>? = recognizeText(bitmap, region = null)
+
+    /** The reading crosshair: the same OCR on [region] only, cropped first so small print gets more detector pixels. */
+    override suspend fun readTextIn(bitmap: Bitmap, region: NormalizedBox): List<String>? = recognizeText(bitmap, region)
+
+    private suspend fun recognizeText(bitmap: Bitmap, region: NormalizedBox?): List<String>? = withContext(Dispatchers.Default) {
         mutex.withLock {
             val module = ocr ?: return@withLock null
             val charset = ocrCharset ?: return@withLock null
             if (bitmap.isRecycled) throw InferenceException("readText(): bitmap already recycled (INV-9)")
             val t0 = System.nanoTime()
             try {
-                val w = bitmap.width
-                val h = bitmap.height
-                val argb = IntArray(w * h)
-                bitmap.getPixels(argb, 0, w, 0, 0, w, h)
+                val full = IntArray(bitmap.width * bitmap.height)
+                bitmap.getPixels(full, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                val cropped = region?.let {
+                    OcrPipeline.crop(full, bitmap.width, bitmap.height, it.left, it.top, it.right, it.bottom)
+                }
+                val argb = cropped?.argb ?: full
+                val w = cropped?.width ?: bitmap.width
+                val h = cropped?.height ?: bitmap.height
                 val recMaxWidth = Ocr.REC_MAX_WIDTH
                 val det = OcrPipeline.detInput(argb, w, h, Ocr.DET_MIN_SIDE, Ocr.DET_MAX_SIDE, Ocr.DET_MULTIPLE)
                 val probs = module.execute(
@@ -275,8 +285,8 @@ class ExecuTorchInferenceEngine(
                 val lines = OcrPipeline.readingOrder(read) { it.first }.map { row -> row.joinToString(" ") { it.second } }
                 Log.i(
                     TAG_LATENCY,
-                    "ocr ms=${(System.nanoTime() - t0) / NANOS_PER_MS} input=${det.width}x${det.height} " +
-                        "boxes=${boxes.size} lines=${lines.size}",
+                    "ocr ms=${(System.nanoTime() - t0) / NANOS_PER_MS} region=${if (cropped != null) "${w}x$h" else "full"} " +
+                        "input=${det.width}x${det.height} boxes=${boxes.size} lines=${lines.size}",
                 )
                 lines
             } catch (e: CancellationException) {

@@ -122,6 +122,42 @@ class ModeControllerTest {
     }
 
     @Test
+    fun `read takes the text under the crosshair first and skips the rest of the view`() = controllerTest { f ->
+        startAndSettle(f)
+        f.engine.cannedRegionText = listOf("EXIT")
+        f.engine.cannedText = listOf("EXIT", "Wet floor", "Room 204")
+        f.commands.inject(Command.Read)
+        advanceUntilIdle()
+
+        assertEquals(listOf(ReadingFrame.stillBox), f.engine.readRegions)
+        assertEquals("EXIT", f.controller.transcript.value)
+        assertEquals(listOf(TestPhrasebook.modeAnnounced(Mode.TEXT_READER), "EXIT"), f.speaker.said)
+        assertEquals(0, f.engine.readTextCalls)
+    }
+
+    @Test
+    fun `nothing under the crosshair reads the whole view after saying so`() = controllerTest { f ->
+        startAndSettle(f)
+        f.engine.cannedRegionText = emptyList()
+        f.engine.cannedText = listOf("Room 204")
+        f.commands.inject(Command.Read)
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf(TestPhrasebook.modeAnnounced(Mode.TEXT_READER), TestPhrasebook.readingWholeView, "Room 204"),
+            f.speaker.said,
+        )
+        assertEquals(1, f.engine.readTextCalls)
+
+        // Nothing anywhere: no cue, just "no text".
+        f.engine.cannedText = emptyList()
+        f.speaker.said.clear()
+        f.commands.inject(Command.Read)
+        advanceUntilIdle()
+        assertTrue(f.speaker.said.none { it == TestPhrasebook.readingWholeView })
+    }
+
+    @Test
     fun `read pins the text in the room where the wearer looks, but never the no-text sentinel`() = controllerTest { f ->
         startAndSettle(f)
         f.engine.cannedText = listOf("Meeting rooms", "Floor 2")
@@ -1064,6 +1100,7 @@ private object TestPhrasebook : ModePhrasebook {
     override val welcome = "<cue:welcome>"
     override val busy = "<cue:busy>"
     override val inferenceFailed = "<cue:inferenceFailed>"
+    override val readingWholeView = "<cue:readingWholeView>"
     override val doorNotFound = "<cue:doorNotFound>"
     override val navigationUnavailable = "<cue:navigationUnavailable>"
     override val holdStill = "<cue:holdStill>"

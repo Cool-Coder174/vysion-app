@@ -53,6 +53,12 @@ class FakeInferenceEngine(
     /** Calls to [readText], for the OCR-first tests. */
     var readTextCalls: Int = 0
 
+    /** What [readTextIn] returns: `null` (the default) plays "regions not supported", so Read reads the whole frame. */
+    var cannedRegionText: List<String>? = null
+
+    /** Regions passed to [readTextIn], for the reading-crosshair tests. */
+    val readRegions: MutableList<NormalizedBox> = mutableListOf()
+
     /**
      * When set, every [describeStreaming] plays a VLM decoding tokens: [describeDelayMs] of prefill, then these chunks
      * [streamChunkDelayMs] apart, all inside the mutex like the real engine, instead of the canned answer's sentences.
@@ -208,6 +214,11 @@ class FakeInferenceEngine(
     override suspend fun readText(bitmap: Bitmap): List<String>? = mutex.withLock {
         readTextCalls++
         cannedText
+    }
+
+    override suspend fun readTextIn(bitmap: Bitmap, region: NormalizedBox): List<String>? = mutex.withLock {
+        readRegions += region
+        cannedRegionText
     }
 
     override suspend fun release() {

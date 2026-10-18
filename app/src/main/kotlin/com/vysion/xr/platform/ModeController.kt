@@ -376,7 +376,7 @@ class ModeController(
             val capturedAtNanos = if (event != null) System.nanoTime() else null
             _state.value = ModeState.INFERRING
             // FR-T1: an OCR model reads in well under a second; the VLM reads only when none is loaded.
-            val lines = if (mode == Mode.TEXT_READER && prompt == prompts.read) engine.readText(still) else null
+            val lines = if (mode == Mode.TEXT_READER && prompt == prompts.read) readUnderCrosshair(still) else null
             val ocrText = when {
                 lines == null -> null
                 lines.isEmpty() -> prompts.noTextSentinel
@@ -403,6 +403,20 @@ class ModeController(
                 if (wasRunning) navigation.resume() // ADR-0004
             }
         }
+    }
+
+    /**
+     * Augmented Read: the text inside the reading crosshair ([ReadingFrame.stillBox]), so the wearer chooses what is
+     * read by pointing their head. When the crosshair holds no text, the whole view is read after a short cue, so a
+     * wearer who cannot aim still hears every sign in front of them. An engine without regions (`null`) reads the
+     * whole frame as before, without the cue.
+     */
+    private suspend fun readUnderCrosshair(still: Bitmap): List<String>? {
+        val framed = engine.readTextIn(still, ReadingFrame.stillBox)
+        if (!framed.isNullOrEmpty()) return framed
+        val whole = engine.readText(still) ?: return framed
+        if (framed != null && whole.isNotEmpty()) say(phrasebook.readingWholeView)
+        return whole
     }
 
     /** FR-N3 / RK-6: two stills, two answers, agreement required; then anchor and guide. */

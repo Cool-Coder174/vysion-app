@@ -81,6 +81,17 @@ class XrAnchorStoreTest {
     }
 
     @Test
+    fun `the crosshair distance is the head-to-hit length along the gaze`() = runTest {
+        val source = FakePerceptionSource()
+        assertNull(GazeGeometry.distanceAlongGaze(source))
+        source.headPose.value = head(x = 1f, z = 0f, pitchDeg = -20f)
+        assertNull(GazeGeometry.distanceAlongGaze(source)) // no depth there
+        source.depthPoint = Vec3(1f, 0f, -3f)
+        assertEquals(3f, GazeGeometry.distanceAlongGaze(source)!!, 1e-4f)
+        assertEquals(listOf(-20f), source.sampledPitchDeg.takeLast(1))
+    }
+
+    @Test
     fun `gaze geometry matches the head pose conventions`() {
         val o = Vec3(0f, 1.6f, 0f)
         val ahead = GazeGeometry.pointAlong(o, 0f, 0f, 2f)

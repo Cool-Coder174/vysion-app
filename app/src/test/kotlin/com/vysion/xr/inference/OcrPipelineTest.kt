@@ -8,6 +8,21 @@ import org.junit.Test
 class OcrPipelineTest {
 
     @Test
+    fun `crop copies the crosshair's pixels row by row and never comes back empty`() {
+        val w = 10
+        val h = 8
+        val argb = IntArray(w * h) { it } // pixel value = its index
+        val c = OcrPipeline.crop(argb, w, h, 0.2f, 0.25f, 0.6f, 0.75f)
+        assertEquals(4, c.width)
+        assertEquals(4, c.height)
+        assertEquals(2 * w + 2, c.argb[0]) // (x 2, y 2)
+        assertEquals(5 * w + 5, c.argb[c.argb.size - 1]) // (x 5, y 5)
+        val tiny = OcrPipeline.crop(argb, w, h, 0.5f, 0.5f, 0.5f, 0.5f)
+        assertEquals(1, tiny.width)
+        assertEquals(1, tiny.height)
+    }
+
+    @Test
     fun `detector input snaps to multiples of 32, keeps the long side under the cap and normalizes ImageNet`() {
         val white = IntArray(640 * 480) { 0xFFFFFFFF.toInt() }
         val input = OcrPipeline.detInput(white, 640, 480, minSide = 640, maxSide = 960, multiple = 32)

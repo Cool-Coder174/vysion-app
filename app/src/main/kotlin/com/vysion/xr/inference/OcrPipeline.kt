@@ -21,6 +21,26 @@ internal object OcrPipeline {
         val height: Int get() = bottom - top
     }
 
+    /** A cropped copy of the source pixels (local to one call, INV-3). */
+    class Crop(val argb: IntArray, val width: Int, val height: Int)
+
+    /**
+     * The pixels inside the normalized rectangle [left]..[right] × [top]..[bottom] of a [srcW] × [srcH] ARGB frame
+     * (the reading crosshair). At least one pixel each way; values outside 0..1 are clamped.
+     */
+    fun crop(argb: IntArray, srcW: Int, srcH: Int, left: Float, top: Float, right: Float, bottom: Float): Crop {
+        require(srcW > 0 && srcH > 0 && argb.size >= srcW * srcH) { "bad source $srcW x $srcH" }
+        val x0 = (left.coerceIn(0f, 1f) * srcW).toInt().coerceIn(0, srcW - 1)
+        val y0 = (top.coerceIn(0f, 1f) * srcH).toInt().coerceIn(0, srcH - 1)
+        val x1 = (right.coerceIn(0f, 1f) * srcW).roundToInt().coerceIn(x0 + 1, srcW)
+        val y1 = (bottom.coerceIn(0f, 1f) * srcH).roundToInt().coerceIn(y0 + 1, srcH)
+        val w = x1 - x0
+        val h = y1 - y0
+        val out = IntArray(w * h)
+        for (y in 0 until h) System.arraycopy(argb, (y0 + y) * srcW + x0, out, y * w, w)
+        return Crop(out, w, h)
+    }
+
     /** The detector input and how to map its pixels back to the source image. */
     class DetInput(val chw: FloatArray, val width: Int, val height: Int, val scaleX: Float, val scaleY: Float)
 

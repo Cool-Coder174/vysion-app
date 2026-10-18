@@ -202,4 +202,11 @@ internal object GazeGeometry {
         )
         return origin + dir * distanceM
     }
+
+    /** Meters from the head to the depth hit straight along the gaze (yaw and pitch); `null` without either. */
+    suspend fun distanceAlongGaze(source: PerceptionSource): Float? {
+        val head = source.headPose.value?.takeIf { it.tracking == Tracking.TRACKING } ?: return null
+        val hit = source.sampleDepthAlongBearing(head.yawDeg, head.pitchDeg) ?: return null
+        return (hit - head.position).length
+    }
 }

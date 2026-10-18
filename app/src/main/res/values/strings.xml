@@ -17,6 +17,7 @@
     <string name="a11y_diagnostics_toggle">Toggle diagnostics overlay</string>
     <string name="a11y_transcript_panel">Transcript</string>
     <string name="a11y_stop_button">Stop speaking</string>
+    <string name="a11y_crosshair">Reading crosshair. Point your head at the text to read.</string>
     <string name="a11y_status_window">Vysion status</string>
     <string name="a11y_mode_rail">Modes</string>
     <string name="a11y_shutter_run">%1$s. Double-tap to run.</string>

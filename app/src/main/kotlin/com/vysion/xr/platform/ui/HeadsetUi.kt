@@ -85,14 +85,14 @@ import java.util.Locale
 
 /** The status window: the glass card and its animated content. Width is set by the caller. */
 @Composable
-fun StatusWindow(shell: ShellState, type: VysionType, modifier: Modifier = Modifier) {
+fun StatusWindow(shell: ShellState, type: VysionType, modifier: Modifier = Modifier, compact: Boolean = false) {
     val reduceMotion = LocalReduceMotion.current
     val label = stringResource(R.string.a11y_status_window)
     Box(
         modifier = modifier
             .glass(RoundedCornerShape(Radius.window))
             .semantics { contentDescription = label }
-            .padding(horizontal = 44.dp, vertical = 40.dp),
+            .padding(horizontal = if (compact) 36.dp else 44.dp, vertical = if (compact) 28.dp else 40.dp),
     ) {
         // Screens of the same kind (two answers, two bearings) update in place; a change of kind materializes.
         AnimatedContent(
@@ -100,7 +100,7 @@ fun StatusWindow(shell: ShellState, type: VysionType, modifier: Modifier = Modif
             contentKey = { ScreenKey.of(it) },
             transitionSpec = { screenTransition(reduceMotion) },
             label = "status",
-        ) { screen -> ScreenContent(shell, screen, type) }
+        ) { screen -> ScreenContent(shell, screen, type, compact) }
     }
 }
 
@@ -134,12 +134,13 @@ private fun screenTransition(reduceMotion: Boolean): ContentTransform =
     }
 
 @Composable
-private fun ScreenContent(shell: ShellState, screen: HeadsetScreen, type: VysionType) {
+private fun ScreenContent(shell: ShellState, screen: HeadsetScreen, type: VysionType, compact: Boolean) {
     Column(verticalArrangement = Arrangement.spacedBy(Space.l)) {
         when (screen) {
             HeadsetScreen.Ready -> {
                 Header(Badge.ORB, stringResource(R.string.status_ready), stringResource(R.string.status_ready_sub), type)
-                Text(stringResource(R.string.status_ready_body), color = Ink.primary, style = type.prompt)
+                // Compact (the headset HUD): the commands as a line of body text, not a headline, so Ready stays small.
+                Text(stringResource(R.string.status_ready_body), color = Ink.primary, style = if (compact) type.body else type.prompt)
                 Footnote(stringResource(R.string.status_ready_foot), type)
             }
             HeadsetScreen.Listening -> {

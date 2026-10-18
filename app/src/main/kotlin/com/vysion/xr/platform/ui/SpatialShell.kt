@@ -1,5 +1,8 @@
 package com.vysion.xr.platform.ui
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -27,7 +31,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -55,17 +61,21 @@ import androidx.xr.compose.subspace.layout.height
 import androidx.xr.compose.subspace.layout.movable
 import androidx.xr.compose.subspace.layout.offset
 import androidx.xr.compose.subspace.layout.width
+import androidx.xr.compose.subspace.layout.rotate
 import androidx.xr.compose.unit.DpVolumeOffset
 import androidx.xr.runtime.DeviceTrackingMode
 import androidx.xr.runtime.Session
 import androidx.xr.scenecore.SpatialCapability
+import androidx.xr.scenecore.Space as SceneSpace
 import androidx.xr.scenecore.scene
 import com.vysion.xr.AppGraph
 import com.vysion.xr.BuildConfig
 import com.vysion.xr.R
 import com.vysion.xr.core.Command
 import com.vysion.xr.core.CommandSource
+import com.vysion.xr.core.Mode
 import com.vysion.xr.platform.WorldLabel
+import com.vysion.xr.platform.ReadingFrame
 import com.vysion.xr.platform.ui.components.PillButton
 import com.vysion.xr.platform.ui.components.PillStyle
 import com.vysion.xr.platform.ui.components.glass
@@ -78,6 +88,8 @@ import com.vysion.xr.platform.ui.theme.SpatialType
 import com.vysion.xr.platform.ui.theme.Target
 import com.vysion.xr.platform.ui.theme.VysionIcons
 import com.vysion.xr.platform.ui.theme.rememberReduceMotion
+import com.vysion.xr.platform.ui.theme.vysionSpring
+import com.vysion.xr.platform.ui.theme.vysionSpring
 import kotlin.math.abs
 import kotlinx.coroutines.launch
 
@@ -145,13 +157,24 @@ private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composa
 
     val doorWord = stringResource(R.string.overlay_door)
     val lastSeenWord = stringResource(R.string.overlay_last_seen)
+    var statusHeight by remember { mutableStateOf(STATUS_MIN_HEIGHT) }
     WorldLabelLayer(graph)
-    FollowingWearer(session) {
+    // The Read page aims with the head: the crosshair marks what "read" will read.
+    ReadingCrosshair(graph, session, visible = gesturePage == Mode.TEXT_READER && obstacle == null)
+    // The HUD hangs below the line of sight (its top edge, whatever its height), so the middle of the view stays the room.
+    FollowingWearer(session, drop = HUD_TOP_BELOW_EYE_LINE + statusHeight / 2) {
         // The status window stays centered in front of the wearer; the diagnostics window and the outline layer open
         // beside it without moving it (a SpatialRow centered the whole row, so opening diagnostics pushed the window
         // left). The rail and toolbar float just outside its edges, never over its text.
         SpatialBox {
-            AutoHeightPanel(width = STATUS_WIDTH, min = 300.dp, max = 980.dp) {
+            AutoHeightPanel(
+                width = STATUS_WIDTH,
+                min = STATUS_MIN_HEIGHT,
+                max = STATUS_MAX_HEIGHT,
+                // Tilted back so a window below eye level faces the eyes instead of the floor.
+                modifier = SubspaceModifier.rotate(pitch = -HUD_TILT_DEG),
+                onHeight = { statusHeight = it },
+            ) {
                 if (obstacle != null) {
                     ObstacleCard(
                         alert = obstacle,
@@ -162,7 +185,7 @@ private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composa
                         modifier = Modifier.fillMaxWidth(),
                     )
                 } else {
-                    StatusWindow(shell, SpatialType, Modifier.fillMaxWidth())
+                    StatusWindow(shell, SpatialType, Modifier.fillMaxWidth(), compact = true)
                 }
                 Orbiter(OrbiterPosition.CenterStart(OrbiterPosition.EdgeAlignment.Outside, DpVolumeOffset(-ORBITER_GAP, 0.dp, 0.dp))) {
                     ModeRail(
@@ -230,19 +253,19 @@ private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composa
 
 /**
  * Augmented: the main window travels with the wearer (soft follow, position and turning only, never tilt or roll)
- * and sits below eye level, so it stays in reach while walking without covering the sign being read. Head-locked
- * following needs `DeviceTrackingMode.SPATIAL` (configured by the perception session); without it the window stays
- * where it opened, as before, instead of not appearing at all.
+ * and hangs [drop] below eye level, like a heads-up display, so it stays in reach while walking without covering the
+ * sign being read. Head-locked following needs `DeviceTrackingMode.SPATIAL` (configured by the perception session);
+ * without it the window stays where it opened, as before, instead of not appearing at all.
  */
 @OptIn(ExperimentalFollowingSubspaceApi::class)
 @Composable
-private fun FollowingWearer(session: Session?, content: @Composable @SubspaceComposable SpatialBoxScope.() -> Unit) {
+private fun FollowingWearer(session: Session?, drop: Dp, content: @Composable @SubspaceComposable SpatialBoxScope.() -> Unit) {
     val tracked = session != null && session.config.deviceTracking != DeviceTrackingMode.DISABLED
     if (tracked) {
         FollowingSubspace(
             target = FollowTarget.ArDevice(session!!),
             behavior = FollowBehavior.Soft(FOLLOW_DURATION_MS),
-            modifier = SubspaceModifier.offset(y = -BELOW_EYE_LINE),
+            modifier = SubspaceModifier.offset(y = -drop),
             dimensions = TrackedDimensions(
                 isTranslationXTracked = true,
                 isTranslationYTracked = true,
@@ -255,6 +278,78 @@ private fun FollowingWearer(session: Session?, content: @Composable @SubspaceCom
         )
     } else {
         Subspace(content = content)
+    }
+}
+
+/**
+ * Augmented Read: a crosshair locked to the head, in the middle of the view, framing the [ReadingFrame] the camera
+ * reads, so the wearer points their head at the sign they want read. It sits at the depth of the surface under it
+ * (R3 depth along the gaze, a few times a second) so the eyes do not have to refocus between the frame and the text;
+ * without depth it keeps its last distance. Its size follows the distance, so it always covers the same 30° × 20°.
+ *
+ * `FollowingSubspace` with `FollowTarget.ArDevice` places content [HEAD_LOCK_DEPTH_M] in front of the head and scales
+ * the whole subspace by the system's recommended scale (the key entity's scale), so both are divided out here.
+ * `FollowBehavior.Tight` is not allowed with `ArDevice`; the minimum soft follow (100 ms) is the closest to locked.
+ */
+@OptIn(ExperimentalFollowingSubspaceApi::class)
+@Composable
+private fun ReadingCrosshair(graph: AppGraph, session: Session?, visible: Boolean) {
+    if (!visible || session == null || session.config.deviceTracking == DeviceTrackingMode.DISABLED) return
+    val sampled by graph.gazeDistanceM.collectAsStateWithLifecycle(initialValue = null)
+    var target by remember { mutableFloatStateOf(CROSSHAIR_DEFAULT_M) }
+    LaunchedEffect(sampled) { sampled?.let { target = it.coerceIn(CROSSHAIR_MIN_M, CROSSHAIR_MAX_M) } }
+    val reduceMotion = LocalReduceMotion.current
+    val distance by animateFloatAsState(
+        targetValue = target,
+        animationSpec = if (reduceMotion) snap() else vysionSpring(response = 0.3f),
+        label = "crosshair distance",
+    )
+    val density = LocalDensity.current
+    val pixelsPerMeter = remember(session) { session.scene.virtualPixelDensity.pixelsPerMeter }
+    val scale = remember(session) {
+        runCatching { session.scene.keyEntity?.getScale(relativeTo = SceneSpace.ACTIVITY) }.getOrNull()?.takeIf { it > 0f } ?: 1f
+    }
+    fun meters(m: Float): Dp = with(density) { (m / scale * pixelsPerMeter).toDp() }
+    FollowingSubspace(
+        target = FollowTarget.ArDevice(session),
+        behavior = FollowBehavior.Soft(FollowBehavior.MIN_SOFT_DURATION_MS),
+        modifier = SubspaceModifier.offset(z = -(meters(distance) - meters(HEAD_LOCK_DEPTH_M * scale))),
+    ) {
+        SpatialPanel(SubspaceModifier.width(meters(ReadingFrame.widthAt(distance))).height(meters(ReadingFrame.heightAt(distance)))) {
+            CrosshairFrame()
+        }
+    }
+}
+
+/** Four corner brackets and a center mark; strokes are fractions of the frame, so they keep their angular weight. */
+@Composable
+private fun CrosshairFrame() {
+    val label = stringResource(R.string.a11y_crosshair)
+    Canvas(Modifier.fillMaxSize().semantics { contentDescription = label }) {
+        val stroke = size.minDimension * CROSSHAIR_STROKE
+        val arm = size.minDimension * CROSSHAIR_ARM
+        val inset = stroke * 1.5f
+        val l = inset
+        val t = inset
+        val r = size.width - inset
+        val b = size.height - inset
+        val corners = listOf(
+            Offset(l, t) to Offset(1f, 1f),
+            Offset(r, t) to Offset(-1f, 1f),
+            Offset(l, b) to Offset(1f, -1f),
+            Offset(r, b) to Offset(-1f, -1f),
+        )
+        val c = center
+        val tick = arm * 0.45f
+        // A dark halo under every stroke keeps the frame visible over a white wall and a dark doorway alike.
+        for ((color, width) in listOf(CROSSHAIR_HALO to stroke * 2.2f, Accent.yellow to stroke)) {
+            for ((corner, dir) in corners) {
+                drawLine(color, corner, corner + Offset(arm * dir.x, 0f), width, StrokeCap.Round)
+                drawLine(color, corner, corner + Offset(0f, arm * dir.y), width, StrokeCap.Round)
+            }
+            drawLine(color, c - Offset(tick, 0f), c + Offset(tick, 0f), width, StrokeCap.Round)
+            drawLine(color, c - Offset(0f, tick), c + Offset(0f, tick), width, StrokeCap.Round)
+        }
     }
 }
 
@@ -316,7 +411,14 @@ private fun ReadCard(text: String) {
  * back for Ready). The content is measured unbounded and the panel resized within [min]..[max].
  */
 @Composable
-private fun AutoHeightPanel(width: Dp, min: Dp, max: Dp, modifier: SubspaceModifier = SubspaceModifier, content: @Composable () -> Unit) {
+private fun AutoHeightPanel(
+    width: Dp,
+    min: Dp,
+    max: Dp,
+    modifier: SubspaceModifier = SubspaceModifier,
+    onHeight: (Dp) -> Unit = {},
+    content: @Composable () -> Unit,
+) {
     var height by remember { mutableStateOf(min) }
     val density = LocalDensity.current
     SpatialPanel(
@@ -330,7 +432,10 @@ private fun AutoHeightPanel(width: Dp, min: Dp, max: Dp, modifier: SubspaceModif
                 .wrapContentHeight(align = Alignment.Top, unbounded = true)
                 .onSizeChanged { size ->
                     val measured = with(density) { size.height.toDp() }.coerceIn(min, max)
-                    if (abs((measured - height).value) > 1f) height = measured
+                    if (abs((measured - height).value) > 1f) {
+                        height = measured
+                        onHeight(measured)
+                    }
                 },
         ) { content() }
     }
@@ -381,7 +486,10 @@ private fun setPassthrough(session: Session, opacity: Float) {
     }
 }
 
-private val STATUS_WIDTH = 1040.dp
+/** A heads-up display, not a monitor: about two thirds of Android XR's default panel, so the room stays the view. */
+private val STATUS_WIDTH = 820.dp
+private val STATUS_MIN_HEIGHT = 240.dp
+private val STATUS_MAX_HEIGHT = 720.dp
 
 /** Space between the status window and its rail / toolbar orbiters. */
 private val ORBITER_GAP = 20.dp
@@ -392,8 +500,22 @@ private val SIDE_GAP = 48.dp
 /** Soft follow: the window catches up with the wearer's head in about half a second, not instantly. */
 private const val FOLLOW_DURATION_MS = 600
 
-/** The following window sits this far below the line of sight, leaving the view of signs and doors clear. */
-private val BELOW_EYE_LINE = 220.dp
+/** The HUD's top edge sits this far below the line of sight, leaving the middle of the view to the room. */
+private val HUD_TOP_BELOW_EYE_LINE = 140.dp
+
+/** Backward tilt of the HUD so it faces eyes that look down at it (degrees, top edge away from the wearer). */
+private const val HUD_TILT_DEG = 12f
+
+/** `FollowTarget.ArDevice`'s built-in distance in front of the head (Compose for XR 1.0.0-beta01 `DEFAULT_OFFSET`). */
+private const val HEAD_LOCK_DEPTH_M = 0.5f
+
+/** The crosshair before any depth arrives, and the range it may move in (closer than arm's length is never text). */
+private const val CROSSHAIR_DEFAULT_M = 1.5f
+private const val CROSSHAIR_MIN_M = 0.7f
+private const val CROSSHAIR_MAX_M = 4f
+private const val CROSSHAIR_STROKE = 0.018f
+private const val CROSSHAIR_ARM = 0.16f
+private val CROSSHAIR_HALO = Color.Black.copy(alpha = 0.55f)
 
 private val DOOR_LABEL_WIDTH = 520.dp
 private val DOOR_LABEL_HEIGHT = 180.dp

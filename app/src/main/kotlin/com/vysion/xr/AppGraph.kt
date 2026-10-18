@@ -21,6 +21,7 @@ import com.vysion.xr.inference.ExecuTorchInferenceEngine
 import com.vysion.xr.inference.FakeInferenceEngine
 import com.vysion.xr.inference.LibraryPromptSet
 import com.vysion.xr.inference.ModelCatalog
+import com.vysion.xr.perception.GazeGeometry
 import com.vysion.xr.perception.NoOpAnchorStore
 import com.vysion.xr.perception.NoOpHeadPoseSource
 import com.vysion.xr.perception.NoOpHandGestures
@@ -47,7 +48,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 
 /**
@@ -170,6 +175,20 @@ class AppGraph(private val app: Application) {
      */
     fun anchorSpace(id: AnchorId): AnchorSpace? = perception?.anchorSpaceFor(id)
 
+    /**
+     * The reading crosshair's depth (augmented layer): meters from the head to the surface straight along the gaze, from
+     * R3's depth map, a few times a second while collected. `null` off the headset, without head tracking, or where no
+     * trusted depth exists; the crosshair then keeps its last distance.
+     */
+    val gazeDistanceM: Flow<Float?> = perception?.let { session ->
+        flow {
+            while (true) {
+                emit(runCatching { session.gazeDistanceM() }.getOrNull())
+                delay(GAZE_SAMPLE_MS)
+            }
+        }
+    } ?: flowOf(null)
+
     /** Hand gestures → the same commands as voice and panels (`platform.GestureCommands`). */
     val gestureCommands: GestureCommands =
         GestureCommands(handGestures, commandBus, speaker, phrasebook, modeController.mode, scope)
@@ -236,3 +255,8 @@ class AppGraph(private val app: Application) {
 
 /** Same tag as `MainActivity`'s recovered-failure lines (docs/nfr.md reliability evidence). */
 private const val RELIABILITY_TAG = "vysion.reliability"
+
+/** How often the reading crosshair re-measures the distance to what the wearer looks at. */
+private const val GAZE_SAMPLE_MS = 200L
+
+private suspend fun XrPerceptionSession.gazeDistanceM(): Float? = GazeGeometry.distanceAlongGaze(this)

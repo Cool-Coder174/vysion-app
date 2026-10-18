@@ -45,14 +45,17 @@ The app is an augmented experience: the room stays visible and the UI lives in i
 
 | Piece | How | Status |
 |---|---|---|
-| Window follows the wearer | `FollowingSubspace(FollowTarget.ArDevice, FollowBehavior.Soft(600 ms))`, yaw and position only, 220 dp below eye line; needs head tracking on (`DeviceTrackingMode.SPATIAL`), else a fixed `Subspace` | ✓ seen on the worn headset |
+| HUD, not a monitor | The status window follows the wearer (`FollowingSubspace(FollowTarget.ArDevice, FollowBehavior.Soft(600 ms))`, yaw and position only), 820 dp wide (was 1040), its top edge 140 dp below the line of sight whatever its height, tilted back 12° to face eyes looking down; Ready shows the commands as body text, not a headline. Without head tracking it stays where it opened | following ✓ seen worn; the smaller, lower, tilted HUD not yet |
+| Reading crosshair | Read page only: corner brackets and a center mark locked to the head (`ArDevice` + the minimum 100 ms soft follow; `Tight` is not allowed with `ArDevice`), covering 30° × 20°. It sits at the depth of the surface under it (R3 depth along the gaze, 5 times a second) so the eyes do not refocus. Read sends only that part of the still to OCR (`InferenceEngine.readTextIn`, the middle 43 % × 28 % of the 63.6° still); with no text there it says so and reads the whole view | built and unit-tested; not yet seen worn. The camera's tilt against the line of sight is not measured (assumed 0°) |
 | Door marker at the door | Find the door creates an anchor (R3), the marker is a panel in `FollowingSubspace(FollowTarget.Anchor(AnchorSpace), Tight)`; anchors face the wearer so the label is readable | built; not seen yet (the test run found no door) |
 | Read card at the sign | `AnchorStore.placeAtGaze()`: depth along the head's yaw AND pitch, else 1 m along the gaze; the text is pinned there in large yellow type | built and unit-tested; not yet seen on a worn headset (the first build used a level ray, which missed a sign below eye level) |
 
-Geospatial (the Maps Immersive View tour guide): `XrDevice.isGeospatialModeSupported` returned
-`spatial=false, vpsAndGps=false` on the Galaxy XR (SM-I610, 2026-10-17). It also needs the network (VPS, Maps tiles),
-which ADR-0003 forbids, and Immersive View is not an embeddable SDK. So it is not built. Offline alternative, if wanted:
-GPS bearing to a saved latitude/longitude feeding the existing spatial ping.
+Geospatial (the Maps Immersive View tour guide): `XrDevice.isGeospatialModeSupported` printed
+`spatial=false, vpsAndGps=false` on the Galaxy XR (SM-I610, 2026-10-17), but that probe turned any exception into
+`false` and ran without the network permission. Network is now allowed (ADR-0010) and the probe logs the exception
+instead; re-run it on a worn headset before deciding. Real Geospatial would also need location permission and a
+Google Cloud API key, and its fallback is the existing on-device navigation. Immersive View itself is not an
+embeddable SDK.
 
 Next augmented features that stay on device: ARCore for Jetpack XR rc02 tracks QR codes (data + pose), which could
 label doors ("Room 204") without a model; anchor persistence could remember a door between sessions.
