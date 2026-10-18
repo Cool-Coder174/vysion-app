@@ -151,6 +151,32 @@ class SpeechCommandBusTest {
     }
 
     @Test
+    fun `end of speech from the port moves to PROCESSING and the cap no longer cancels a slow transcription`() = runTest {
+        val port = FakeRecognizerPort()
+        val bus = bus(port)
+        val received = mutableListOf<CommandEvent>()
+        val collector = launch { bus.commands.toList(received) }
+        runCurrent()
+        bus.startListening()
+        advanceTimeBy(SpeechCommandBus.LISTENING_CAP_MS - 1_000)
+        port.listener!!.onEndOfSpeech() // the VAD ended the clip; Whisper is still working
+        assertEquals(ListeningState.PROCESSING, bus.state.value)
+        advanceTimeBy(SpeechCommandBus.LISTENING_CAP_MS)
+        runCurrent()
+        assertEquals(0, port.cancelCalls)
+        assertEquals(ListeningState.PROCESSING, bus.state.value)
+        bus.cancelListening() // Cancel only applies while LISTENING
+        assertEquals(0, port.cancelCalls)
+        port.listener!!.onResults(listOf("read this"))
+        runCurrent()
+        collector.cancel()
+        assertEquals(listOf(Command.Read), received.map { it.command })
+        assertEquals(ListeningState.IDLE, bus.state.value)
+        port.listener!!.onEndOfSpeech() // late or duplicate: ignored outside LISTENING
+        assertEquals(ListeningState.IDLE, bus.state.value)
+    }
+
+    @Test
     fun `stopListening moves to PROCESSING and results close the session`() = runTest {
         val port = FakeRecognizerPort()
         val bus = bus(port)

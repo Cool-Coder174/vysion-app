@@ -129,6 +129,62 @@
       "input_height": 0,
       "export": "prebuilt (same repo as ocr)",
       "source_model": "same as ocr"
+    },
+    {
+      "name": "asr",
+      "role": "voice commands on the headset (FR-G2, ADR-0011): Whisper-tiny through AsrModule, methods encoder + text_decoder; the system recognizer is the fallback",
+      "dest": "asr.pte",
+      "url": "https://huggingface.co/larryliu0820/whisper-tiny-ExecuTorch-XNNPACK/resolve/27bc1d878a02272d5206cec3b224a0e3d8682dd4/model.pte",
+      "sha256": "08528b5195c49bd8ca0ea38993bd9e41618da6b426c8c187c0fa9a1f6c387123",
+      "bytes": 230961024,
+      "backend": "XNNPACK",
+      "quantization": "fp32",
+      "input_width": 0,
+      "input_height": 0,
+      "export": "prebuilt by larryliu0820 (optimum-executorch, --recipe xnnpack, no quantization; ExecuTorch 1.2.0a0); ml/export/export_asr.sh rebuilds it with ExecuTorch 1.4.0. Both 8da4w exports failed on the headset: the prebuilt int8/int4 crashed (SIGSEGV), the 1.4.0 one decoded garbage (ADR-0011)",
+      "source_model": "Whisper tiny (OpenAI, MIT; larryliu0820 ExecuTorch export, Apache-2.0)"
+    },
+    {
+      "name": "asr-preprocessor",
+      "role": "16 kHz audio to the 80-bin log-mel features Whisper reads (AsrModule preprocessorPath)",
+      "dest": "asr-preprocessor.pte",
+      "url": "TBD",
+      "sha256": "aab8375812dae3387ed6c97938786e036589c53cf7f6531a373a297e24294b33",
+      "bytes": 78720,
+      "backend": "-",
+      "quantization": "fp32",
+      "input_width": 0,
+      "input_height": 0,
+      "export": "ml/export/export_asr.sh (executorch.extension.audio.mel_spectrogram --feature_size 80 --stack_output --max_audio_len 30, executorch 1.4.0). The prebuilt larryliu0820 one (--max_audio_len 300) planned ~3.6 GB of native memory on its first run on the headset; this one ~0 extra (ADR-0011)",
+      "source_model": "ExecuTorch mel_spectrogram (80 bins, Whisper's)"
+    },
+    {
+      "name": "asr-tokenizer",
+      "role": "tokenizer.json for AsrModule(tokenizerPath)",
+      "dest": "asr-tokenizer.json",
+      "url": "https://huggingface.co/openai/whisper-tiny/resolve/169d4a4341b33bc18d8881c4b69c2e104e1cc0af/tokenizer.json",
+      "sha256": "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566",
+      "bytes": 2480466,
+      "backend": "-",
+      "quantization": "-",
+      "input_width": 0,
+      "input_height": 0,
+      "export": "prebuilt (openai/whisper-tiny, same revision as export_asr.sh)",
+      "source_model": "Whisper tiny tokenizer.json (HF tokenizers format)"
+    },
+    {
+      "name": "vad",
+      "role": "Silero VAD: ends a voice command on silence and skips Whisper when nothing was said (FR-G2, ADR-0011)",
+      "dest": "vad.pte",
+      "url": "https://huggingface.co/younghan-meta/Silero-VAD-ExecuTorch-XNNPACK/resolve/d95a7ae1a7b78ca864bc5df569e0e2a22ce7a17a/silero_vad.pte",
+      "sha256": "3ea394b6712fcebf462cd68cde6e9e5169c55a0df3a20d3713df4122ff022bbe",
+      "bytes": 1257860,
+      "backend": "XNNPACK",
+      "quantization": "fp32",
+      "input_width": 0,
+      "input_height": 0,
+      "export": "prebuilt (ExecuTorch examples/models/silero_vad/export_silero_vad.py --backend xnnpack)",
+      "source_model": "Silero VAD 16 kHz (snakers4, MIT; younghan-meta ExecuTorch export)"
     }
   ]
 }

@@ -46,8 +46,10 @@ import com.vysion.xr.platform.ModeController
 import com.vysion.xr.platform.OnboardingStore
 import com.vysion.xr.platform.PassthroughOverlayRenderer
 import com.vysion.xr.voice.AndroidSpeaker
+import com.vysion.xr.voice.AsrModelFiles
 import com.vysion.xr.voice.CuesPhrasebook
 import com.vysion.xr.voice.SpeechCommandBus
+import com.vysion.xr.voice.WhisperTranscriber
 import androidx.xr.scenecore.AnchorSpace
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -87,7 +89,8 @@ import kotlin.math.roundToInt
  * | R3   | perception.XrAnchorStore / NoOpAnchorStore        | (XrPerceptionSession, HeadPoseSource) / ()    |
  * | R3   | perception.XrNavigationEngine / NoOpNavigationEngine | (XrPerceptionSession, FrameSource, InferenceEngine, AnchorStore, HeadPoseSource, CoroutineScope) / () |
  * | R3   | perception.MapPlaceSource / FakePlaceSource       | (Context, userAgent) / ()                     |
- * | R4   | voice.SpeechCommandBus                            | (Application, CoroutineScope)                 |
+ * | R4   | voice.WhisperTranscriber                          | (() -> AsrModelFiles)                         |
+ * | R4   | voice.SpeechCommandBus                            | (Application, CoroutineScope, WhisperTranscriber?) |
  * | R4   | voice.AndroidSpeaker                              | (Application, CoroutineScope)                 |
  * | R4   | voice.CuesPhrasebook (object, ModePhrasebook)     | bind(Speaker) once                            |
  * | R5   | diagnostics.DiagnosticsCollector                  | (Application, InferenceEngine, FrameSource, CoroutineScope) |
@@ -150,7 +153,20 @@ class AppGraph(private val app: Application) {
 
     // R4 — voice in / out (real on both devices; fakes inject via CommandBus.inject)
     val speaker: Speaker = AndroidSpeaker(app, scope)
-    val commandBus: CommandBus = SpeechCommandBus(app, scope)
+
+    /**
+     * Whisper-tiny on the headset for voice commands (ADR-0011), loaded in the background; the system recognizer
+     * takes over when its files are missing or it fails. `null` with fakes (no model files on an emulator).
+     */
+    val asr: WhisperTranscriber? = if (useFakes) null else WhisperTranscriber {
+        AsrModelFiles(
+            model = modelCatalog.resolve("asr"),
+            preprocessor = modelCatalog.resolve("asr-preprocessor"),
+            tokenizer = modelCatalog.resolve("asr-tokenizer"),
+            vad = runCatching { modelCatalog.resolve("vad") }.getOrNull(),
+        )
+    }
+    val commandBus: CommandBus = SpeechCommandBus(app, scope, asr)
 
     // R3 — perception (XR only). Public so `MainActivity` can hand it the resumed Activity that
     // `Session.create(context = activity)` needs (docs/stack.md D7).

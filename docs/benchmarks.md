@@ -119,6 +119,52 @@ about 30 meters."
 | "where am I" recognized → first spoken word (`vysion.latency: whereami command->first-word`) | not measured (needs a wearer) |
 | Offline (airplane mode): tiles from memory + template | not checked on the device (JVM tests only: `ModeControllerTest`, `CloudDescribeEngineTest`, `CuesTest`) |
 
+## Voice commands (ADR-0011; Whisper-tiny + Silero VAD on the headset)
+
+`scripts/asr_clips.sh`: every phrase in `CommandGrammar.biasingPhrases` (15 English, 14 Spanish) said by three macOS
+voices each (English: Samantha, Reed en-US, Daniel en-GB; Spanish: Paulina es-MX, Reed es-MX, Mónica es-ES), 16 kHz
+mono with 0.5 s of silence before and 1.2 s after: 87 clips. Each runs on the headset through the debug
+`ModelSmokeReceiver --es model asr`: Silero VAD in 32 ms frames until it ends the clip, Whisper on what it kept, then
+`CommandGrammar.parse`. "Right" = the parsed command is the same kind as the parse of the phrase that was said.
+Galaxy XR SM-I610, unworn, debug build installed as a separate package (`com.vysion.xr.asrlab`, so other sessions'
+app was not replaced), development runs, 2026-10-18. Synthetic voices in silence, so these are upper bounds for a
+wearer in a room. Spanish clips run as with the app in Spanish ("in Spanish" said first).
+
+| Path (all fp32 Whisper-tiny, XNNPACK) | English right | Spanish right | Empty answers | Clip end → command: median / p90 / max |
+|---|---|---|---|---|
+| `AsrModule` (Whisper picks its own prompt), WAV file, 300 s preprocessor, pool at 3 threads | 37 / 43 (2 clips unread: smoke bug) | 16 / 41 (1 unread) | 21 | EN 2.43 / 2.59 / 2.99 s · ES 2.31 / 2.85 / 2.98 s |
+| **Shipped:** plain `Module`, prompt in code (en/es, transcribe, no timestamps, suppress blank), language bias 1 toward the app's language, 30 s preprocessor, 4 threads | **41 / 45** | **28 / 42** | 0 | **EN 1.54 / 1.79 / 1.89 s · ES 1.62 / 1.80 / 1.88 s** |
+| Same, language bias 0 | 41 / 45 | 26 / 42 | 0 | EN 1.52 / 1.79 / 1.89 s · ES 1.62 / 1.79 / 1.98 s |
+| Same, the app's language always | 41 / 45 | 28 / 42 | 0 | EN 1.53 / 1.80 / 1.89 s · ES 1.62 / 1.80 / 1.87 s |
+
+Where the time goes (shipped path, 87 clips, `vysion.latency: asr transcribe_ms=… preprocess_ms=… encoder_ms=…
+decode_ms=… steps=…`): log-mel 18 ms median; encoder 0.90 s median (0.89–1.03 s; every clip is padded to 30 s, so a
+short command costs the same); decoding 0.69 s median (87 ms per decoder step, 5–11 steps: 4 prompt + the words).
+Silero VAD 0.56 ms median per 32 ms frame (max 1.38 ms). Whisper load (model, preprocessor, tokenizer JSON, VAD) 2.15–2.19
+s, once per process, in the background.
+
+Speech end → command recognized, by design plus the numbers above (the live microphone path needs a wearer; see
+below): **pinch released or Done tapped** → command = clip end → command, 1.54 s median in English; **Talk button with
+no Done** → the VAD waits 640 ms of silence (every clip: `vad_end_ms - last_speech_ms = 640`), so ≈ 2.2 s median.
+The live port logs `vysion.latency: asr speech_end_to_command_ms=… end=release|silence|cap` on every command.
+
+What it gets wrong (shipped path): English "read that" by one voice heard as "Re-plat.", "say that again" as "See you
+later, good.", "in Spanish" as "It's mad at you.", "what's here" as "Whoops here."; Spanish "lee esto / lee eso" is heard as
+"listo", "leso", "NESTO" or "¿Le eso?" by all three voices (6 of the 14 Spanish misses), and one Spanish voice is
+sometimes decoded as English ("Okay, I am printed."). One miss became a wrong command: "Let me take." parsed as
+`SelectDoor(LEFT)`.
+
+Other checks on the headset, same day:
+
+| Check | Result |
+|---|---|
+| Airplane mode on (`Active default network: none`), 12 clips | transcribed as with Wi-Fi: 1.45–1.63 s; English 5 / 6, Spanish 0 / 6 (all "lee esto / lee eso") |
+| Live microphone (`ModelSmokeReceiver --es model listen` + the clip played through the headset's speaker, app in front, unworn) | **not measured**: `audioserver: App op 27 missing, silencing record` — with nobody wearing the headset Android silences the microphone; the session ran (VAD 5 s, ~1.2 ms per frame) and ended quietly as "no speech". Needs a wearer. |
+| Prebuilt `larryliu0820/whisper-tiny-INT8-INT4` (ExecuTorch 1.2.0a0) | SIGSEGV in the encoder on every clip |
+| `ml/export/export_asr.sh --qlinear 8da4w` (ExecuTorch 1.4.0) | ran; encoder 1.16 s; decoded garbage ("!!!!.!! the!!!", all 64 tokens, 285 ms per token) |
+| Preprocessor `--max_audio_len 300` (model card) vs 30 | native heap 420 MB after load → 4.06 GB after the first clip with 300; stays ~416 MB with 30 |
+| `Module.load` without a thread count (first VAD build) | "Resetting threadpool to 3 threads" on the shared XNNPACK pool the VLM and detector set to 4; fixed by loading with 4 |
+
 ## Thermal soak (`scripts/benchmark.sh --soak 600`)
 
 | Minute | Detector fps | PSS MB | Battery % | Thermal status |

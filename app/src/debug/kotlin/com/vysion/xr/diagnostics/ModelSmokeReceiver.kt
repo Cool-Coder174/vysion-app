@@ -4,6 +4,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.vysion.xr.VysionApplication
 import com.vysion.xr.core.InferenceEngine
@@ -25,6 +27,12 @@ import kotlinx.coroutines.launch
  *     --es model ocr|vlm|detector --es image sign.png [--es prompt "Describe this."]
  * adb logcat -s vysion.smoke vysion.latency vysion
  * ```
+ *
+ * `--es model asr --es image <clip>.wav` runs a voice-command clip through the VAD, Whisper and the grammar
+ * ([AsrSmoke]). `--es model listen --es image x` opens one listening session as the Talk button does (the app
+ * must be in front: Android silences the microphone for background apps); speak, and read
+ * `vysion.latency: asr speech_end_to_command_ms`. With `--es image <clip>.wav` of a clip in `files/smoke/`, the
+ * headset plays it through its own speaker after the earcon, so the microphone path runs with nobody there.
  *
  * `--es model describe [--ez cloud false]` runs Describe exactly as the controller does (`describeScene` with the
  * DESCRIBE prompt, cloud requested by default): the cloud when online and a key is built in, else the headset
@@ -73,7 +81,7 @@ class ModelSmokeReceiver : BroadcastReceiver() {
             return
         }
         val name = intent.getStringExtra(EXTRA_IMAGE)?.takeIf { NAME.matches(it) }
-        val dir = app.getExternalFilesDir(null)?.let { File(it, DIR) }
+        val dir = app.getExternalFilesDir(DIR) // created by the app, so files adb pushes into it stay readable
         if (model !in MODELS || name == null || dir == null) {
             Log.e(TAG, "rejected: model=$model image=${intent.getStringExtra(EXTRA_IMAGE)} (expected ocr|vlm|detector|describe, a plain file name)")
             return
@@ -88,6 +96,22 @@ class ModelSmokeReceiver : BroadcastReceiver() {
                 Log.i(TAG, "tts say returned after ${(System.nanoTime() - t0) / 1_000_000} ms")
                 pending.finish()
             }
+            return
+        }
+        if (model == "listen") { // one listening session, as the Talk button opens it (the app must be in front)
+            Handler(Looper.getMainLooper()).post { app.graph.commandBus.startListening() }
+            Log.i(TAG, "listen: session opened")
+            File(dir, name).takeIf { it.isFile }?.let { AsrSmoke.playAfterEarcon(it) } // the headset hears itself
+            return
+        }
+        if (model == "asr") { // a voice-command clip through VAD, Whisper and the grammar (AsrSmoke)
+            // Held open until the clip is done: a background app whose receiver has returned is frozen by Android's
+            // cached-app freezer within seconds, which stopped a Whisper decode halfway (2026-10-18).
+            val pending = goAsync()
+            Thread({
+                runCatching { AsrSmoke.run(app, File(dir, name)) }.onFailure { Log.e(TAG, "asr on $name failed: $it", it) }
+                pending.finish()
+            }, "vysion-asr-smoke").start()
             return
         }
         if (model == "vlm-probe") {
@@ -238,7 +262,7 @@ class ModelSmokeReceiver : BroadcastReceiver() {
         const val TEST_ACCURACY_M = 30f
         const val DIR = "smoke"
         const val DEFAULT_PROMPT = "Describe what is in front of me in one short sentence."
-        val MODELS = setOf("ocr", "vlm", "detector", "vlm-probe", "tts", "describe", "cloud", "whereami", "ask-whereami")
+        val MODELS = setOf("ocr", "vlm", "detector", "vlm-probe", "tts", "describe", "cloud", "whereami", "ask-whereami", "asr", "listen")
         val NAME = Regex("[A-Za-z0-9._-]{1,64}")
     }
 }

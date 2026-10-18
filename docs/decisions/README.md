@@ -14,3 +14,4 @@ One file per decision, numbered, never edited after acceptance (supersede with a
 | [ADR-0008](ADR-0008-no-di-framework.md) | Manual wiring in `AppGraph`; no Hilt/Koin | accepted (skeleton) |
 | [ADR-0009](ADR-0009-onboarding-flag.md) | One "onboarding finished" flag is the only preference the app writes (amends ADR-0003) | accepted (designs) |
 | [ADR-0010](ADR-0010-network-with-fallback.md) | Network allowed for optional features, each with an on-device fallback (amends ADR-0003) | accepted (2026-10-17) |
+| [ADR-0011](ADR-0011-whisper-voice-commands.md) | Voice commands heard on the headset by Whisper (plain ExecuTorch `Module`, prompt set in code) with Silero VAD; nothing stored; outside the inference `Mutex` (amends ADR-0004) | accepted (2026-10-18) |

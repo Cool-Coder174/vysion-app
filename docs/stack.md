@@ -979,6 +979,24 @@ XR ASR guide (glasses-scoped) https://developer.android.com/develop/xr/jetpack-x
 | Progress | `UtteranceProgressListener` (abstract): `onStart(String)`, `onDone(String)`, `onError(String)` (abstract, deprecated 21 — still must override), `onError(String, Int)` (21), `onStop(String, Boolean interrupted)` (23, fires on `stop()`/QUEUE_FLUSH), `onRangeStart(String, Int start, Int end, Int frame)` (26, only if the engine supplies timing); callbacks "can be called from multiple threads"; `Engine.KEY_PARAM_UTTERANCE_ID = "utteranceId"` |
 | Earcons | `addEarcon(String, String packageName, Int resId)`; `playEarcon(String, Int queueMode, Bundle?, String utteranceId)` (21); `playSilentUtterance(Long ms, Int queueMode, String id)` (21) |
 
+**Whisper on the headset (ADR-0011).** Verified 2026-10-18 with `javap` on the 1.4.0 AAR, the v1.4.0 sources
+(`extension/android/.../asr/AsrModule.kt`, `extension/android/jni/jni_layer_asr.cpp`, `extension/asr/runner/
+seq2seq_runner.cpp`, `extension/llm/runner/wav_loader.h`, `extension/android/jni/jni_layer.cpp`,
+`extension/threadpool/threadpool.cpp`, tokenizers `src/hf_tokenizer.cpp`) and runs on the headset. No new
+dependency. The app drives the `.pte` with plain `Module` (the first three rows), not `AsrModule` (the `AsrModule` rows), so it
+can set Whisper's prompt and keep the audio in memory.
+
+| Fact | Exact |
+|---|---|
+| Methods | `Module.load(path, LOAD_MODE_MMAP, 4)`. Preprocessor `forward(float[N])` (samples / 32767) → `[1, 80, 3000]` log-mel (`--stack_output`; padded to 30 s). Model `encoder([1, 80, 3000])` → `[1, 1500, 384]`; `text_decoder(input_ids: int64 [1, 1], encoder_out, cache_position: int64 [1])` → logits `[1, 1, 51865]`, the KV cache kept inside the module; restart `cache_position` at 0 for each clip. |
+| Prompt | `<\|startoftranscript\|>` 50258, then language (`<\|en\|>` 50259, `<\|es\|>` 50262), `<\|transcribe\|>` 50359, `<\|notimestamps\|>` 50363; `<\|endoftext\|>` 50257; ids ≥ 50257 are special or timestamps. |
+| Threads | `Module.load(path, mode, numThreads)` calls `_unsafe_reset_threadpool(numThreads or cores / 2)` on the ONE global XNNPACK pool (no per-module guard in this build): every module must pass the app's 4, or it resizes the pool under the VLM and the detector. |
+| `AsrModule` (not used) | `org.pytorch.executorch.extension.asr.AsrModule(modelPath: String, tokenizerPath: String, dataPath: String?, preprocessorPath: String?)` (`@Experimental`, `Closeable`); `load(): Int` (0 = ok; otherwise the first `transcribe` loads); `isLoaded`; `close()`. The `.pte` must expose methods `encoder` and `text_decoder`. |
+| `AsrModule.transcribe` | `transcribe(wavPath: String, config: AsrTranscribeConfig?, callback: AsrCallback?): String` — blocking, returns the concatenated decoded tokens, throws `ExecutorchRuntimeException` on a non-zero status. `AsrTranscribeConfig(maxNewTokens: Long, temperature: Float, decoderStartTokenId: Long)`; **set `decoderStartTokenId = 50258`** for Whisper (the default 0 is wrong). `AsrCallback.onToken(String)`. |
+| `AsrModule` audio | A WAV **path** only (no buffer API): RIFF PCM 16-bit or 32-bit, or IEEE float 32-bit; no resampling, so record at 16 kHz mono. The preprocessor `.pte` turns it into `[1, 80, 3000]` log-mel features (every clip is padded to 30 s). |
+| `AsrModule` tokenizer | `tokenizerPath` may be the `tokenizer.json` file itself or a directory holding it; EOS is found as `<\|endoftext\|>`. The output keeps special tokens (`<\|en\|>`, `<\|transcribe\|>`, `<\|notimestamps\|>`, `<\|endoftext\|>`): strip them (`WhisperText.clean`). |
+| Silero VAD | Plain `Module.load(path, LOAD_MODE_MMAP, 4)`, method `forward(x: float[1, 576], state: float[2, 1, 128]) -> (prob [1, 1], state)`; `x` = the previous window's last 64 samples + 512 new samples (32 ms at 16 kHz), scaled to [-1, 1] (ExecuTorch `examples/models/silero_vad`). |
+
 ```kotlin
 // CommandBus: construct ON THE MAIN THREAD (factories require it).
 class CommandBus(private val ctx: Context) {

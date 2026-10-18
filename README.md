@@ -35,7 +35,7 @@ flowchart LR
   subgraph Input
     CAM[World camera<br/>CameraX, id 0]
     AR[ARCore for Jetpack XR<br/>depth · planes · anchors · hands]
-    SR[SpeechRecognizer<br/>on-device]
+    SR[Whisper-tiny + Silero VAD<br/>on-device, ExecuTorch]
   end
   subgraph Control
     MC[ModeController]
@@ -68,7 +68,7 @@ flowchart LR
 | Detector (people, obstacles) | headset CPU | ExecuTorch `Module`, XNNPACK |
 | Depth, planes, anchors, hands, head pose | headset | ARCore for Jetpack XR |
 | Panels, passthrough, spatial audio | headset | Jetpack Compose for XR + SceneCore |
-| Speech in / out | headset | Android `SpeechRecognizer` (on-device) / `TextToSpeech` |
+| Speech in / out | headset | Whisper-tiny on ExecuTorch with Silero VAD (ADR-0011; Android `SpeechRecognizer` as fallback) / `TextToSpeech` |
 | Network | optional features only | `INTERNET` + `ACCESS_NETWORK_STATE` (ADR-0010); every network feature has an on-device fallback, and Read, Describe and Find the door never need it; printed on the overlay. The list of record, with what each one sends, is the ADR-0010 table: opt-in cloud Describe ("cloud on"; Gemini, `GEMINI_API_KEY` in the gitignored `local.properties`, `docs/setup.md` §6b; falls back to the headset VLM), the "where am I" map (FR-N9; falls back to the tiles already in memory and template sentences) and the system recognizer when the on-device one will not bind |
 
 ## Measured numbers
@@ -178,7 +178,7 @@ plan.md         roadmap and gates (engineer-workflow); executor.md: phase specs;
 | Gradle: unsupported class file version | wrong JDK | use JDK 17 (`JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-17.jdk/Contents/Home` on the macOS hosts) |
 | Jetpack XR artifact not found | `google()` repository missing or version typo | compare `gradle/libs.versions.toml` with `docs/stack.md`; run `./gradlew --refresh-dependencies` |
 | No camera frames on the headset | permission not granted, or firmware does not expose camera id 0 | check logcat `vysion` for `camera 0: <w>x<h> <format> at <fps> fps (A-1 evidence)`; see A-1 fallback |
-| Voice commands need Wi-Fi | on-device recognition unavailable | pinch-and-hold and panel buttons are the P0 path; never demo with Wi-Fi on |
+| Voice commands need Wi-Fi | the Whisper files are not sideloaded, so the system recognizer took over (`asr: Whisper files unavailable` in logcat) | `scripts/push_models.sh` (rows `asr`, `asr-preprocessor`, `asr-tokenizer`, `vad`); pinch-and-hold and panel buttons always work |
 | `benchmark.sh` refuses to run | airplane mode off | `adb shell cmd connectivity airplane-mode enable` |
 
 ## Team

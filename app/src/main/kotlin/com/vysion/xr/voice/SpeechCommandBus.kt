@@ -32,7 +32,8 @@ import java.util.Locale
 /**
  * The thin device boundary under [SpeechCommandBus]: exactly what `android.speech.SpeechRecognizer` needs
  * (`docs/stack.md` §3-R4), so the state machine, the 8 s cap and the flow plumbing are unit-tested with a
- * fake. [AndroidRecognizerPort] is the real one.
+ * fake. [WhisperRecognizerPort] (Whisper on the headset, ADR-0011) is the real one, with [AndroidRecognizerPort]
+ * (the system recognizer) as its fallback.
  */
 interface RecognizerPort {
     /**
@@ -56,6 +57,13 @@ interface RecognizerPort {
 
     interface Listener {
         fun onReadyForSpeech()
+
+        /**
+         * The clip ended on its own (silence, or the clip filled up) and the words are being worked out: the bus
+         * shows PROCESSING and stops its cap, so a slow transcription is not cancelled. Ports that deliver results
+         * at the end of speech never call it.
+         */
+        fun onEndOfSpeech() = Unit
 
         /** `RESULTS_RECOGNITION`, most likely first. */
         fun onResults(hypotheses: List<String>)
@@ -297,11 +305,11 @@ class AndroidRecognizerPort(private val app: Application) : RecognizerPort {
 }
 
 /**
- * [CommandBus] over on-device `SpeechRecognizer` (FR-G2 "Voice commands via on-device SpeechRecognizer,
- * started by pinch-and-hold or the panel mic button"; SRS §8 R4 "CommandBus (parsed commands as a flow)",
- * due Sat 15:00). Owner R4. Consumed by R1's `ModeController` ([commands], [state]) and panels
- * ([startListening], [inject]). Constructor `(Application, CoroutineScope)` is the `AppGraph` contract;
- * the internal one takes a [RecognizerPort] so tests drive it with a fake.
+ * [CommandBus] over Whisper on the headset (ADR-0011) or `SpeechRecognizer` (FR-G2 "Voice commands via on-device
+ * SpeechRecognizer, started by pinch-and-hold or the panel mic button"; SRS §8 R4 "CommandBus (parsed commands as a
+ * flow)", due Sat 15:00). Owner R4. Consumed by R1's `ModeController` ([commands], [state]) and panels
+ * ([startListening], [inject]). Constructor `(Application, CoroutineScope, WhisperTranscriber?)` is the `AppGraph`
+ * contract; the internal one takes a [RecognizerPort] so tests drive it with a fake.
  *
  * Plumbing (real, unit-tested):
  * - [commands] is a `MutableSharedFlow(extraBufferCapacity = 8, onBufferOverflow = DROP_OLDEST)` (H-33,
@@ -324,8 +332,16 @@ class SpeechCommandBus internal constructor(
     private val scope: CoroutineScope,
 ) : CommandBus {
 
-    /** The `AppGraph` constructor (ADR-0008). Main thread: `SpeechRecognizer` factories require it. */
-    constructor(app: Application, scope: CoroutineScope) : this(AndroidRecognizerPort(app), Earcons(), scope)
+    /**
+     * The `AppGraph` constructor (ADR-0008). Main thread: `SpeechRecognizer` factories require it. With [asr],
+     * Whisper hears the commands and the system recognizer is the fallback (ADR-0011); without it, the system
+     * recognizer alone (fakes, or a build without the Whisper files).
+     */
+    constructor(app: Application, scope: CoroutineScope, asr: WhisperTranscriber? = null) : this(
+        asr?.let { WhisperRecognizerPort(app, it, AndroidRecognizerPort(app)) } ?: AndroidRecognizerPort(app),
+        Earcons(),
+        scope,
+    )
 
     private val _commands = MutableSharedFlow<CommandEvent>(
         extraBufferCapacity = COMMAND_BUFFER,
@@ -347,6 +363,12 @@ class SpeechCommandBus internal constructor(
     private val listener = object : RecognizerPort.Listener {
         override fun onReadyForSpeech() {
             earcons.play(Earcon.LISTENING) // the audio twin of the panel's "listening" state
+        }
+
+        override fun onEndOfSpeech() {
+            if (_state.value != ListeningState.LISTENING) return
+            capJob?.cancel() // the clip is over; the transcription may take longer than the cap leaves
+            _state.value = ListeningState.PROCESSING
         }
 
         override fun onResults(hypotheses: List<String>) {

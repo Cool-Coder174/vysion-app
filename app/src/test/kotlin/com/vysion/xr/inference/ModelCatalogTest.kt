@@ -71,7 +71,10 @@ class ModelCatalogTest {
         if (!repoLock.isFile) return // running outside the repo layout
         val entries = ModelCatalog.parse(repoLock.readText())
         assertEquals(
-            setOf("vlm", "vlm-tokenizer", "detector", "detector-int8", "ocr", "ocr-charset"),
+            setOf(
+                "vlm", "vlm-tokenizer", "detector", "detector-int8", "ocr", "ocr-charset",
+                "asr", "asr-preprocessor", "asr-tokenizer", "vad",
+            ),
             entries.map { it.name }.toSet(),
         )
         val det = entries.first { it.name == ModelCatalog.DETECTOR }
@@ -81,6 +84,12 @@ class ModelCatalogTest {
         assertEquals(det.classMap, int8.classMap)
         assertEquals(det.outputLayout, int8.outputLayout)
         assertEquals(det.inputWidth to det.inputHeight, int8.inputWidth to int8.inputHeight)
+        // AppGraph resolves these four for Whisper voice commands (ADR-0011); each is pinned by size and sha256.
+        listOf("asr", "asr-preprocessor", "asr-tokenizer", "vad").forEach { name ->
+            val row = entries.first { it.name == name }
+            assertTrue("$name sha256", row.hasSha256)
+            assertTrue("$name bytes", row.hasBytes)
+        }
         val vlm = entries.first { it.name == "vlm" }
         assertTrue("{prompt}" in vlm.chatTemplate)
         assertEquals(512, vlm.inputWidth)

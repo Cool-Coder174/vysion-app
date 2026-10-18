@@ -9,7 +9,7 @@ flowchart TB
   subgraph Input["Input (native Android XR)"]
     CAM["World camera<br/>Camera2/CameraX, camera id 0<br/>640x480 stream + still capture"]
     AR["ARCore for Jetpack XR<br/>depth, planes, anchors, hands<br/>head pose, hit tests"]
-    SR["Speech in<br/>SpeechRecognizer, on-device<br/>read, describe, guide me, stop"]
+    SR["Speech in<br/>Whisper + Silero VAD, on-device<br/>read, describe, guide me, stop"]
   end
   subgraph Control["Control (Kotlin, coroutines)"]
     MC["ModeController<br/>Idle · Listening · Capturing · Inferring · Speaking<br/>owns one-shot commands"]
