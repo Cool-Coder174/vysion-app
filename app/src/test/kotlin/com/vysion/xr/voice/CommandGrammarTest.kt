@@ -119,6 +119,32 @@ class CommandGrammarTest {
     }
 
     @Test
+    fun `a door choice needs the exact side word, so its common neighbors are not one`() {
+        // Whisper's "Let me take." (a Spanish "repite" decoded as English) was SelectDoor(LEFT) through a fuzzy "left"
+        assertNull(parse("Let me take."))
+        assertNull(parse("Let me take.", es))
+        for (u in listOf("let", "the light", "night", "enter", "the riddle")) assertNull(u, parse(u))
+        for (u in listOf("dentro", "sigue derecho", "media")) assertNull(u, parse(u, es))
+        assertEquals(Command.SelectDoor(HorizontalBearing.LEFT), parse("on the left"))
+        assertEquals(Command.SelectDoor(HorizontalBearing.RIGHT), parse("a la derecha", es))
+    }
+
+    @Test
+    fun `what Whisper-tiny heard for the Spanish commands, an alias only where a false command is cheap`() {
+        // ADR-0011 clip tests (docs/benchmarks.md "Voice commands"): "lee esto / lee eso", "más detalle",
+        // "¿dónde estoy?", "guíame", "para" as Whisper transcribed them on the headset
+        for (u in listOf("leso", "¿Leso?", "LESO", "l'eso", "NESTO", "¿Le eso?")) assertEquals(u, Command.Read, parse(u, es))
+        assertEquals(Command.Detailed, parse("más de tarde", es))
+        assertEquals(Command.WhereAmI, parse("¿Dónde es toy?", es))
+        for (u in listOf("Nielme.", "Ria me.")) assertEquals(u, Command.GuideMe, parse(u, es))
+        assertEquals(Command.Stop, parse("¡Bada!", es))
+        // real words and names are not aliases: "listo" is "ready", and a false Read starts a capture
+        for (u in listOf("listo", "¿Listo?", "Lisa", "estás leso", "más tarde", "de tarde")) assertNull(u, parse(u, es))
+        // Spanish decoded as English: no alias is safe ("qué hay aquí", "qué hay enfrente", "guíame")
+        for (u in listOf("Okay, I am printed.", "Okay, I'll be right here.", "here I bet.")) assertNull(u, parse(u, es))
+    }
+
+    @Test
     fun `wake word and filler are stripped in both spellings`() {
         assertEquals(Command.Read, parse("Vysion, read this"))
         assertEquals(Command.Read, parse("vision read this"))

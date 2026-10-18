@@ -143,9 +143,10 @@ wearer in a room. Spanish clips run as with the app in Spanish ("in Spanish" sai
 | Path (all fp32 Whisper-tiny, XNNPACK) | English right | Spanish right | Empty answers | Clip end → command: median / p90 / max |
 |---|---|---|---|---|
 | `AsrModule` (Whisper picks its own prompt), WAV file, 300 s preprocessor, pool at 3 threads | 37 / 43 (2 clips unread: smoke bug) | 16 / 41 (1 unread) | 21 | EN 2.43 / 2.59 / 2.99 s · ES 2.31 / 2.85 / 2.98 s |
-| **Shipped:** plain `Module`, prompt in code (en/es, transcribe, no timestamps, suppress blank), language bias 1 toward the app's language, 30 s preprocessor, 4 threads | **41 / 45** | **28 / 42** | 0 | **EN 1.54 / 1.79 / 1.89 s · ES 1.62 / 1.80 / 1.88 s** |
+| `c2278a8`: plain `Module`, prompt in code (en/es, transcribe, no timestamps, suppress blank), language bias 1 toward the app's language, 30 s preprocessor, 4 threads | 41 / 45 | 28 / 42 | 0 | EN 1.54 / 1.79 / 1.89 s · ES 1.62 / 1.80 / 1.88 s |
 | Same, language bias 0 | 41 / 45 | 26 / 42 | 0 | EN 1.52 / 1.79 / 1.89 s · ES 1.62 / 1.79 / 1.98 s |
 | Same, the app's language always | 41 / 45 | 28 / 42 | 0 | EN 1.53 / 1.80 / 1.89 s · ES 1.62 / 1.80 / 1.87 s |
+| **Shipped:** the `c2278a8` Whisper path; `CommandGrammar` with the Whisper-tiny aliases and exact door choices (`docs/modules/r4-voice-accessibility.md`, "Whisper-tiny aliases") | **41 / 45** | **36 / 42** | 0 | **EN 1.50 / 1.76 / 1.84 s · ES 1.58 / 1.75 / 1.84 s** |
 
 Where the time goes (shipped path, 87 clips, `vysion.latency: asr transcribe_ms=… preprocess_ms=… encoder_ms=…
 decode_ms=… steps=…`): log-mel 18 ms median; encoder 0.90 s median (0.89–1.03 s; every clip is padded to 30 s, so a
@@ -158,11 +159,19 @@ below): **pinch released or Done tapped** → command = clip end → command, 1.
 no Done** → the VAD waits 640 ms of silence (every clip: `vad_end_ms - last_speech_ms = 640`), so ≈ 2.2 s median.
 The live port logs `vysion.latency: asr speech_end_to_command_ms=… end=release|silence|cap` on every command.
 
-What it gets wrong (shipped path): English "read that" by one voice heard as "Re-plat.", "say that again" as "See you
-later, good.", "in Spanish" as "It's mad at you.", "what's here" as "Whoops here."; Spanish "lee esto / lee eso" is heard as
-"listo", "leso", "NESTO" or "¿Le eso?" by all three voices (6 of the 14 Spanish misses), and one Spanish voice is
-sometimes decoded as English ("Okay, I am printed."). One miss became a wrong command: "Let me take." parsed as
-`SelectDoor(LEFT)`.
+What `c2278a8` got wrong: English "read that" by one voice heard as "Re-plat.", "say that again" as "See you
+later, good.", "in Spanish" as "It's mad at you.", "what's here" as "Whoops here."; Spanish "lee esto / lee eso" heard as
+"listo", "leso", "NESTO" or "¿Le eso?" by all three voices (6 of the 14 Spanish misses), "más detalle" as "más de tarde",
+"¿dónde estoy?" as "¿Dónde es toy?", "guíame" as "Nielme." / "Ria me.", "para" as "¡Bada!", and one Spanish voice
+sometimes decoded as English ("Okay, I am printed."). One miss became a wrong command: "Let me take." (a "repite")
+parsed as `SelectDoor(LEFT)` through a fuzzy "left".
+
+What the shipped grammar still gets wrong (same clips, `com.vysion.xr.asrlab`, 2026-10-18): the four English misses above,
+unchanged (Whisper, not the grammar); Spanish "listo" / "¿Listo?" for "lee esto" (2 voices; "listo" means "ready", so no
+alias: a false Read starts a capture), "Okay, I am printed.", "here I bet." and "Let me take." (Spanish decoded as
+English: now no command instead of `SelectDoor(LEFT)`), and "Was the target?" for "más detalle", which becomes a
+follow-up question to the VLM, the only clip that starts something other than what was said. The aliases were taken from these same 87 clips, so
+36 / 42 is an upper bound for these voices; a wearer's mishearings need a wearer.
 
 Other checks on the headset, same day:
 

@@ -116,21 +116,23 @@ Why: Stop is safety-relevant, so a slip in a bare command must still stop, and a
 
 | Command | English keys (examples) | Spanish keys (examples) | Notes |
 |---|---|---|---|
-| `Stop` | `stop` (Stop tolerance above: "stop", "stop it", "stahp", "stap it"; exact in 3+ tokens) | `detente`, `basta`, `silencio`; `para`, `alto` (exact, ≤ 2 tokens) | first in the table: never shadowed (INV-6); "para"/"alto" are exact and short so "lee esto para mí" stays Read |
+| `Stop` | `stop` (Stop tolerance above: "stop", "stop it", "stahp", "stap it"; exact in 3+ tokens) | `detente`, `basta`, `silencio`; `para`, `alto`, `bada` (exact, ≤ 2 tokens) | first in the table: never shadowed (INV-6); "para"/"alto" are exact and short so "lee esto para mí" stays Read |
 | `FindDoor` | `find`+`door`, `where`+`door`, `find`+`exit`, `where`+`exit`; `door`, `exit` (≤ 3) | `busca`+`puerta`, `donde`+`puerta`, `encuentra`+`puerta`, `busca`+`salida`; `puerta`, `salida` (≤ 3) | "where is the door?" is a command, not a follow-up |
-| `SelectDoor(LEFT/CENTER/RIGHT)` | `one`+`left`, `door`+`left`, `one`/`door`+`middle`/`center`, `one`/`door`+`right`; `left`, `middle`, `center`, `right` (≤ 3) | `puerta`+`izquierda`/`centro`/`medio`/`derecha`; `izquierda`, `centro`, `medio`, `derecha` (≤ 4) | P2 FR-N7; two-key rows beat FindDoor's single `door` |
-| `Read` | `read` ("read this/it/that", "could you read this please") | `lee` (exact), `leer`, `leelo`, `leeme` ("lee esto", "léelo") | FR-T1; "read the door sign" → Read (door alone needs ≤ 3 tokens) |
+| `SelectDoor(LEFT/CENTER/RIGHT)` | `one`+`left`, `door`+`left`, `one`/`door`+`middle`/`center`, `one`/`door`+`right`; `left`, `middle`, `center`, `right` (≤ 3); all exact | `puerta`+`izquierda`/`centro`/`medio`/`derecha`; `izquierda`, `centro`, `medio`, `derecha` (≤ 4); all exact | P2 FR-N7; two-key rows beat FindDoor's single `door`; exact because a side word is one edit from a common word (let/left, light/right, enter/center, dentro/centro): Whisper's "Let me take." was `SelectDoor(LEFT)` |
+| `Read` | `read` ("read this/it/that", "could you read this please") | `lee` (exact), `leer`, `leelo`, `leeme` ("lee esto", "léelo"); Whisper aliases `leso`, `nesto` (exact, 1 token), `le`+`eso` (exact, ≤ 2) | FR-T1; "read the door sign" → Read (door alone needs ≤ 3 tokens) |
 | `Describe` | `describe`, `around` ("what's around me"), `surroundings` | `describe`, `describeme`, `alrededor`, `que`+`hay` (exact) | FR-D1 |
-| `GuideMe` | `guide`, `navigate`, `navigation` | `guiame`, `guia` (exact), `navega`, `navegacion` | "guide me to the door" → GuideMe (5 tokens, `door` row needs ≤ 3) |
+| `GuideMe` | `guide`, `navigate`, `navigation` | `guiame`, `guia` (exact), `navega`, `navegacion`; Whisper aliases `nielme` (exact, 1 token), `ria`+`me` (exact, ≤ 2) | "guide me to the door" → GuideMe (5 tokens, `door` row needs ≤ 3) |
 | `Repeat` | `repeat`, `again` | `repite`, `repitelo`, `otra`+`vez` (exact), `de`+`nuevo` (exact) | FR-T3 |
 | `Slower` | `slower`, `slowly`, `slow` | `despacio`, `lento` ("más despacio") | FR-T3 → `repeatLast(SLOWER_RATE)` |
 | `InSpanish` | `spanish`, `translate` | `espanol`, `castellano`, `traduce`, `traducelo` | FR-T4 / FR-G6 |
 | `Next` | `next` | `siguiente`, `proxima`, `proximo` | P2 FR-T6 |
 | `Brief` | `brief`, `briefly`, `shorter`, `short` | `breve`, `corto`, `resumen` | P1 FR-D3 |
-| `Detailed` | `detailed`, `detail`, `details`, `longer` | `detallado`, `detalle`, `detalles` | P1 FR-D3 |
+| `Detailed` | `detailed`, `detail`, `details`, `longer` | `detallado`, `detalle`, `detalles`; Whisper alias `mas`+`de`+`tarde` (exact, ≤ 3) | P1 FR-D3 |
 | `CloudDescribe(on)` | `cloud`+`on`, `cloud`+`off` (≤ 4: "cloud on", "turn the cloud off") | `activa`/`enciende`+`nube`, `nube`+`activada`; `desactiva`/`apaga`+`nube`, `nube`+`desactivada` (≤ 4) | ADR-0010; ≤ 4 so "is it cloudy on the left?" stays a follow-up; spoken confirmation `Cues.cloudDescribe(on)` names Google |
 | `FollowUp(question)` | no pattern matched AND (ends with `?` OR first token ∈ what/whats/which/where/who/how/why/when/is/are/does/do/can) AND ≥ 2 tokens | … OR first token ∈ que/cual/cuales/cuanto(s)/cuantas/donde/quien/como/hay/es/esta/estan/por | P1 FR-D2; the VLM gets the raw text minus the wake word, punctuation kept |
 | `null` | anything else, the bare wake word, a lone question word | | the bus plays `ERROR` and returns to IDLE |
+
+**Whisper-tiny aliases (ADR-0011).** Keys added because Whisper-tiny on the headset transcribed a command that way in the clip tests (`scripts/asr_clips.sh`, `docs/benchmarks.md` "Voice commands"), each exact and limited to a bare utterance: `leso`, `nesto`, `le`+`eso` → Read; `nielme`, `ria`+`me` → GuideMe; `mas`+`de`+`tarde` → Detailed; `donde`+`es`+`toy` → WhereAmI ("¿Dónde es toy?"); `bada` → Stop. Rejected, because the transcript is a real word or a name and a false Read starts a capture: `listo` ("ready"), `Lisa`. Spanish decoded as English ("Let me take.", "Okay, I am printed.", "here I bet.") has no safe alias and stays `null`. The aliases come from the same synthetic clips they are measured on, so the clip counts after them are an upper bound; a wearer's mishearings may differ.
 
 Known ambiguities (accepted, documented, tested): `red`/`bread` parse as Read. In a bare command of ≤ 2 tokens, `shop`, `step`, `top`, `stay` and `store` parse as Stop. This is fail-safe: Stop only silences. It is harmless in a command-only context and goes away once the recognizer's first hypothesis is right. In a longer sentence these words are never Stop. Add a row here and a test before adding a key.
 

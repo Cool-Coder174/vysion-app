@@ -25,7 +25,8 @@ import java.util.Locale
  *    apply to short utterances (so "door" alone does not eat "read the door sign"). English "stop" has its
  *    own safety rule (FR-G4, INV-6): fuzzy only in a bare command of at most [SAFETY_FUZZY_MAX_TOKENS] tokens,
  *    where distance 2 is allowed for a token that keeps the "st" onset ("stahp"); exact in anything longer
- *    ("is there a step?" stays a question);
+ *    ("is there a step?" stays a question). Door choices (SelectDoor) are exact: a side word is one edit from a
+ *    common word (let/left, light/right, enter/center, dentro/centro), and Whisper spells the words it hears;
  * 3. the pattern with the most matched keys wins, then the smallest edit distance, then the language of
  *    [parse]'s `locale`, then table order (Stop is first so it is never shadowed, INV-6);
  * 4. no pattern, but the utterance ends in "?" or opens with a question word → [Command.FollowUp] (FR-D2).
@@ -173,6 +174,8 @@ object CommandGrammar {
         pattern(Command.Stop, Lang.ES, "silencio"),
         pattern(Command.Stop, Lang.ES, "para", exact = true, maxTokens = 2),
         pattern(Command.Stop, Lang.ES, "alto", exact = true, maxTokens = 2),
+        // Whisper-tiny's "¡Bada!" for "para" (ADR-0011 clips); a false Stop only silences
+        pattern(Command.Stop, Lang.ES, "bada", exact = true, maxTokens = 2),
         // FR-N3 find the door
         pattern(Command.FindDoor, Lang.EN, "find", "door"),
         pattern(Command.FindDoor, Lang.EN, "where", "door"),
@@ -186,25 +189,31 @@ object CommandGrammar {
         pattern(Command.FindDoor, Lang.ES, "busca", "salida"),
         pattern(Command.FindDoor, Lang.ES, "puerta", maxTokens = 3),
         pattern(Command.FindDoor, Lang.ES, "salida", maxTokens = 3),
-        // FR-N7 select among door candidates (two keys beat FindDoor's single "door"/"puerta")
-        pattern(LEFT, Lang.EN, "one", "left"),
-        pattern(LEFT, Lang.EN, "door", "left"),
-        pattern(CENTER, Lang.EN, "one", "middle"),
-        pattern(CENTER, Lang.EN, "one", "center"),
-        pattern(CENTER, Lang.EN, "door", "middle"),
-        pattern(CENTER, Lang.EN, "door", "center"),
-        pattern(RIGHT, Lang.EN, "one", "right"),
-        pattern(RIGHT, Lang.EN, "door", "right"),
-        pattern(LEFT, Lang.ES, "puerta", "izquierda"),
-        pattern(CENTER, Lang.ES, "puerta", "centro"),
-        pattern(CENTER, Lang.ES, "puerta", "medio"),
-        pattern(RIGHT, Lang.ES, "puerta", "derecha"),
+        // FR-N7 select among door candidates (two keys beat FindDoor's single "door"/"puerta"); every SelectDoor
+        // row is exact: a fuzzy "left" took Whisper's "Let me take." (a Spanish "repite") for SelectDoor(LEFT)
+        pattern(LEFT, Lang.EN, "one", "left", exact = true),
+        pattern(LEFT, Lang.EN, "door", "left", exact = true),
+        pattern(CENTER, Lang.EN, "one", "middle", exact = true),
+        pattern(CENTER, Lang.EN, "one", "center", exact = true),
+        pattern(CENTER, Lang.EN, "door", "middle", exact = true),
+        pattern(CENTER, Lang.EN, "door", "center", exact = true),
+        pattern(RIGHT, Lang.EN, "one", "right", exact = true),
+        pattern(RIGHT, Lang.EN, "door", "right", exact = true),
+        pattern(LEFT, Lang.ES, "puerta", "izquierda", exact = true),
+        pattern(CENTER, Lang.ES, "puerta", "centro", exact = true),
+        pattern(CENTER, Lang.ES, "puerta", "medio", exact = true),
+        pattern(RIGHT, Lang.ES, "puerta", "derecha", exact = true),
         // FR-T1 read
         pattern(Command.Read, Lang.EN, "read"),
         pattern(Command.Read, Lang.ES, "lee", exact = true),
         pattern(Command.Read, Lang.ES, "leer"),
         pattern(Command.Read, Lang.ES, "leelo"),
         pattern(Command.Read, Lang.ES, "leeme"),
+        // Whisper-tiny's "lee esto / lee eso" (ADR-0011 clips): not words, or not alone, so exact and bare only
+        // ("estás leso" is not Read); "listo" ("ready") is deliberately not one, a false Read starts a capture
+        pattern(Command.Read, Lang.ES, "leso", exact = true, maxTokens = 1),
+        pattern(Command.Read, Lang.ES, "nesto", exact = true, maxTokens = 1),
+        pattern(Command.Read, Lang.ES, "le", "eso", exact = true, maxTokens = 2),
         // FR-D1 describe
         pattern(Command.Describe, Lang.EN, "describe"),
         pattern(Command.Describe, Lang.EN, "around"),
@@ -221,6 +230,9 @@ object CommandGrammar {
         pattern(Command.GuideMe, Lang.ES, "guia", exact = true),
         pattern(Command.GuideMe, Lang.ES, "navega"),
         pattern(Command.GuideMe, Lang.ES, "navegacion"),
+        // Whisper-tiny's "guíame" (ADR-0011 clips): neither is a phrase in either language
+        pattern(Command.GuideMe, Lang.ES, "nielme", exact = true, maxTokens = 1),
+        pattern(Command.GuideMe, Lang.ES, "ria", "me", exact = true, maxTokens = 2),
         // FR-T3 repeat / slower
         pattern(Command.Repeat, Lang.EN, "repeat"),
         pattern(Command.Repeat, Lang.EN, "again"),
@@ -260,6 +272,8 @@ object CommandGrammar {
         pattern(Command.Detailed, Lang.ES, "detallado"),
         pattern(Command.Detailed, Lang.ES, "detalle"),
         pattern(Command.Detailed, Lang.ES, "detalles"),
+        // Whisper-tiny's "más detalle" (ADR-0011 clips); "más tarde" ("later") lacks the "de"
+        pattern(Command.Detailed, Lang.ES, "mas", "de", "tarde", exact = true, maxTokens = 3),
         // ADR-0010 cloud Describe on/off; short utterances only, so "is it cloudy on the left?" stays a question
         pattern(CLOUD_ON, Lang.EN, "cloud", "on", maxTokens = 4),
         pattern(CLOUD_OFF, Lang.EN, "cloud", "off", maxTokens = 4),
@@ -283,15 +297,17 @@ object CommandGrammar {
         pattern(Command.WhereAmI, Lang.ES, "que", "calle", exact = true),
         pattern(Command.WhereAmI, Lang.ES, "mi", "ubicacion"),
         pattern(Command.WhereAmI, Lang.ES, "que", "hay", "cerca"),
-        // FR-N7 single-word side, short utterances only ("the left", "on the left", "la izquierda")
-        pattern(LEFT, Lang.EN, "left", maxTokens = 3),
-        pattern(CENTER, Lang.EN, "middle", maxTokens = 3),
-        pattern(CENTER, Lang.EN, "center", maxTokens = 3),
-        pattern(RIGHT, Lang.EN, "right", maxTokens = 3),
-        pattern(LEFT, Lang.ES, "izquierda", maxTokens = 4),
-        pattern(CENTER, Lang.ES, "centro", maxTokens = 4),
-        pattern(CENTER, Lang.ES, "medio", maxTokens = 4),
-        pattern(RIGHT, Lang.ES, "derecha", maxTokens = 4),
+        // Whisper-tiny's "¿dónde estoy?" (ADR-0011 clips)
+        pattern(Command.WhereAmI, Lang.ES, "donde", "es", "toy", exact = true, maxTokens = 3),
+        // FR-N7 single-word side, short utterances only ("the left", "on the left", "la izquierda"); exact (above)
+        pattern(LEFT, Lang.EN, "left", exact = true, maxTokens = 3),
+        pattern(CENTER, Lang.EN, "middle", exact = true, maxTokens = 3),
+        pattern(CENTER, Lang.EN, "center", exact = true, maxTokens = 3),
+        pattern(RIGHT, Lang.EN, "right", exact = true, maxTokens = 3),
+        pattern(LEFT, Lang.ES, "izquierda", exact = true, maxTokens = 4),
+        pattern(CENTER, Lang.ES, "centro", exact = true, maxTokens = 4),
+        pattern(CENTER, Lang.ES, "medio", exact = true, maxTokens = 4),
+        pattern(RIGHT, Lang.ES, "derecha", exact = true, maxTokens = 4),
     )
 
     private val QUESTION_WORDS: Set<String> = setOf(
