@@ -124,6 +124,7 @@ Why: Stop is safety-relevant, so a slip in a bare command must still stop, and a
 | `Next` | `next` | `siguiente`, `proxima`, `proximo` | P2 FR-T6 |
 | `Brief` | `brief`, `briefly`, `shorter`, `short` | `breve`, `corto`, `resumen` | P1 FR-D3 |
 | `Detailed` | `detailed`, `detail`, `details`, `longer` | `detallado`, `detalle`, `detalles` | P1 FR-D3 |
+| `CloudDescribe(on)` | `cloud`+`on`, `cloud`+`off` (≤ 4: "cloud on", "turn the cloud off") | `activa`/`enciende`+`nube`, `nube`+`activada`; `desactiva`/`apaga`+`nube`, `nube`+`desactivada` (≤ 4) | ADR-0010; ≤ 4 so "is it cloudy on the left?" stays a follow-up; spoken confirmation `Cues.cloudDescribe(on)` names Google |
 | `FollowUp(question)` | no pattern matched AND (ends with `?` OR first token ∈ what/whats/which/where/who/how/why/when/is/are/does/do/can) AND ≥ 2 tokens | … OR first token ∈ que/cual/cuales/cuanto(s)/cuantas/donde/quien/como/hay/es/esta/estan/por | P1 FR-D2; the VLM gets the raw text minus the wake word, punctuation kept |
 | `null` | anything else, the bare wake word, a lone question word | | the bus plays `ERROR` and returns to IDLE |
 

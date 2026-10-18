@@ -168,6 +168,15 @@ class ModeController(
     @Volatile
     private var describeVariant: DescribeVariant = DescribeVariant.DEFAULT
 
+    private val _cloudDescribe = MutableStateFlow(false)
+
+    /**
+     * ADR-0010: the wearer's cloud Describe switch ("cloud on" / "cloud off", the Describe page's Cloud pill), passed
+     * to [InferenceEngine.describeScene]. Off at every launch and whenever the headset is taken off ([stop]), so the
+     * next wearer never sends photos without saying so.
+     */
+    val cloudDescribe: StateFlow<Boolean> = _cloudDescribe
+
     /**
      * Idempotent. Subscribes, starts the frame source, warms the engine up, speaks the welcome (FR-G1).
      * Restartable: [stop] then [start] (headset off and on, `AppGraph.stop`/`start`) runs a fresh set of
@@ -232,6 +241,7 @@ class ModeController(
         overlay.clear()
         _state.value = ModeState.IDLE
         _mode.value = null
+        _cloudDescribe.value = false // ADR-0010: consent is per wearer; taking the headset off withdraws it
         // UNDISPATCHED + NonCancellable: completes even if the caller tears the graph down right after.
         teardown = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             withContext(NonCancellable) {
@@ -300,7 +310,7 @@ class ModeController(
                 captureAndDescribe(Mode.TEXT_READER, prompts.read, event)
             }
             is Command.SelectDoor -> Unit // TODO(FR-N7): choose among door candidates (P2)
-            is Command.CloudDescribe -> Unit // TODO(FR-D1): ADR-0010 cloud toggle, wired in the next commit
+            is Command.CloudDescribe -> launchOneShot(ModeState.SPEAKING) { setCloudDescribe(command.on) } // ADR-0010
             Command.Stop -> Unit // handled on its own lane
         }
     }
@@ -418,6 +428,20 @@ class ModeController(
         val whole = engine.readText(still) ?: return framed
         if (framed != null && whole.isNotEmpty()) say(phrasebook.readingWholeView)
         return whole
+    }
+
+    /**
+     * ADR-0010: turn cloud Describe on or off and say so; "on" says that photos leave the headset and where they go.
+     * A build without a cloud key says it is not set up and stays off.
+     */
+    private suspend fun setCloudDescribe(on: Boolean) {
+        if (on && !engine.cloudDescribeAvailable) {
+            _cloudDescribe.value = false
+            say(phrasebook.cloudDescribeUnavailable)
+            return
+        }
+        _cloudDescribe.value = on
+        say(phrasebook.cloudDescribe(on))
     }
 
     /** FR-N3 / RK-6: two stills, two answers, agreement required; then anchor and guide. */
@@ -593,8 +617,14 @@ class ModeController(
                 try {
                     // FR-G6: the output language follows the voice.
                     val localized = prompts.forLocale(prompt, speaker.locale.value)
+                    // FR-D1 may answer from the cloud when the wearer turned it on (ADR-0010); the engine falls back.
+                    val answer = if (mode == Mode.AUDIO_DESCRIPTION) {
+                        engine.describeScene(still, localized, cloud = _cloudDescribe.value)
+                    } else {
+                        engine.describeStreaming(still, localized)
+                    }
                     withTimeout(InferenceEngine.VLM_TIMEOUT_MS) {
-                        engine.describeStreaming(still, localized).collect { chunk ->
+                        answer.collect { chunk ->
                             splitter.push(chunk).forEach(::onSegment)
                         }
                     }

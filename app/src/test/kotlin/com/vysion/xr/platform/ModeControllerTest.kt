@@ -226,6 +226,66 @@ class ModeControllerTest {
         assertEquals(listOf(TestPhrasebook.modeAnnounced(Mode.TEXT_READER), READ_ANSWER, READ_ANSWER), f.speaker.said)
     }
 
+    // ── ADR-0010 cloud Describe switch ───────────────────────────────────────────────────────────
+
+    @Test
+    fun `cloud on is said aloud, reaches Describe only, and is withdrawn when the headset comes off`() {
+        lateinit var engine: CloudFlagEngine
+        controllerTest(engineWrapper = { CloudFlagEngine(it, cloudDescribeAvailable = true).also { e -> engine = e } }) { f ->
+            startAndSettle(f)
+            f.commands.inject(Command.CloudDescribe(on = true))
+            advanceUntilIdle()
+            assertEquals(listOf(TestPhrasebook.cloudDescribe(true)), f.speaker.said)
+            assertTrue(f.controller.cloudDescribe.value)
+
+            f.commands.inject(Command.Describe)
+            advanceUntilIdle()
+            f.commands.inject(Command.Read) // Read never asks for the cloud
+            advanceUntilIdle()
+            assertEquals("only Describe goes through describeScene", listOf(true), engine.cloudFlags)
+
+            f.controller.stop() // headset taken off: the next wearer has not said "cloud on"
+            assertFalse(f.controller.cloudDescribe.value)
+            f.controller.start(speakWelcome = false)
+            advanceUntilIdle()
+            f.commands.inject(Command.Describe)
+            advanceUntilIdle()
+            assertEquals(listOf(true, false), engine.cloudFlags)
+        }
+    }
+
+    @Test
+    fun `cloud off is said aloud and Describe stays on the headset`() {
+        lateinit var engine: CloudFlagEngine
+        controllerTest(engineWrapper = { CloudFlagEngine(it, cloudDescribeAvailable = true).also { e -> engine = e } }) { f ->
+            startAndSettle(f)
+            f.commands.inject(Command.CloudDescribe(on = true))
+            advanceUntilIdle()
+            f.commands.inject(Command.CloudDescribe(on = false))
+            advanceUntilIdle()
+            assertEquals(listOf(TestPhrasebook.cloudDescribe(true), TestPhrasebook.cloudDescribe(false)), f.speaker.said)
+            assertFalse(f.controller.cloudDescribe.value)
+            f.commands.inject(Command.Describe)
+            advanceUntilIdle()
+            assertEquals(listOf(false), engine.cloudFlags)
+        }
+    }
+
+    @Test
+    fun `cloud on in a build without a key says it is not set up and stays off`() {
+        lateinit var engine: CloudFlagEngine
+        controllerTest(engineWrapper = { CloudFlagEngine(it, cloudDescribeAvailable = false).also { e -> engine = e } }) { f ->
+            startAndSettle(f)
+            f.commands.inject(Command.CloudDescribe(on = true))
+            advanceUntilIdle()
+            assertEquals(listOf(TestPhrasebook.cloudDescribeUnavailable), f.speaker.said)
+            assertFalse(f.controller.cloudDescribe.value)
+            f.commands.inject(Command.Describe)
+            advanceUntilIdle()
+            assertEquals(listOf(false), engine.cloudFlags)
+        }
+    }
+
     // ── FR-T1 / FR-D1 streaming: speak while the VLM is still generating ─────────────────────────
 
     @Test
@@ -1082,6 +1142,19 @@ private class TestHeadPoseSource : HeadPoseSource {
     override val pose: StateFlow<HeadPose?> = MutableStateFlow(null)
 }
 
+/** Records the `cloud` flag of every [InferenceEngine.describeScene] (ADR-0010); answers from the fake. */
+private class CloudFlagEngine(
+    private val delegate: FakeInferenceEngine,
+    override val cloudDescribeAvailable: Boolean,
+) : InferenceEngine by delegate {
+    val cloudFlags = mutableListOf<Boolean>()
+
+    override fun describeScene(bitmap: Bitmap, prompt: String, cloud: Boolean, maxNewTokens: Int): Flow<String> {
+        cloudFlags += cloud
+        return delegate.describeStreaming(bitmap, prompt, maxNewTokens)
+    }
+}
+
 /** Scripts the DOOR answers in call order on top of the fake, so the two vote calls can disagree. */
 private class ScriptedDoorEngine(
     private val delegate: FakeInferenceEngine,
@@ -1107,6 +1180,8 @@ private object TestPhrasebook : ModePhrasebook {
     override val permissionExplanation = "<cue:permissionExplanation>"
     override val permissionDenied = "<cue:permissionDenied>"
     override val voiceCommandsUnavailable = "<cue:voiceCommandsUnavailable>"
+    override val cloudDescribeUnavailable = "<cue:cloudDescribeUnavailable>"
+    override fun cloudDescribe(on: Boolean) = "<cue:cloudDescribe:$on>"
     override fun modeAnnounced(mode: Mode) = "<cue:mode:${mode.name}>"
     override fun navigationCue(cue: NavigationCue): String? =
         if (cue == NavigationCue.Arrived) null else "<cue:${cue::class.simpleName}>"

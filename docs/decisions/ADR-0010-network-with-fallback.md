@@ -18,12 +18,12 @@ larger cloud model for Describe. Read, Describe and Find the door already run fu
 3. Every line that opens a connection carries `network-fallback: <what runs offline>`; `scripts/check_privacy.sh`
    fails without it.
 4. Camera frames are still never written to storage or logs (ADR-0003 rule 2 is unchanged). Sending a frame or audio
-   off the headset needs its own row below, naming the service, what is sent and the fallback. There are none today.
+   off the headset needs its own row below, naming the service, what is sent and the fallback.
 5. Still no analytics and no crash reporter (ADR-0003 rule 3, narrowed: HTTP client libraries are allowed).
 
 | Feature | Service | What leaves the headset | On-device fallback | Status |
 |---|---|---|---|---|
-| (none yet) | | | | |
+| Cloud Describe (FR-D1), opt-in | Gemini Developer API, model `gemini-3.6-flash` (Google), REST `streamGenerateContent` over TLS; key from `local.properties` `GEMINI_API_KEY` (never committed; it is inside the APK, so restrict it to the Generative Language API) | Only after the wearer says "cloud on" (or the Describe page's Cloud pill), which is spoken back with Google's name; off at every launch and whenever the headset is taken off. Per Describe: the still, scaled to ≤ 768 px and JPEG-encoded in memory, plus the describe prompt. Never written to storage or logged on the headset. On the free tier Google may use what it receives to improve its products. Read, Find the door and arrival never send anything. | The on-device LFM2.5-VL path (`describeStreaming`), when cloud is off, no key is built in, the headset is offline (`ConnectivityManager`, validated internet), the request fails or returns no text, or the cloud has no text 1 s after the request (`CloudDescribeEngine.HEDGE_AFTER_MS`): the headset starts then and whichever speaks first answers, so the worst case is about 1 s later than headset-only, inside FR-D1's 8 s | accepted 2026-10-18 (Isaac: Gemini REST + local key, opt-in, off by default, voice + panel per session) |
 
 ## Alternatives rejected
 

@@ -809,6 +809,27 @@ VLM ms from `onStats` or wall clock; detector fps = counter around `forward()`; 
 runtime log = `Module.readLogBufferStatic()`. Hard-code `"executorch-android 1.3.1"` next to measured values
 (the AAR exposes no version API).
 
+#### R2 · Cloud Describe (ADR-0010 row): Gemini REST, no new dependency
+
+`inference/GeminiCloudDescriber.kt` calls the Gemini Developer API with the platform HTTP client (no SDK, nothing added to
+`libs.versions.toml`); the connecting line carries `network-fallback:` (`check_privacy.sh` §6). Fallback: the
+on-device path below (`CloudDescribeEngine`, hedge at 1 s).
+
+```
+POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:streamGenerateContent?alt=sse
+x-goog-api-key: <GEMINI_API_KEY from local.properties, via BuildConfig>      // header, never ?key= in the URL
+{"systemInstruction":{"parts":[{"text":PromptLibrary.CLOUD_SPOKEN_STYLE}]},
+ "contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/jpeg","data":<base64>}},{"text":<prompt>}]}],
+ "generationConfig":{"maxOutputTokens":400,"thinkingConfig":{"thinkingLevel":"minimal"}}}
+→ server-sent events, one `data: {GenerateContentResponse}` per chunk; text = candidates[0].content.parts[].text
+```
+
+Sources, read 2026-10-18: model ids https://ai.google.dev/gemini-api/docs/models (`gemini-3.6-flash` stable;
+`gemini-3.8-flash` newest stable, but its lowest thinking level is `low`); thinking levels
+https://ai.google.dev/gemini-api/docs/thinking (`minimal` allowed for 3.6 Flash and 3.5 Flash-Lite; thought tokens count
+against `maxOutputTokens`); streaming https://ai.google.dev/api/generate-content. Verified on the headset: see
+`docs/benchmarks.md` "Cloud Describe".
+
 ### R3 — ARCore for Jetpack XR session, config, planes, depth, anchors, hands, head + SceneCore spatial audio
 
 Sources: API files (frozen at beta01; rc01.txt is byte-identical, rc02 is bug-fix only, verified by javap on rc02 jars)

@@ -34,6 +34,8 @@ class ShellState internal constructor(
     val overlay: PassthroughOverlayRenderer?,
     val input: ScreenInput,
     private val onDismissHazard: () -> Unit,
+    /** ADR-0010: the wearer's cloud Describe switch (`ModeController.cloudDescribe`), shown on the Describe toolbar. */
+    val cloudDescribe: Boolean = false,
 ) {
     val screen: HeadsetScreen = HeadsetScreens.reduce(input)
     val obstacle: ObstacleAlert? = HeadsetScreens.obstacle(input)
@@ -59,6 +61,7 @@ fun rememberShellState(graph: AppGraph): ShellState {
     val transcript by graph.modeController.transcript.collectAsStateWithLifecycle()
     val listening by graph.commandBus.state.collectAsStateWithLifecycle()
     val progress by graph.speaker.progress.collectAsStateWithLifecycle(initialValue = null)
+    val cloudDescribe by graph.modeController.cloudDescribe.collectAsStateWithLifecycle()
 
     var lastCommand by remember { mutableStateOf<Command?>(null) }
     var lastCommandAt by remember { mutableStateOf<Long?>(null) }
@@ -141,6 +144,7 @@ fun rememberShellState(graph: AppGraph): ShellState {
             hazardDismissedAt = SystemClock.elapsedRealtime()
             graph.speaker.stop()
         },
+        cloudDescribe = cloudDescribe,
     )
 }
 

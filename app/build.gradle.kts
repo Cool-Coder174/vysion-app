@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -18,6 +20,15 @@ android {
 
         // ADR-0008 / AppGraph.kt: -PuseFakes=true wires the Fake* modules (laptop emulator, S25 Ultra without models).
         buildConfigField("boolean", "USE_FAKES", (project.findProperty("useFakes")?.toString() ?: "false"))
+
+        // ADR-0010 cloud Describe: GEMINI_API_KEY from the gitignored local.properties (or the environment); never
+        // committed. Blank = cloud Describe "not set up" and Describe stays on the headset. The key ends up inside the
+        // APK, so restrict it to the Generative Language API in Cloud Console.
+        val geminiKey = rootProject.file("local.properties").takeIf { it.isFile }
+            ?.let { file -> Properties().apply { file.inputStream().use { load(it) } }.getProperty("GEMINI_API_KEY") }
+            ?: System.getenv("GEMINI_API_KEY")
+            ?: ""
+        buildConfigField("String", "GEMINI_API_KEY", "\"${geminiKey.trim().replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
     buildTypes {

@@ -43,6 +43,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -334,6 +335,13 @@ fun StatusToolbar(shell: ShellState, commands: CommandBus, type: VysionType, hei
                         stringResource(R.string.action_more_detail),
                         { send(Command.Detailed); send(Command.Describe) },
                         PillStyle.SECONDARY, type.label, height, icon = VysionIcons.Plus,
+                    )
+                    // ADR-0010: the same switch as "cloud on" / "cloud off"; selected while photos may leave.
+                    val cloudState = stringResource(if (shell.cloudDescribe) R.string.a11y_cloud_on else R.string.a11y_cloud_off)
+                    PillButton(
+                        stringResource(R.string.action_cloud), { send(Command.CloudDescribe(!shell.cloudDescribe)) },
+                        PillStyle.SECONDARY, type.label, height, selected = shell.cloudDescribe,
+                        modifier = Modifier.semantics { stateDescription = cloudState },
                     )
                 }
             }

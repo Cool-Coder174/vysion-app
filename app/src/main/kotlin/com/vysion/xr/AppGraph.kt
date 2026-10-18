@@ -17,10 +17,13 @@ import com.vysion.xr.core.OverlayRenderer
 import com.vysion.xr.core.PromptSet
 import com.vysion.xr.core.Speaker
 import com.vysion.xr.diagnostics.DiagnosticsCollector
+import com.vysion.xr.inference.CloudDescribeEngine
 import com.vysion.xr.inference.ExecuTorchInferenceEngine
 import com.vysion.xr.inference.FakeInferenceEngine
+import com.vysion.xr.inference.GeminiCloudDescriber
 import com.vysion.xr.inference.LibraryPromptSet
 import com.vysion.xr.inference.ModelCatalog
+import com.vysion.xr.inference.NetworkStatus
 import com.vysion.xr.perception.GazeGeometry
 import com.vysion.xr.perception.NoOpAnchorStore
 import com.vysion.xr.perception.NoOpHeadPoseSource
@@ -73,6 +76,8 @@ import kotlin.math.roundToInt
  * | R2   | inference.ModelCatalog                            | (Application)                                 |
  * | R2   | inference.ExecuTorchInferenceEngine               | (Application, ModelCatalog, CoroutineScope)   |
  * | R2   | inference.FakeInferenceEngine                     | ()                                            |
+ * | R2   | inference.CloudDescribeEngine (wraps the engine)  | (InferenceEngine, CloudDescriber?, () -> Boolean) |
+ * | R2   | inference.GeminiCloudDescriber.orNull / NetworkStatus | (apiKey) / (Context)                      |
  * | R2   | inference.LibraryPromptSet (object, PromptSet)    | —                                             |
  * | R3   | perception.XrPerceptionSession                    | (Application, CoroutineScope)                 |
  * | R3   | perception.XrHeadPoseSource / NoOpHeadPoseSource  | (XrPerceptionSession) / ()                    |
@@ -119,8 +124,16 @@ class AppGraph(private val app: Application) {
 
     /** Prompt text (SRS §7) for the controller and the debug benchmark; lives only in `inference/PromptLibrary.kt`. */
     val prompts: PromptSet = LibraryPromptSet
-    val inferenceEngine: InferenceEngine =
-        if (useFakes) FakeInferenceEngine() else ExecuTorchInferenceEngine(app, modelCatalog, scope)
+
+    /**
+     * The on-device engine, wrapped so Describe can use a cloud model when the wearer turns it on (ADR-0010 row
+     * "Cloud Describe"). Without `GEMINI_API_KEY` in `local.properties` the wrapper never leaves the headset.
+     */
+    val inferenceEngine: InferenceEngine = CloudDescribeEngine(
+        headset = if (useFakes) FakeInferenceEngine() else ExecuTorchInferenceEngine(app, modelCatalog, scope),
+        cloud = GeminiCloudDescriber.orNull(BuildConfig.GEMINI_API_KEY),
+        isOnline = NetworkStatus(app)::isOnline,
+    )
 
     // R1 — camera and overlay
     val frameSource: FrameSource =

@@ -97,6 +97,15 @@ object Cues {
 
         /** FR-G1: camera or microphone refused; nothing can run. */
         PERMISSION_DENIED,
+
+        /** ADR-0010: "cloud on"; says that photos leave the headset and who gets them (consent, spoken). */
+        CLOUD_DESCRIBE_ON,
+
+        /** ADR-0010: "cloud off", or the headset was taken off. */
+        CLOUD_DESCRIBE_OFF,
+
+        /** ADR-0010: "cloud on" in a build with no cloud key. */
+        CLOUD_DESCRIBE_UNAVAILABLE,
     }
 
     /** Languages this object speaks; anything else falls back to en-US (SRS scope: English and Spanish). */
@@ -138,6 +147,10 @@ object Cues {
             "and scene understanding to measure distances.",
         Key.PERMISSION_DENIED to "Without the camera and the microphone, Vysion cannot read, describe or guide. " +
             "Allow them in Settings and come back.",
+        Key.CLOUD_DESCRIBE_ON to "Cloud describe on. When you say describe, the photo is sent to Google. " +
+            "Say cloud off to keep everything on this headset.",
+        Key.CLOUD_DESCRIBE_OFF to "Cloud describe off. Everything stays on this headset.",
+        Key.CLOUD_DESCRIBE_UNAVAILABLE to "Cloud describe is not set up on this headset. Describe works without it.",
     )
 
     private val ES_MX: Map<Key, String> = mapOf(
@@ -175,6 +188,10 @@ object Cues {
             "y entender la escena para medir distancias.",
         Key.PERMISSION_DENIED to "Sin la cámara y el micrófono, Vysion no puede leer, describir ni guiar. " +
             "Permítelos en Ajustes y vuelve.",
+        Key.CLOUD_DESCRIBE_ON to "Nube activada. Cuando dices describe, la foto se envía a Google. " +
+            "Di desactiva la nube para que todo se quede en este visor.",
+        Key.CLOUD_DESCRIBE_OFF to "Nube desactivada. Todo se queda en este visor.",
+        Key.CLOUD_DESCRIBE_UNAVAILABLE to "La nube no está configurada en este visor. Describir funciona sin ella.",
     )
 
     /** The one lookup; every named accessor below goes through it. Unknown languages speak en-US. */
@@ -195,6 +212,11 @@ object Cues {
 
     /** Reading crosshair: nothing readable inside it, so the whole view is read next. */
     fun readingWholeView(locale: Locale = Speaker.EN_US): String = text(Key.READING_WHOLE_VIEW, locale)
+
+    /** ADR-0010: the cloud Describe switch, confirmed aloud. */
+    fun cloudDescribe(on: Boolean, locale: Locale = Speaker.EN_US): String =
+        text(if (on) Key.CLOUD_DESCRIBE_ON else Key.CLOUD_DESCRIBE_OFF, locale)
+    fun cloudDescribeUnavailable(locale: Locale = Speaker.EN_US): String = text(Key.CLOUD_DESCRIBE_UNAVAILABLE, locale)
     fun holdStill(locale: Locale = Speaker.EN_US): String = text(Key.HOLD_STILL, locale)
     fun obstacleAhead(locale: Locale = Speaker.EN_US): String = text(Key.OBSTACLE_AHEAD, locale)
     fun doorNotFound(locale: Locale = Speaker.EN_US): String = text(Key.DOOR_NOT_FOUND, locale)
@@ -365,6 +387,8 @@ object CuesPhrasebook : ModePhrasebook {
     override val cameraLost: String get() = Cues.cameraLost(locale())
     override val modelNotFound: String get() = Cues.modelNotFound(locale())
     override val readingWholeView: String get() = Cues.readingWholeView(locale())
+    override fun cloudDescribe(on: Boolean): String = Cues.cloudDescribe(on, locale())
+    override val cloudDescribeUnavailable: String get() = Cues.cloudDescribeUnavailable(locale())
     override fun modeAnnounced(mode: Mode): String = Cues.modeAnnouncement(mode, locale())
     override fun pageFocused(mode: Mode): String = Cues.pageFocused(mode, locale())
     override fun navigationCue(cue: NavigationCue): String? =
@@ -435,7 +459,7 @@ private class OnboardingCopy(
                 "I help you read, understand, and move through a space. Everything runs on this headset.",
             privacyTitle = "Everything stays on this headset.",
             privacyRows = listOf(
-                "No internet permission. Nothing is uploaded.",
+                "Nothing is uploaded unless you say “cloud on”.",
                 "Camera images are never saved.",
                 "You can stop me any time.",
             ),
@@ -476,7 +500,7 @@ private class OnboardingCopy(
                 "Te ayudo a leer, entender y moverte por un espacio. Todo funciona en este visor.",
             privacyTitle = "Todo se queda en este visor.",
             privacyRows = listOf(
-                "Sin permiso de internet. No se sube nada.",
+                "No se sube nada a menos que digas “activa la nube”.",
                 "Las imágenes de la cámara nunca se guardan.",
                 "Puedes detenerme en cualquier momento.",
             ),

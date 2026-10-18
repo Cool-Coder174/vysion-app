@@ -40,6 +40,10 @@
     <string name="action_next">Next</string>
     <string name="action_spanish">Español</string>
     <string name="action_more_detail">More detail</string>
+    <!-- ADR-0010: cloud Describe switch; selected while a described photo is sent to Google. -->
+    <string name="action_cloud">Cloud</string>
+    <string name="a11y_cloud_on">On: photos you describe are sent to Google</string>
+    <string name="a11y_cloud_off">Off: everything stays on this headset</string>
     <string name="action_find_another_door">Find another door</string>
     <string name="action_ok">OK</string>
     <string name="action_try_again">Try again</string>

@@ -59,6 +59,15 @@ object PromptLibrary {
         "Describe this scene for someone who cannot see it, in at most six sentences. Hazards first, then what " +
             "is on the left, center, and right, then any visible text or signs. Do not guess."
 
+    /**
+     * ADR-0010 cloud Describe: the system instruction sent with [DESCRIBE] (and its variants) to the cloud model,
+     * which otherwise answers in markdown that the Speaker would read aloud as symbols. The on-device VLM never
+     * gets it (its answers are already plain).
+     */
+    const val CLOUD_SPOKEN_STYLE: String =
+        "Your answer is read aloud to a blind person by text-to-speech. Use plain spoken sentences: no markdown, " +
+            "no lists, no headings, no emoji. Describe only what is visible in the image."
+
     /** FR-T4 "in Spanish": re-prompt on the same frame (the engine keeps the prefill, FR-D2 / RK-2 "prefill once"). */
     const val TRANSLATE_ES: String = "Translate the text you read into Spanish; output only the translation."
 

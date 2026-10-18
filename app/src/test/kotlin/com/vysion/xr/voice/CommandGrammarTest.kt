@@ -66,6 +66,21 @@ class CommandGrammarTest {
     }
 
     @Test
+    fun `cloud on and off in both languages, and a cloudy question stays a question`() {
+        val on = Command.CloudDescribe(on = true)
+        val off = Command.CloudDescribe(on = false)
+        for (u in listOf("cloud on", "Vysion, cloud on", "turn the cloud on", "turn on cloud")) assertEquals(u, on, parse(u))
+        for (u in listOf("cloud off", "turn the cloud off", "turn off cloud")) assertEquals(u, off, parse(u))
+        for (u in listOf("activa la nube", "enciende la nube", "nube activada")) assertEquals(u, on, parse(u, es))
+        for (u in listOf("desactiva la nube", "apaga la nube", "nube desactivada")) assertEquals(u, off, parse(u, es))
+        assertEquals(
+            Command.FollowUp("is it cloudy on the left?"),
+            parse("is it cloudy on the left?"),
+        )
+        assertEquals("cloud alone is not a switch", null, parse("cloud"))
+    }
+
+    @Test
     fun `next brief detailed`() {
         assertEquals(Command.Next, parse("next"))
         assertEquals(Command.Next, parse("next page"))

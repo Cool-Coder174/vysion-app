@@ -143,6 +143,8 @@ object CommandGrammar {
     private val LEFT = Command.SelectDoor(HorizontalBearing.LEFT)
     private val CENTER = Command.SelectDoor(HorizontalBearing.CENTER)
     private val RIGHT = Command.SelectDoor(HorizontalBearing.RIGHT)
+    private val CLOUD_ON = Command.CloudDescribe(on = true)
+    private val CLOUD_OFF = Command.CloudDescribe(on = false)
 
     /** Table order is the last tie-breaker; Stop is first on purpose (INV-6). */
     private val PATTERNS: List<Pattern> = listOf(
@@ -240,6 +242,15 @@ object CommandGrammar {
         pattern(Command.Detailed, Lang.ES, "detallado"),
         pattern(Command.Detailed, Lang.ES, "detalle"),
         pattern(Command.Detailed, Lang.ES, "detalles"),
+        // ADR-0010 cloud Describe on/off; short utterances only, so "is it cloudy on the left?" stays a question
+        pattern(CLOUD_ON, Lang.EN, "cloud", "on", maxTokens = 4),
+        pattern(CLOUD_OFF, Lang.EN, "cloud", "off", maxTokens = 4),
+        pattern(CLOUD_ON, Lang.ES, "activa", "nube", maxTokens = 4),
+        pattern(CLOUD_ON, Lang.ES, "enciende", "nube", maxTokens = 4),
+        pattern(CLOUD_ON, Lang.ES, "nube", "activada", maxTokens = 4),
+        pattern(CLOUD_OFF, Lang.ES, "desactiva", "nube", maxTokens = 4),
+        pattern(CLOUD_OFF, Lang.ES, "apaga", "nube", maxTokens = 4),
+        pattern(CLOUD_OFF, Lang.ES, "nube", "desactivada", maxTokens = 4),
         // FR-N7 single-word side, short utterances only ("the left", "on the left", "la izquierda")
         pattern(LEFT, Lang.EN, "left", maxTokens = 3),
         pattern(CENTER, Lang.EN, "middle", maxTokens = 3),

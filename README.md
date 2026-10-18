@@ -69,7 +69,7 @@ flowchart LR
 | Depth, planes, anchors, hands, head pose | headset | ARCore for Jetpack XR |
 | Panels, passthrough, spatial audio | headset | Jetpack Compose for XR + SceneCore |
 | Speech in / out | headset | Android `SpeechRecognizer` (on-device) / `TextToSpeech` |
-| Network | optional features only | `INTERNET` + `ACCESS_NETWORK_STATE` (ADR-0010); every network feature has an on-device fallback, and Read, Describe and Find the door never need it; printed on the overlay |
+| Network | optional features only | `INTERNET` + `ACCESS_NETWORK_STATE` (ADR-0010); every network feature has an on-device fallback, and Read, Describe and Find the door never need it; printed on the overlay. Today one: opt-in cloud Describe ("cloud on"; Gemini, key in `local.properties` `GEMINI_API_KEY`), falling back to the headset VLM |
 
 ## Measured numbers
 
