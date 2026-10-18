@@ -7,8 +7,10 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import androidx.xr.arcore.Anchor
+import androidx.xr.arcore.ArDevice
 import androidx.xr.arcore.Depth
 import androidx.xr.arcore.RenderViewpoint
+import androidx.xr.arcore.TrackingState
 import androidx.xr.runtime.AnchorPersistenceMode
 import androidx.xr.runtime.Config
 import androidx.xr.runtime.DepthEstimationMode
@@ -20,6 +22,7 @@ import androidx.xr.runtime.Session
 import androidx.xr.runtime.SessionConfigureSuccess
 import androidx.xr.runtime.SessionCreateSuccess
 import androidx.xr.runtime.XrDevice
+import androidx.xr.runtime.math.Vector3
 import com.vysion.xr.core.AnchorId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -51,8 +54,8 @@ import kotlin.math.sqrt
  *
  *  Everything below the "Value types" banner is pure Kotlin (no Android, no androidx.xr) so the
  *  cone math, plane semantics and relative geometry run in JVM unit tests. The session class at
- *  the bottom is the only place the XR runtime is touched; session startup and depth streaming are
- *  implemented, while plane, hand, head-pose, anchor, and spatial-audio hooks remain in progress.
+ *  the bottom is the only place the XR runtime is touched; session startup, depth streaming and head pose are
+ *  implemented, while plane, hand, anchor, and spatial-audio hooks remain in progress.
  *
  *  Owner: R3 · SRS §8 "ARCore for Jetpack XR session, depth, planes, anchors, hands" · due Sat 12:00
  *  (session, A-5) and Sat 13:00 (spatial audio, A-6).
@@ -390,14 +393,9 @@ class XrPerceptionSession(
     /**
      * Head pose (FR-N3/FR-N4 guidance, FR-T5 "hold still").
      *
-     * Feeder to implement (stack.md R3 "Head pose"):
-     * ```
-     * ArDevice.getInstance(session).state.collect { s ->
-     *     val p = s.devicePose
-     *     val (yaw, pitch, roll) = HeadAngles.fromForwardUp(p.forward.v3(), p.up.v3())
-     *     _headPose.value = RawHeadPose(p.translation.v3(), yaw, pitch, roll, s.trackingState.toTracking(), SystemClock.elapsedRealtimeNanos())
-     * }
-     * ```
+     * The feeder collects `ArDevice.getInstance(session).state`, converts `devicePose` to yaw / pitch /
+     * roll with [HeadAngles.fromForwardUp], and publishes the latest pose; `null` before the session
+     * runs and after [stop]. It logs one tracking sample as device evidence.
      */
     override val headPose: StateFlow<RawHeadPose?> = _headPose.asStateFlow()
 
@@ -411,7 +409,9 @@ class XrPerceptionSession(
     private var nextAnchorSeq = 0
     private val lifecycle = Mutex()
     private var depthJob: Job? = null
+    private var headJob: Job? = null
     private var loggedFirstDepthSample = false
+    private var loggedFirstHeadPose = false
 
     /**
      * The Session Compose for XR already created for the activity (`LocalSession.current`). The
@@ -512,6 +512,7 @@ class XrPerceptionSession(
                     is SessionConfigureSuccess -> {
                         session = xrSession
                         depthJob = scope.launchDepthFeed(xrSession)
+                        headJob = scope.launchHeadPoseFeed(xrSession)
                         _state.value = SessionState.RUNNING
                         Log.i(TAG, "XR session configured successfully; state=${_state.value}")
                     }
@@ -588,6 +589,41 @@ class XrPerceptionSession(
         }
     }
 
+    private fun CoroutineScope.launchHeadPoseFeed(xrSession: Session): Job = launch {
+        try {
+            ArDevice.getInstance(xrSession).state.collect { state ->
+                val pose = state.devicePose
+                val (yaw, pitch, roll) = HeadAngles.fromForwardUp(pose.forward.toVec3(), pose.up.toVec3())
+                val head = RawHeadPose(
+                    position = pose.translation.toVec3(),
+                    yawDeg = yaw,
+                    pitchDeg = pitch,
+                    rollDeg = roll,
+                    tracking = state.trackingState.toTracking(),
+                    timestampNanos = SystemClock.elapsedRealtimeNanos(),
+                )
+                _headPose.value = head
+
+                if (!loggedFirstHeadPose && head.tracking == Tracking.TRACKING) {
+                    Log.i(TAG, "head pose tracking: yaw %.1f pitch %.1f deg (FR-N3)".format(yaw, pitch))
+                    loggedFirstHeadPose = true
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "XR head pose feed stopped; guidance and plane cues are unavailable", e)
+        }
+    }
+
+    private fun Vector3.toVec3() = Vec3(x, y, z)
+
+    private fun TrackingState.toTracking(): Tracking = when (this) {
+        TrackingState.TRACKING -> Tracking.TRACKING
+        TrackingState.PAUSED -> Tracking.PAUSED
+        else -> Tracking.STOPPED
+    }
+
     /** No-arg form used by [XrNavigationEngine.start] and [XrAnchorStore]: uses the resumed activity. */
     override suspend fun ensureStarted() {
         val activity = resumedActivity?.get()
@@ -607,6 +643,9 @@ class XrPerceptionSession(
         lifecycle.withLock {
             depthJob?.cancelAndJoin()
             depthJob = null
+            headJob?.cancelAndJoin()
+            headJob = null
+            _headPose.value = null
             detachAllAnchors()
             session = null
             _state.value = SessionState.STOPPED
