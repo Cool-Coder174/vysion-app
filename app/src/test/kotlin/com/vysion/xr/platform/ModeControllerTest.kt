@@ -562,7 +562,7 @@ class ModeControllerTest {
     // ── Navigation (FR-N1, FR-N2, ADR-0004, ADR-0006) ─────────────────────────────────────────────
 
     @Test
-    fun `guide me starts navigation and a one-shot pauses and resumes it`() = controllerTest { f ->
+    fun `one mode at a time - read after guide me stops navigation instead of pausing it`() = controllerTest { f ->
         startAndSettle(f)
         f.commands.inject(Command.GuideMe)
         advanceUntilIdle()
@@ -570,11 +570,47 @@ class ModeControllerTest {
         assertEquals(Mode.NAVIGATION, f.controller.mode.value)
 
         f.commands.inject(Command.Read)
-        advanceTimeBy(SAY_MS + CAPTURE_MS + 1)
-        assertEquals(1, f.navigation.pauseCount)
-        assertEquals(0, f.navigation.resumeCount)
         advanceUntilIdle()
+        assertFalse("Read ends Navigation", f.navigation.isRunning.value)
+        assertEquals(1, f.navigation.stopCount)
+        assertEquals("nothing to resume after the answer", 0, f.navigation.resumeCount)
+        assertEquals(Mode.TEXT_READER, f.controller.mode.value)
+
+        f.commands.inject(Command.FindDoor)
+        advanceUntilIdle()
+        assertTrue("find the door starts it again", f.navigation.isRunning.value)
+        assertEquals(Mode.NAVIGATION, f.controller.mode.value)
+    }
+
+    @Test
+    fun `one mode at a time - describe during door guidance drops the door marker and the outlines`() = controllerTest { f ->
+        startAndSettle(f)
+        f.commands.inject(Command.FindDoor)
+        advanceUntilIdle()
+        assertEquals(WorldLabel.Kind.DOOR, f.controller.worldLabel.value?.kind)
+        f.navigation.detectionsFlow.tryEmit(listOf(Detection("chair", 0.5f, DoorHighlight.boxFor(12, true)!!)))
+        advanceUntilIdle()
+        assertEquals(1, f.overlay.detections.value.size)
+
+        f.commands.inject(Command.Describe)
+        advanceUntilIdle()
+        assertFalse(f.navigation.isRunning.value)
+        assertNull("the door marker belongs to Navigation", f.controller.worldLabel.value)
+        assertTrue("outlines cleared", f.overlay.detections.value.isEmpty())
+        assertEquals(Mode.AUDIO_DESCRIPTION, f.controller.mode.value)
+    }
+
+    @Test
+    fun `the arrival check stays in Navigation, paused and resumed around the VLM (ADR-0004)`() = controllerTest { f ->
+        startAndSettle(f)
+        f.commands.inject(Command.GuideMe)
+        advanceUntilIdle()
+        f.navigation.cuesFlow.tryEmit(NavigationCue.Arrived)
+        advanceUntilIdle()
+        assertTrue(f.navigation.isRunning.value)
+        assertEquals(1, f.navigation.pauseCount)
         assertEquals(1, f.navigation.resumeCount)
+        assertEquals(0, f.navigation.stopCount)
     }
 
     @Test
@@ -1255,7 +1291,10 @@ private class TestNavigationEngine : NavigationEngine {
         resumeCount++
     }
 
+    var stopCount = 0
+
     override suspend fun stop() {
+        stopCount++
         isRunning.value = false
     }
 

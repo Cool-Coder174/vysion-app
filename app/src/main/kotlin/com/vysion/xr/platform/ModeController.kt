@@ -65,6 +65,9 @@ import kotlinx.coroutines.withTimeout
  * What it does:
  * - [start]: subscribes to the command bus, the listening state, navigation cues and detections;
  *   starts the frame source and warms the engine up; speaks the welcome (FR-G1).
+ * - One mode at a time (Isaac, 2026-10-18): Read and Describe end Navigation ([stopNavigation]: door guidance,
+ *   pings, outlines and obstacle warnings all stop, the door marker goes) instead of pausing it; "find the door" or
+ *   "guide me" starts it again. Only the arrival check, which belongs to Navigation, pauses and resumes it.
  * - One-shot commands (Read FR-T1, Describe FR-D1, FindDoor FR-N3, arrival FR-N6): pause
  *   Navigation (ADR-0004) → THINKING earcon → `captureStill()` → the VLM under the 15 s
  *   watchdog (INV-5) with a THINKING earcon every 1.5 s (designs: never silent > 2 s) →
@@ -421,8 +424,9 @@ class ModeController(
      */
     private suspend fun captureAndDescribe(mode: Mode, prompt: String, event: CommandEvent?) {
         event?.let { markActionStarted(it) } // NFR: the state is already CAPTURING; the announcement is not latency
+        if (mode != Mode.NAVIGATION) stopNavigation() // one mode at a time: Read and Describe end Navigation
         announceMode(mode) // FR-G3
-        val wasRunning = pauseNavigation() // ADR-0004
+        val wasRunning = pauseNavigation() // ADR-0004: only the arrival check still finds it running
         var still: Bitmap? = null
         try {
             _state.value = ModeState.CAPTURING
@@ -861,6 +865,18 @@ class ModeController(
         if (_mode.value == mode) return
         _mode.value = mode
         say(phrasebook.modeAnnounced(mode), interrupt = true)
+    }
+
+    /**
+     * One mode at a time (Isaac, 2026-10-18): leaving Navigation for Read or Describe stops it outright (guidance, the
+     * spatial ping, detector outlines and obstacle warnings) and removes the door marker, rather than pausing it to
+     * resume after the answer. `NavigationEngine.stop()` also clears the door target.
+     */
+    private suspend fun stopNavigation() {
+        if (!navigation.isRunning.value) return
+        navigation.stop()
+        overlay.clear()
+        if (_worldLabel.value?.kind == WorldLabel.Kind.DOOR) _worldLabel.value = null
     }
 
     /** ADR-0004: returns whether Navigation was running (and is now paused), so the caller resumes it. */
