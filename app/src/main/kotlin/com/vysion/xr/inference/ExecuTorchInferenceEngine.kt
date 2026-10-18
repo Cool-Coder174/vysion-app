@@ -244,7 +244,7 @@ class ExecuTorchInferenceEngine(
                 val argb = IntArray(w * h)
                 bitmap.getPixels(argb, 0, w, 0, 0, w, h)
                 val recMaxWidth = Ocr.REC_MAX_WIDTH
-                val det = OcrPipeline.detInput(argb, w, h, Ocr.DET_MAX_SIDE, Ocr.DET_MULTIPLE)
+                val det = OcrPipeline.detInput(argb, w, h, Ocr.DET_MIN_SIDE, Ocr.DET_MAX_SIDE, Ocr.DET_MULTIPLE)
                 val probs = module.execute(
                     "detect",
                     EValue.from(Tensor.fromBlob(det.chw, longArrayOf(1, 3, det.height.toLong(), det.width.toLong()))),

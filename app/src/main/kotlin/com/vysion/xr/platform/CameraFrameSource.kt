@@ -303,8 +303,11 @@ class CameraFrameSource(
         const val ANALYSIS_WIDTH: Int = 640
         const val ANALYSIS_HEIGHT: Int = 480
 
-        /** docs/model-plan.md: Gemma 3 4B image input 896×896 (UNVERIFIED); overridden from `ModelInfo` at runtime. */
-        const val DEFAULT_STILL_EDGE: Int = 896
+        /**
+         * Square still edge. OCR reads small print better with more pixels (its detector takes 640–1280 a side);
+         * the inference engine scales a still down to its VLM's input (512 for LFM2.5-VL) itself.
+         */
+        const val DEFAULT_STILL_EDGE: Int = 1280
     }
 }
 

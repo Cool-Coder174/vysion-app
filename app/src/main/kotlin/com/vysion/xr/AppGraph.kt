@@ -40,8 +40,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -71,9 +69,8 @@ import kotlinx.coroutines.launch
  * laptop emulator or the S25 Ultra with no camera, XR runtime or model files. On a non-XR device
  * ([DeviceProfile.isXr] false) the perception modules are `NoOp*` regardless (ADR-0006).
  *
- * Wiring that is not a constructor argument: the VLM still size. `CameraFrameSource.stillEdge` follows
- * `InferenceEngine.vlmInfo.inputWidth` once the VLM has loaded (FR-T1/FR-D1 prefill needs the model's input
- * size, Contracts.kt `FrameSource.captureStill`); `FakeFrameSource` always returns 896.
+ * Still size: fixed by `CameraFrameSource` (1280, for OCR on small print); the inference engine fits a still to its
+ * VLM's input itself, so nothing is wired between them (Contracts.kt `FrameSource.captureStill`).
  *
  * Lifecycle: [start] / [stop] follow `MainActivity.onStart` / `onStop` and can repeat (taking the
  * headset off and on stops and restarts the modules); [startPerception] runs after each [start] and waits
@@ -130,16 +127,6 @@ class AppGraph(private val app: Application) {
 
     // R5 — diagnostics
     val diagnostics: DiagnosticsSource = DiagnosticsCollector(app, inferenceEngine, frameSource, scope)
-
-    init {
-        // FR-T1 / FR-D1: the still must be the VLM's input size (Contracts.kt captureStill); r1 open issue 1.
-        (frameSource as? CameraFrameSource)?.let { camera ->
-            scope.launch {
-                inferenceEngine.vlmInfo.filterNotNull().map { it.inputWidth }.filter { it > 0 }
-                    .collect { camera.stillEdge = it }
-            }
-        }
-    }
 
     /**
      * R4's words for everything Vysion says, following `Speaker.locale` (FR-G6). Exposed for the onboarding UI,

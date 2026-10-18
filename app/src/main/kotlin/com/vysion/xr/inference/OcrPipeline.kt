@@ -31,14 +31,16 @@ internal object OcrPipeline {
     private val IMAGENET_STD = floatArrayOf(0.229f, 0.224f, 0.225f)
 
     /**
-     * Scale the frame so its long side is at most [maxSide], snap both sides up to a multiple of [multiple]
-     * (DBNet downsamples by 32), sample bilinearly and normalize with ImageNet mean/std, CHW RGB.
+     * Scale the frame so its long side is at most [maxSide] and its short side at least [minSide] (the export's
+     * dynamic range, from its `get_model_schema`: 640–1280 step 32), snap both sides to a multiple of [multiple]
+     * (DBNet downsamples by 32) inside that range, sample bilinearly and normalize with ImageNet mean/std, CHW RGB.
      */
-    fun detInput(argb: IntArray, srcW: Int, srcH: Int, maxSide: Int, multiple: Int): DetInput {
+    fun detInput(argb: IntArray, srcW: Int, srcH: Int, minSide: Int, maxSide: Int, multiple: Int): DetInput {
         require(srcW > 0 && srcH > 0 && argb.size >= srcW * srcH) { "bad source $srcW x $srcH" }
-        val scale = min(1f, maxSide.toFloat() / max(srcW, srcH))
-        val w = snapUp((srcW * scale).roundToInt(), multiple, maxSide)
-        val h = snapUp((srcH * scale).roundToInt(), multiple, maxSide)
+        var scale = min(1f, maxSide.toFloat() / max(srcW, srcH))
+        if (min(srcW, srcH) * scale < minSide) scale = minSide.toFloat() / min(srcW, srcH)
+        val w = snapUp((srcW * scale).roundToInt(), multiple, maxSide).coerceAtLeast(minSide)
+        val h = snapUp((srcH * scale).roundToInt(), multiple, maxSide).coerceAtLeast(minSide)
         val plane = w * h
         val out = FloatArray(3 * plane)
         val sx = srcW.toFloat() / w
@@ -273,10 +275,11 @@ internal object Ocr {
     /** SVTR maps 8 input columns to one CTC step: `W = 8 × T`. */
     const val REC_STRIDE: Int = 8
 
-    /** Widest recognizer input tried; a wider line is split (the export's dynamic-width bound is not published). */
-    const val REC_MAX_WIDTH: Int = 640
+    /** Widest recognizer input tried (the export allows 1280); a wider line is split. */
+    const val REC_MAX_WIDTH: Int = 960
 
-    /** Detector long side; the camera's 640×480 analysis frame fits as is, a still is scaled down. */
+    /** Detector sides: the export's range is 640–1280; 960 keeps a 1280 still fast and small print legible. */
+    const val DET_MIN_SIDE: Int = 640
     const val DET_MAX_SIDE: Int = 960
 
     /** DBNet's downsampling: detector sides are multiples of this. */

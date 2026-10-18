@@ -10,16 +10,18 @@ class OcrPipelineTest {
     @Test
     fun `detector input snaps to multiples of 32, keeps the long side under the cap and normalizes ImageNet`() {
         val white = IntArray(640 * 480) { 0xFFFFFFFF.toInt() }
-        val input = OcrPipeline.detInput(white, 640, 480, maxSide = 960, multiple = 32)
-        assertEquals(640, input.width)
-        assertEquals(480, input.height)
+        val input = OcrPipeline.detInput(white, 640, 480, minSide = 640, maxSide = 960, multiple = 32)
+        assertEquals(864, input.width) // short side raised to 640: 640 x 4/3 = 853 → 864
+        assertEquals(640, input.height)
         assertEquals((1f - 0.485f) / 0.229f, input.chw[0], 1e-4f)
-        assertEquals((1f - 0.406f) / 0.225f, input.chw[2 * 640 * 480], 1e-4f)
+        assertEquals((1f - 0.406f) / 0.225f, input.chw[2 * 864 * 640], 1e-4f)
 
-        val big = OcrPipeline.detInput(IntArray(1920 * 1000), 1920, 1000, maxSide = 960, multiple = 32)
-        assertEquals(960, big.width)
-        assertEquals(512, big.height) // 500 → 512
-        assertEquals(2f, big.scaleX, 1e-6f)
+        val still = OcrPipeline.detInput(IntArray(1280 * 1280), 1280, 1280, minSide = 640, maxSide = 960, multiple = 32)
+        assertEquals(960, still.width)
+        assertEquals(960, still.height)
+        val small = OcrPipeline.detInput(IntArray(512 * 512), 512, 512, minSide = 640, maxSide = 960, multiple = 32)
+        assertEquals(640, small.width) // the export rejects sides under 640
+        assertEquals(0.8f, small.scaleX, 1e-6f)
     }
 
     @Test
