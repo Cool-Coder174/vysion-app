@@ -3,6 +3,9 @@ package com.vysion.xr.voice
 import com.vysion.xr.core.Distances
 import com.vysion.xr.core.Mode
 import com.vysion.xr.core.NavigationCue
+import com.vysion.xr.core.OnboardingItem
+import com.vysion.xr.core.OnboardingPage
+import com.vysion.xr.core.OnboardingStep
 import com.vysion.xr.core.Speaker
 import com.vysion.xr.core.ModePhrasebook
 import java.util.Locale
@@ -283,6 +286,27 @@ object Cues {
         return violations
     }
 
+    /**
+     * First-launch onboarding (Michelle Bui's designs, pages 2-8). The English is the designs' copy verbatim;
+     * each page is read aloud on entry ([OnboardingPage.spoken]) and shown with the same words, so the visual
+     * and the audio twin cannot drift (SRS §3 rule 1).
+     */
+    fun onboarding(step: OnboardingStep, locale: Locale = Speaker.EN_US): OnboardingPage =
+        (if (locale.language == ES) OnboardingCopy.ES_MX else OnboardingCopy.EN_US).page(step)
+
+    /** Onboarding page 4: Vysion keeps talking until the user stops it, so stopping can be practiced. */
+    fun stopPractice(locale: Locale = Speaker.EN_US): String =
+        (if (locale.language == ES) OnboardingCopy.ES_MX else OnboardingCopy.EN_US).stopPractice
+
+    /** Every onboarding string in both languages, for the phrasing test. */
+    internal fun onboardingValues(): List<String> = listOf(OnboardingCopy.EN_US, OnboardingCopy.ES_MX).flatMap { copy ->
+        OnboardingStep.entries.flatMap { step ->
+            val page = copy.page(step)
+            listOfNotNull(page.title, page.body, page.hint, page.footnote, page.spoken) +
+                page.items.flatMap { listOfNotNull(it.title, it.detail) }
+        } + copy.stopPractice
+    }
+
     /** All values, for the completeness and phrasing tests. */
     internal fun allValues(): Map<Pair<Key, String>, String> =
         EN_US.mapKeys { it.key to "en-US" } + ES_MX.mapKeys { it.key to "es-MX" }
@@ -319,4 +343,146 @@ object CuesPhrasebook : ModePhrasebook {
     override fun modeAnnounced(mode: Mode): String = Cues.modeAnnouncement(mode, locale())
     override fun navigationCue(cue: NavigationCue): String? =
         if (cue == NavigationCue.Arrived) null else Cues.phrase(cue, locale())
+    override fun onboarding(step: OnboardingStep): OnboardingPage = Cues.onboarding(step, locale())
+    override val stopPractice: String get() = Cues.stopPractice(locale())
+}
+
+/**
+ * The onboarding words for one language. Pages are assembled here once, and [OnboardingPage.spoken] is built
+ * from the same fields the panel shows, so nothing is said that is not on screen and the reverse.
+ */
+private class OnboardingCopy(
+    private val welcome: Pair<String, String>,
+    private val privacyTitle: String,
+    private val privacyRows: List<String>,
+    private val privacyFootnote: String,
+    private val talk: Pair<String, String>,
+    private val talkHint: String,
+    private val talkHintSpoken: String,
+    private val stop: Pair<String, String>,
+    private val stopHint: String,
+    private val sounds: Pair<String, String>,
+    private val soundRows: List<OnboardingItem>,
+    private val safetyTitle: String,
+    private val productSentence: String,
+    private val caneReminder: String,
+    private val allSet: Pair<String, String>,
+    private val modeRows: List<OnboardingItem>,
+    private val allSetSpokenTail: String,
+    val stopPractice: String,
+) {
+    fun page(step: OnboardingStep): OnboardingPage = when (step) {
+        OnboardingStep.WELCOME -> OnboardingPage(
+            step = step, title = welcome.first, body = welcome.second,
+            spoken = "${welcome.first} ${welcome.second}",
+        )
+        OnboardingStep.PRIVACY -> OnboardingPage(
+            step = step, title = privacyTitle, items = privacyRows.map { OnboardingItem(it) },
+            footnote = privacyFootnote,
+            spoken = (listOf(privacyTitle) + privacyRows + privacyFootnote).joinToString(" "),
+        )
+        OnboardingStep.TALK -> OnboardingPage(
+            step = step, title = talk.first, body = talk.second, hint = talkHint,
+            spoken = "${talk.first} ${talk.second} $talkHintSpoken",
+        )
+        OnboardingStep.STOP -> OnboardingPage(
+            step = step, title = stop.first, body = stop.second, hint = stopHint,
+            spoken = "${stop.first} ${stop.second}",
+        )
+        OnboardingStep.SOUNDS -> OnboardingPage(
+            step = step, title = sounds.first, body = sounds.second, items = soundRows,
+            spoken = "${sounds.first} ${sounds.second}",
+        )
+        OnboardingStep.SAFETY -> OnboardingPage(
+            step = step, title = safetyTitle, body = productSentence, hint = caneReminder,
+            spoken = "$safetyTitle $productSentence $caneReminder",
+        )
+        OnboardingStep.ALL_SET -> OnboardingPage(
+            step = step, title = allSet.first, body = allSet.second, items = modeRows,
+            spoken = "${allSet.first} ${allSet.second} $allSetSpokenTail",
+        )
+    }
+
+    companion object {
+        val EN_US = OnboardingCopy(
+            welcome = "Hi, I’m Vysion." to
+                "I help you read, understand, and move through a space. Everything runs on this headset.",
+            privacyTitle = "Everything stays on this headset.",
+            privacyRows = listOf(
+                "No internet permission. Nothing is uploaded.",
+                "Camera images are never saved.",
+                "You can stop me any time.",
+            ),
+            privacyFootnote = "Next, Android asks to use the camera and microphone.",
+            talk = "Talk to me anytime." to "Say “Vysion,” or pinch and hold. Speak, then open your fingers to send.",
+            talkHint = "Try it now: say “read this”",
+            talkHintSpoken = "Try it now: say read this.",
+            stop = "Stop me anytime." to
+                "Raise your palm facing out and hold for half a second, or just say “stop.” I go quiet right away.",
+            stopHint = "Try it: I’ll start talking, you stop me",
+            sounds = "Learn my sounds." to "Each sound means one thing. Look at a sound and pinch to hear it.",
+            soundRows = listOf(
+                OnboardingItem("Listening", "I’m hearing you"),
+                OnboardingItem("Thinking", "Working on it"),
+                OnboardingItem("Done", "Finished"),
+                OnboardingItem("Ping", "Where the door is"),
+                OnboardingItem("Warning", "Something is close"),
+                OnboardingItem("Error", "Say it again"),
+            ),
+            safetyTitle = "I’m a helper, not a guide.",
+            productSentence = "Vysion XR helps you read, understand, and move through a space. " +
+                "It is not validated for unassisted travel by blind users.",
+            caneReminder = "Keep using your cane or guide dog.",
+            allSet = "You’re all set." to "Try one of these. You can switch any time.",
+            modeRows = listOf(
+                OnboardingItem("Read", "“Read this”"),
+                OnboardingItem("Describe", "“What’s here?”"),
+                OnboardingItem("Navigate", "“Find the door”"),
+            ),
+            allSetSpokenTail = "Say read this, what’s here, or find the door.",
+            stopPractice = "This is a long sentence so you can practice stopping me. Say stop, raise your palm, " +
+                "or press Stop, and I go quiet right away. I keep talking until you do. I keep talking until you do.",
+        )
+
+        val ES_MX = OnboardingCopy(
+            welcome = "Hola, soy Vysion." to
+                "Te ayudo a leer, entender y moverte por un espacio. Todo funciona en este visor.",
+            privacyTitle = "Todo se queda en este visor.",
+            privacyRows = listOf(
+                "Sin permiso de internet. No se sube nada.",
+                "Las imágenes de la cámara nunca se guardan.",
+                "Puedes detenerme en cualquier momento.",
+            ),
+            privacyFootnote = "Después, Android te pide usar la cámara y el micrófono.",
+            talk = "Háblame cuando quieras." to "Di “Vysion” o pellizca y mantén. Habla y luego abre los dedos para enviar.",
+            talkHint = "Pruébalo: di “lee esto”",
+            talkHintSpoken = "Pruébalo: di lee esto.",
+            stop = "Detenme cuando quieras." to
+                "Levanta la palma hacia afuera y mantenla medio segundo, o di “alto”. Me callo de inmediato.",
+            stopHint = "Pruébalo: yo empiezo a hablar y tú me detienes",
+            sounds = "Aprende mis sonidos." to "Cada sonido significa una cosa. Mira un sonido y pellizca para oírlo.",
+            soundRows = listOf(
+                OnboardingItem("Escuchando", "Te estoy oyendo"),
+                OnboardingItem("Pensando", "Trabajando en ello"),
+                OnboardingItem("Listo", "Terminado"),
+                OnboardingItem("Ping", "Dónde está la puerta"),
+                OnboardingItem("Advertencia", "Algo está cerca"),
+                OnboardingItem("Error", "Dilo otra vez"),
+            ),
+            safetyTitle = "Soy una ayuda, no un guía.",
+            productSentence = "Vysion XR te ayuda a leer, entender y moverte por un espacio. " +
+                "No está validado para que personas ciegas viajen sin asistencia.",
+            caneReminder = "Sigue usando tu bastón o tu perro guía.",
+            allSet = "Todo listo." to "Prueba uno de estos. Puedes cambiar cuando quieras.",
+            modeRows = listOf(
+                OnboardingItem("Leer", "“Lee esto”"),
+                OnboardingItem("Describir", "“¿Qué hay aquí?”"),
+                OnboardingItem("Navegar", "“Busca la puerta”"),
+            ),
+            allSetSpokenTail = "Di lee esto, qué hay aquí, o busca la puerta.",
+            stopPractice = "Esta es una frase larga para que practiques detenerme. Di alto, levanta la palma " +
+                "o pulsa Detener, y me callo de inmediato. Sigo hablando hasta que lo hagas. " +
+                "Sigo hablando hasta que lo hagas.",
+        )
+    }
 }

@@ -206,6 +206,14 @@ class SpeechCommandBus internal constructor(
         }
     }
 
+    /** The toolbar's Cancel while LISTENING (designs page 10): end the session and deliver nothing. */
+    override fun cancelListening() {
+        if (_state.value != ListeningState.LISTENING) return
+        capJob?.cancel()
+        recognizer.cancel()
+        _state.value = ListeningState.IDLE
+    }
+
     /** Pinch released / mic button released: deliver what was heard. */
     override fun stopListening() {
         if (_state.value != ListeningState.LISTENING) return

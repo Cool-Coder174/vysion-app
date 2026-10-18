@@ -90,6 +90,7 @@ data class CommandEvent(val command: Command, val source: CommandSource, val rec
 interface CommandBus {
     val commands: Flow<CommandEvent>; val state: StateFlow<ListeningState>
     fun startListening(); fun stopListening(); fun inject(command: Command, source: CommandSource = CommandSource.PANEL)
+    fun cancelListening() = stopListening()   // designs' Cancel while LISTENING: R4 discards; default delivers
     fun setLocale(locale: Locale) {}   // FR-G6: recognition follows "in Spanish"; default no-op
     fun release() {}                   // SpeechRecognizer.destroy(), once from AppGraph.release(); default no-op
 }
@@ -114,13 +115,20 @@ interface ModePhrasebook {
     val voiceCommandsUnavailable: String get() = ""; val cameraLost: String get() = ""; val modelNotFound: String get() = ""   // additive, default blank
     fun modeAnnounced(mode: Mode): String
     fun navigationCue(cue: NavigationCue): String?   // null = nothing to say (e.g. Arrived runs the ARRIVAL prompt)
+    fun onboarding(step: OnboardingStep): OnboardingPage   // designs pages 2-8: shown AND read aloud; default blank page
+    val stopPractice: String get() = ""                    // onboarding page 4: Vysion talks until the user stops it
     object Unwired : ModePhrasebook                  // every value "", navigationCue → null; blank is skipped, never spoken
 }
+enum class OnboardingStep { WELCOME, PRIVACY, TALK, STOP, SOUNDS, SAFETY, ALL_SET }
+data class OnboardingItem(val title: String, val detail: String? = null)
+data class OnboardingPage(val step: OnboardingStep, val title: String, val body: String? = null, val items: List<OnboardingItem> = emptyList(),
+                          val hint: String? = null, val footnote: String? = null, val spoken: String)
 interface PromptSet {
     val read: String; val describe: String; val door: String; val arrival: String   // the four P0 prompts
     val translateEs: String? get() = null; val describeBrief: String? get() = null; val describeDetailed: String? get() = null
     fun followUp(question: String): String? = null                                   // P1 variants: null = not available yet
     fun forLocale(prompt: String, locale: Locale): String = prompt                   // FR-G6: R2 appends "Respond in Spanish." (DOOR exempt)
+    val noTextSentinel: String? get() = null                                         // the READ prompt's "No text found"; the UI shows "move closer"
     object Unwired : PromptSet                                                       // the four P0 prompts are ""
 }
 
@@ -172,7 +180,7 @@ Each is additive (a default value or a default body), so no caller breaks. Until
 | # | Proposal | Why | Who uses it | Status |
 |---|---|---|---|---|
 | P-1 | `suspend fun placeFromBearing(bearing: HorizontalBearing, capturedAtNanos: Long? = null): AnchorId?` on `AnchorStore` | FR-N3: the VLM's left / center / right is relative to the head at `captureStill()` time, but the store reads the head yaw when it is called, after both door answers (up to 2 × 15 s later); a user who turns meanwhile gets an anchor in the wrong direction | R1 passes `System.nanoTime()` taken right after the first `captureStill()`; R3 keeps a 30 s ring buffer of head poses stamped with `System.nanoTime()` (not `RawHeadPose.timestampNanos`, which is `elapsedRealtimeNanos`) and uses the sample nearest to it, else the current pose; `NoOpAnchorStore` and the test fakes ignore it | open (r3 page Contract issue 6, r1 page open issue 10) |
-| P-2 | `val noTextFound: String get() = ""` on `ModePhrasebook`; `val noTextSentinel: String? get() = null` on `PromptSet` (`LibraryPromptSet` returns `PromptLibrary.NO_TEXT_SENTINEL`) | FR-T1: today the READ answer "No text found." is spoken in the model's own words; this lets R1 speak R4's fixed line instead (en-US "No text found.", es-MX "No encontré texto.", `Key.NO_TEXT_FOUND`), matching the answer case-insensitively against the sentinel | R1 `ModeController.captureAndDescribe` (Read only); R4 `CuesPhrasebook`; R2 `LibraryPromptSet` | open, P1 (r4 page "Who says what") |
+| P-2 | `val noTextFound: String get() = ""` on `ModePhrasebook`; `val noTextSentinel: String? get() = null` on `PromptSet` (`LibraryPromptSet` returns `PromptLibrary.NO_TEXT_SENTINEL`) | FR-T1: today the READ answer "No text found." is spoken in the model's own words; this lets R1 speak R4's fixed line instead (en-US "No text found.", es-MX "No encontré texto.", `Key.NO_TEXT_FOUND`), matching the answer case-insensitively against the sentinel | R1 `ModeController.captureAndDescribe` (Read only); R4 `CuesPhrasebook`; R2 `LibraryPromptSet` | half done 2026-10-17: `PromptSet.noTextSentinel` landed (the UI shows the designs' "move closer" screen); the spoken `noTextFound` line is still open, P1 (r4 page "Who says what") |
 | P-3 | `val box: NormalizedBox? = null` on `NavigationCue.DoorBearing` | the door highlight is a left / center / right band from the clock hour, not the door's outline | R3 fills it when the detector (or the P2 door class, FR-N8) sees the door; R1 draws it instead of `DoorHighlight` | open (r1 page open issue 2) |
 | P-4 | `data class PointingRegion(val box: NormalizedBox)` and a `PointingSource` | FR-D4 (P2) region-only describe | R3 provides, R1 crops | not started (r3 page Contract issue 5) |
 
