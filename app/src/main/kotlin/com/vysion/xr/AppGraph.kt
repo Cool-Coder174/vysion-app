@@ -1,6 +1,7 @@
 package com.vysion.xr
 
 import android.app.Activity
+import android.util.Log
 import android.app.Application
 import com.vysion.xr.core.AnchorStore
 import com.vysion.xr.core.CommandBus
@@ -34,6 +35,7 @@ import com.vysion.xr.platform.PassthroughOverlayRenderer
 import com.vysion.xr.voice.AndroidSpeaker
 import com.vysion.xr.voice.CuesPhrasebook
 import com.vysion.xr.voice.SpeechCommandBus
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -170,7 +172,16 @@ class AppGraph(private val app: Application) {
     suspend fun startPerception(activity: Activity) {
         val session = perception ?: return
         perceptionStop?.join()
-        session.start(activity)
+        try {
+            session.start(activity)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IllegalStateException) {
+            // Jetpack XR throws "Session already exists for context" / "Session has been destroyed" when the activity
+            // restarts faster than its old Session is torn down. Uncaught, it killed the app from lifecycleScope
+            // (headset crash log, 2026-10-17). Navigation retries through ensureStarted(); the rest of the app runs.
+            Log.w(RELIABILITY_TAG, "perception start skipped: ${e.message}")
+        }
     }
 
     /**
@@ -201,3 +212,6 @@ class AppGraph(private val app: Application) {
         }.invokeOnCompletion { scope.cancel() }
     }
 }
+
+/** Same tag as `MainActivity`'s recovered-failure lines (docs/nfr.md reliability evidence). */
+private const val RELIABILITY_TAG = "vysion.reliability"

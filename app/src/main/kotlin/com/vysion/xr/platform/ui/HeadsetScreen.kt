@@ -143,7 +143,9 @@ object HeadsetScreens {
         if (text.isEmpty() || start < 0 || start >= text.length) return null
         var from = start
         while (from > 0 && !isBoundary(text, from - 1)) from--
-        var to = end.coerceIn(start, text.length)
+        // At least one character: the engine reports (0, 0) when an utterance starts, and to = 0 would read index -1
+        // (StringIndexOutOfBoundsException on the main thread, crash on every spoken answer, headset 2026-10-17).
+        var to = end.coerceIn(start + 1, text.length)
         while (to < text.length && !isBoundary(text, to - 1)) to++
         while (from < to && text[from].isWhitespace()) from++
         return from until to

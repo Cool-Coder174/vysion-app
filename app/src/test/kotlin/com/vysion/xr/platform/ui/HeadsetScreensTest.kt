@@ -100,4 +100,13 @@ class HeadsetScreensTest {
         assertEquals("Tables with people on both sides.", text.substring(second))
         assertNull(HeadsetScreens.spokenSentence("", 0, 0))
     }
+
+    @Test
+    fun `spoken sentence survives the zero-length range reported when an utterance starts`() {
+        val text = "Meeting rooms are on floor 2. Also on 2: the main office."
+        assertEquals(0 until 29, HeadsetScreens.spokenSentence(text, 0, 0))
+        assertEquals(0 until 29, HeadsetScreens.spokenSentence(text, 0, 7))
+        assertEquals(30 until 40, HeadsetScreens.spokenSentence(text, 30, 30))
+        assertEquals(0 until 1, HeadsetScreens.spokenSentence("A", 0, 0))
+    }
 }
