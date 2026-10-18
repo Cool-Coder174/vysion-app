@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,6 +56,7 @@ import androidx.xr.compose.subspace.SpatialBoxScope
 import androidx.xr.compose.subspace.SpatialPanel
 import androidx.xr.compose.subspace.SubspaceComposable
 import androidx.xr.compose.subspace.TrackedDimensions
+import androidx.xr.compose.subspace.draw.scale
 import androidx.xr.compose.subspace.layout.SpatialRoundedCornerShape
 import androidx.xr.compose.subspace.layout.SubspaceModifier
 import androidx.xr.compose.subspace.layout.height
@@ -91,7 +93,9 @@ import com.vysion.xr.platform.ui.theme.rememberReduceMotion
 import com.vysion.xr.platform.ui.theme.vysionSpring
 import com.vysion.xr.platform.ui.theme.vysionSpring
 import kotlin.math.abs
+import kotlin.math.tan
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 /**
  * The Galaxy XR layout (Michelle Bui's designs, Headset 1-13): passthrough Full Space with one glass status
@@ -161,8 +165,8 @@ private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composa
     WorldLabelLayer(graph)
     // The Read page aims with the head: the crosshair marks what "read" will read.
     ReadingCrosshair(graph, session, visible = gesturePage == Mode.TEXT_READER && obstacle == null)
-    // The HUD hangs below the line of sight (its top edge, whatever its height), so the middle of the view stays the room.
-    FollowingWearer(session, drop = HUD_TOP_BELOW_EYE_LINE + statusHeight / 2) {
+    // The HUD stays below the line of sight wherever the wearer looks, so the middle of the view stays the room.
+    FollowingWearer(session, height = statusHeight) {
         // The status window stays centered in front of the wearer; the diagnostics window and the outline layer open
         // beside it without moving it (a SpatialRow centered the whole row, so opening diagnostics pushed the window
         // left). The rail and toolbar float just outside its edges, never over its text.
@@ -252,25 +256,29 @@ private fun MainLayout(graph: AppGraph, session: Session?, diagnostics: @Composa
 
 
 /**
- * Augmented: the main window travels with the wearer (soft follow, position and turning only, never tilt or roll)
- * and hangs [drop] below eye level, like a heads-up display, so it stays in reach while walking without covering the
- * sign being read. Head-locked following needs `DeviceTrackingMode.SPATIAL` (configured by the perception session);
+ * Augmented: the main window is a heads-up display. It travels with the wearer (soft follow, turning and nodding, never
+ * roll), [HUD_DISTANCE_M] away and with its top edge [HUD_TOP_BELOW_GAZE_DEG] below the line of sight whatever its
+ * [height], so the middle of the view (and the reading crosshair) always shows the room. The first worn build
+ * followed turning only and sat 0.5 m away: looking down at a sign brought the window over the crosshair. Head-locked following needs `DeviceTrackingMode.SPATIAL` (configured by the perception session);
  * without it the window stays where it opened, as before, instead of not appearing at all.
  */
 @OptIn(ExperimentalFollowingSubspaceApi::class)
 @Composable
-private fun FollowingWearer(session: Session?, drop: Dp, content: @Composable @SubspaceComposable SpatialBoxScope.() -> Unit) {
-    val tracked = session != null && session.config.deviceTracking != DeviceTrackingMode.DISABLED
-    if (tracked) {
+private fun FollowingWearer(session: Session?, height: Dp, content: @Composable @SubspaceComposable SpatialBoxScope.() -> Unit) {
+    val tracked = rememberDeviceTracked(session)
+    if (tracked && session != null) {
+        val meters = rememberMetersToDp(session)
+        val top = meters(HUD_DISTANCE_M * tan(Math.toRadians(HUD_TOP_BELOW_GAZE_DEG.toDouble())).toFloat())
         FollowingSubspace(
-            target = FollowTarget.ArDevice(session!!),
+            target = FollowTarget.ArDevice(session),
             behavior = FollowBehavior.Soft(FOLLOW_DURATION_MS),
-            modifier = SubspaceModifier.offset(y = -drop),
+            modifier = SubspaceModifier.offset(y = -(top + height / 2), z = -(meters(HUD_DISTANCE_M) - meters.headLockDepth())),
+            // Tilting the head down to read a table or a low sign keeps the HUD below the crosshair, never over it.
             dimensions = TrackedDimensions(
                 isTranslationXTracked = true,
                 isTranslationYTracked = true,
                 isTranslationZTracked = true,
-                isRotationXTracked = false,
+                isRotationXTracked = true,
                 isRotationYTracked = true,
                 isRotationZTracked = false,
             ),
@@ -279,6 +287,43 @@ private fun FollowingWearer(session: Session?, drop: Dp, content: @Composable @S
     } else {
         Subspace(content = content)
     }
+}
+
+/**
+ * Meters in front of the wearer → dp inside a `FollowingSubspace(FollowTarget.ArDevice)`. That subspace is scaled by
+ * the system's recommended scale (the key entity's) and already puts content [HEAD_LOCK_DEPTH_M] ahead, so a distance
+ * D is reached with `offset(z = -(meters(D) - meters.headLockDepth()))`, and a size S at any distance with `meters(S)`.
+ */
+private class MetersToDp(private val dpPerMeter: Float, private val scale: Float) {
+    operator fun invoke(m: Float): Dp = (m / scale * dpPerMeter).dp
+    fun headLockDepth(): Dp = invoke(HEAD_LOCK_DEPTH_M * scale)
+}
+
+@Composable
+private fun rememberMetersToDp(session: Session): MetersToDp {
+    val density = LocalDensity.current.density
+    return remember(session, density) {
+        val scale = runCatching { session.scene.keyEntity?.getScale(relativeTo = SceneSpace.ACTIVITY) }.getOrNull()
+            ?.takeIf { it > 0f } ?: 1f
+        MetersToDp(session.scene.virtualPixelDensity.pixelsPerMeter / density, scale)
+    }
+}
+
+/**
+ * Whether head tracking is on (`DeviceTrackingMode.SPATIAL`), which head-locked content needs. The perception session
+ * switches it on after the first frame, and `Session.config` is not snapshot state, so it is polled until on;
+ * a composable that read it once would stay off for good.
+ */
+@Composable
+private fun rememberDeviceTracked(session: Session?): Boolean {
+    fun Session?.isTracked() = this != null && config.deviceTracking != DeviceTrackingMode.DISABLED
+    val tracked by produceState(initialValue = session.isTracked(), session) {
+        while (!value) {
+            delay(TRACKING_POLL_MS)
+            value = session.isTracked()
+        }
+    }
+    return tracked
 }
 
 /**
@@ -294,7 +339,11 @@ private fun FollowingWearer(session: Session?, drop: Dp, content: @Composable @S
 @OptIn(ExperimentalFollowingSubspaceApi::class)
 @Composable
 private fun ReadingCrosshair(graph: AppGraph, session: Session?, visible: Boolean) {
-    if (!visible || session == null || session.config.deviceTracking == DeviceTrackingMode.DISABLED) return
+    val tracked = rememberDeviceTracked(session)
+    if (BuildConfig.DEBUG) {
+        LaunchedEffect(visible, tracked) { android.util.Log.d("vysion.crosshair", "visible=$visible tracked=$tracked") }
+    }
+    if (!visible || session == null || !tracked) return
     val sampled by graph.gazeDistanceM.collectAsStateWithLifecycle(initialValue = null)
     var target by remember { mutableFloatStateOf(CROSSHAIR_DEFAULT_M) }
     LaunchedEffect(sampled) { sampled?.let { target = it.coerceIn(CROSSHAIR_MIN_M, CROSSHAIR_MAX_M) } }
@@ -304,16 +353,11 @@ private fun ReadingCrosshair(graph: AppGraph, session: Session?, visible: Boolea
         animationSpec = if (reduceMotion) snap() else vysionSpring(response = 0.3f),
         label = "crosshair distance",
     )
-    val density = LocalDensity.current
-    val pixelsPerMeter = remember(session) { session.scene.virtualPixelDensity.pixelsPerMeter }
-    val scale = remember(session) {
-        runCatching { session.scene.keyEntity?.getScale(relativeTo = SceneSpace.ACTIVITY) }.getOrNull()?.takeIf { it > 0f } ?: 1f
-    }
-    fun meters(m: Float): Dp = with(density) { (m / scale * pixelsPerMeter).toDp() }
+    val meters = rememberMetersToDp(session)
     FollowingSubspace(
         target = FollowTarget.ArDevice(session),
         behavior = FollowBehavior.Soft(FollowBehavior.MIN_SOFT_DURATION_MS),
-        modifier = SubspaceModifier.offset(z = -(meters(distance) - meters(HEAD_LOCK_DEPTH_M * scale))),
+        modifier = SubspaceModifier.offset(z = -(meters(distance) - meters.headLockDepth())),
     ) {
         SpatialPanel(SubspaceModifier.width(meters(ReadingFrame.widthAt(distance))).height(meters(ReadingFrame.heightAt(distance)))) {
             CrosshairFrame()
@@ -364,13 +408,27 @@ private fun WorldLabelLayer(graph: AppGraph) {
     val label by graph.modeController.worldLabel.collectAsStateWithLifecycle()
     val current = label ?: return
     val space = remember(current.anchor) { graph.anchorSpace(current.anchor) } ?: return
+    // A card on a sign 2.5 m away was too small to read in the first worn capture: it grows with distance instead.
+    val distanceFlow = remember(current.anchor) { graph.anchorDistanceM(current.anchor) }
+    val distance by distanceFlow.collectAsStateWithLifecycle(initialValue = null)
+    val reduceMotion = LocalReduceMotion.current
+    val grow by animateFloatAsState(
+        targetValue = ((distance ?: WORLD_LABEL_REF_M) / WORLD_LABEL_REF_M).coerceIn(1f, WORLD_LABEL_MAX_SCALE),
+        animationSpec = if (reduceMotion) snap() else vysionSpring(response = 0.4f),
+        label = "world label scale",
+    )
     FollowingSubspace(target = FollowTarget.Anchor(space), behavior = FollowBehavior.Tight) {
         when (current.kind) {
             WorldLabel.Kind.DOOR -> SpatialPanel(
-                SubspaceModifier.width(DOOR_LABEL_WIDTH).height(DOOR_LABEL_HEIGHT),
+                SubspaceModifier.scale(grow).width(DOOR_LABEL_WIDTH).height(DOOR_LABEL_HEIGHT),
                 shape = SpatialRoundedCornerShape(CornerSize(Radius.window)),
             ) { DoorMarker() }
-            WorldLabel.Kind.TEXT -> AutoHeightPanel(width = READ_CARD_WIDTH, min = 160.dp, max = 560.dp) {
+            WorldLabel.Kind.TEXT -> AutoHeightPanel(
+                width = READ_CARD_WIDTH,
+                min = 160.dp,
+                max = 560.dp,
+                modifier = SubspaceModifier.scale(grow),
+            ) {
                 ReadCard(current.text)
             }
         }
@@ -488,7 +546,8 @@ private fun setPassthrough(session: Session, opacity: Float) {
 
 /** A heads-up display, not a monitor: about two thirds of Android XR's default panel, so the room stays the view. */
 private val STATUS_WIDTH = 820.dp
-private val STATUS_MIN_HEIGHT = 240.dp
+/** Tall enough for the three-item rail orbiter, which is clipped to the window's height. */
+private val STATUS_MIN_HEIGHT = 330.dp
 private val STATUS_MAX_HEIGHT = 720.dp
 
 /** Space between the status window and its rail / toolbar orbiters. */
@@ -500,11 +559,21 @@ private val SIDE_GAP = 48.dp
 /** Soft follow: the window catches up with the wearer's head in about half a second, not instantly. */
 private const val FOLLOW_DURATION_MS = 600
 
-/** The HUD's top edge sits this far below the line of sight, leaving the middle of the view to the room. */
-private val HUD_TOP_BELOW_EYE_LINE = 140.dp
+/** The HUD's distance: farther than arm's length (0.5 m was too close to read comfortably), nearer than most signs. */
+private const val HUD_DISTANCE_M = 1.25f
 
-/** Backward tilt of the HUD so it faces eyes that look down at it (degrees, top edge away from the wearer). */
-private const val HUD_TILT_DEG = 12f
+/** The HUD's top edge, below the line of sight: clear of the reading crosshair, which reaches 10° down. */
+private const val HUD_TOP_BELOW_GAZE_DEG = 13f
+
+/** Backward tilt of the HUD so it faces the eyes from below the line of sight (degrees, top edge away). */
+private const val HUD_TILT_DEG = 16f
+
+/** World labels keep at least the HUD's text size: past this distance they grow with it, up to [WORLD_LABEL_MAX_SCALE]. */
+private const val WORLD_LABEL_REF_M = HUD_DISTANCE_M
+private const val WORLD_LABEL_MAX_SCALE = 3f
+
+/** How often the layout checks whether head tracking has come on. */
+private const val TRACKING_POLL_MS = 250L
 
 /** `FollowTarget.ArDevice`'s built-in distance in front of the head (Compose for XR 1.0.0-beta01 `DEFAULT_OFFSET`). */
 private const val HEAD_LOCK_DEPTH_M = 0.5f

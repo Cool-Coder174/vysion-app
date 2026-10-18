@@ -26,6 +26,7 @@ import com.vysion.xr.perception.NoOpAnchorStore
 import com.vysion.xr.perception.NoOpHeadPoseSource
 import com.vysion.xr.perception.NoOpHandGestures
 import com.vysion.xr.perception.NoOpNavigationEngine
+import com.vysion.xr.perception.Tracking
 import com.vysion.xr.perception.XrAnchorStore
 import com.vysion.xr.perception.XrHandGestures
 import com.vysion.xr.perception.XrHeadPoseSource
@@ -50,10 +51,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
  * Manual wiring of every long-lived module (ADR-0008). This is the ONLY place a module is
@@ -180,7 +185,17 @@ class AppGraph(private val app: Application) {
      * R3's depth map, a few times a second while collected. `null` off the headset, without head tracking, or where no
      * trusted depth exists; the crosshair then keeps its last distance.
      */
-    val gazeDistanceM: Flow<Float?> = perception?.let { session ->
+    /**
+     * World labels (augmented layer): meters from the wearer's head to an anchor, in 10 cm steps, so a label can grow
+     * with distance and stay readable. `null` off the headset or while the anchor is not tracked.
+     */
+    fun anchorDistanceM(id: AnchorId): Flow<Float?> = perception?.let { session ->
+        combine(session.anchorPose(id), session.headPose) { anchor, head ->
+            if (anchor.tracking != Tracking.TRACKING || head == null) null else (anchor.position - head.position).length
+        }.map { m -> m?.let { (it * 10f).roundToInt() / 10f } }.distinctUntilChanged() // 10 cm steps, not every frame
+    } ?: flowOf(null)
+
+        val gazeDistanceM: Flow<Float?> = perception?.let { session ->
         flow {
             while (true) {
                 emit(runCatching { session.gazeDistanceM() }.getOrNull())

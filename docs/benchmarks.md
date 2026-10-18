@@ -18,7 +18,7 @@ VLM median/p90 = wall time of `InferenceEngine.describe(still, READ, 60)` from t
 | NFR | Target | Measured | Pass? | Evidence |
 |---|---|---|---|---|
 | Command recognized → action started | ≤ 1.5 s | not measured | | |
-| Text Reader capture → first spoken word | ≤ 6 s | dev runs, not the protocol: 1.27 s and 1.72 s (OCR 1.26–1.7 s on a 1920×1440 still) | pass in 2 development runs (Wi-Fi on, not airplane mode) | `vysion.latency` read capture → first word, worn Galaxy XR SM-I610, 2026-10-17 |
+| Text Reader capture → first spoken word | ≤ 6 s | dev runs, not the protocol: 1.27 s and 1.72 s whole frame; 1.48 s through the reading crosshair (OCR 1.48 s on the 554×365 crop, read "Q-TEES 8925" from the box it framed) | pass in 2 development runs (Wi-Fi on, not airplane mode) | `vysion.latency` read capture → first word, worn Galaxy XR SM-I610, 2026-10-17 |
 | Audio Description capture → first spoken word | ≤ 8 s | not measured | | |
 | Detector throughput during Navigation | ≥ 5 fps | dev run, not the protocol: ~11 fps live (70–150 ms per frame) | pass in 1 development run (Wi-Fi on) | `vysion.latency` detect, worn Galaxy XR SM-I610, 2026-10-17 |
 | Proximity warning after threshold crossed | ≤ 300 ms | 16–40 ms depth copy → cue emitted (≈30 cues, 3 runs); a later worn run 17–114 ms; earcon/speech not included | pass for the R3 part (development runs, Wi-Fi on, not airplane mode) | `vysion.latency: proximity cue … after the depth sample`, Galaxy XR SM-I610, 2026-10-17 |

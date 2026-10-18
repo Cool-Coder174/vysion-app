@@ -179,6 +179,22 @@ interface InferenceEngine {
     fun describeStreaming(bitmap: Bitmap, prompt: String, maxNewTokens: Int = DEFAULT_MAX_NEW_TOKENS): Flow<String> =
         flow { emit(describe(bitmap, prompt, maxNewTokens)) }
 
+    /**
+     * FR-D1 Describe, which may answer from a cloud model (ADR-0010 row "Cloud Describe") when [cloud] is true (the
+     * wearer turned it on) and the headset is online. Offline, on any cloud error, or when the cloud is slower than
+     * the headset, the answer comes from [describeStreaming], so the first spoken word stays within FR-D1's 8 s.
+     * Same chunk stream as [describeStreaming]. The default never leaves the headset.
+     */
+    fun describeScene(
+        bitmap: Bitmap,
+        prompt: String,
+        cloud: Boolean,
+        maxNewTokens: Int = DEFAULT_MAX_NEW_TOKENS,
+    ): Flow<String> = describeStreaming(bitmap, prompt, maxNewTokens)
+
+    /** ADR-0010: whether [describeScene] can reach a cloud model at all (this build has a key). Default `false`. */
+    val cloudDescribeAvailable: Boolean get() = false
+
     /** Run the detector on one analysis frame (FR-N2). Must sustain ≥ 5 fps on the headset. */
     suspend fun detect(bitmap: Bitmap): List<Detection>
 
@@ -368,6 +384,9 @@ sealed interface Command {
 
     /** P2, FR-N7. */
     data class SelectDoor(val side: HorizontalBearing) : Command
+
+    /** ADR-0010: "cloud on" / "cloud off" for Describe ([InferenceEngine.describeScene]); off at every launch. */
+    data class CloudDescribe(val on: Boolean) : Command
 }
 
 enum class ListeningState { IDLE, LISTENING, PROCESSING, UNAVAILABLE }
@@ -509,6 +528,15 @@ interface ModePhrasebook {
      * that text. Default blank (= not wired, skipped).
      */
     val readingWholeView: String get() = ""
+
+    /**
+     * ADR-0010: spoken when the wearer turns cloud Describe on (it must say that photos leave the headset and where
+     * they go) or off. Default blank (= not wired, skipped).
+     */
+    fun cloudDescribe(on: Boolean): String = ""
+
+    /** ADR-0010: "cloud on" in a build with no cloud model ([InferenceEngine.cloudDescribeAvailable] false). Default blank. */
+    val cloudDescribeUnavailable: String get() = ""
 
     /** FR-G3: "<mode> mode" on every mode change. */
     fun modeAnnounced(mode: Mode): String
