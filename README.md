@@ -8,7 +8,7 @@ Vysion XR is a native Android XR app for the Samsung Galaxy XR with three voice-
 
 Built by a team of five at the ExecuTorch Hackathon (Hacker//Squad, San Francisco, Oct 17–18 2026).
 
-**Status: runs on the Galaxy XR.** All three modes, voice commands and the diagnostics panel run on the headset. The numbers below are measured on the device in development runs (Wi-Fi on); the formal 20-run, airplane-mode protocol has not been run yet, and anything not measured says so ([`docs/benchmarks.md`](docs/benchmarks.md)). The roadmap with gates is [`plan.md`](plan.md).
+**Status: runs on the Galaxy XR.** All three modes, voice commands and the diagnostics panel run on the headset. The numbers below are measured on the device: the 20-run, airplane-mode protocol for all four models (2026-10-18, headset unworn) plus worn development runs; anything not measured says so ([`docs/benchmarks.md`](docs/benchmarks.md)). Every model runs on the headset's CPU through XNNPACK: the Galaxy XR's NPU is closed to third-party apps (measured; [ADR-0002](docs/decisions/ADR-0002-xnnpack-ships.md)). The roadmap with gates is [`plan.md`](plan.md).
 
 ## Models on the headset
 
@@ -89,23 +89,28 @@ flowchart LR
 
 ## Measured numbers
 
-Measured on the Galaxy XR (SM-I610), **development runs with Wi-Fi on**, not yet the SRS protocol (20 runs per model in airplane mode). Full tables, method and every run: [`docs/benchmarks.md`](docs/benchmarks.md). Anything without a measurement says "not measured".
+Measured on the Galaxy XR (SM-I610). The model table is the SRS protocol (airplane mode, headset unworn, fixed test
+inputs, 2026-10-18); targets mix that with worn development runs. Full tables, method and every run:
+[`docs/benchmarks.md`](docs/benchmarks.md). Anything without a measurement says "not measured".
 
-| Model | Quantization | File size | Load | Time per call on the headset | Peak memory |
-|---|---|---|---|---|---|
-| LFM2.5-VL-450M | 8da4w | 649 MB | 3.4 s | 7.7–7.8 s for a 60-token answer (prefill 6.0 s, then 36 tokens/s); 3 runs | not measured |
-| PP-OCRv6 small | int8 | 24 MB | 0.2 s | 1.15 s for a 960×720 sign; 2 runs | not measured |
-| YOLOv8n OIV7 | int8 | 3.7 MB | 12 ms | 55 ms median, 70 ms p90 per `detect()` (fp32: 93 / 111 ms); 30 runs | not measured |
-| Whisper-tiny + Silero VAD | fp32 | 231 MB + 1.3 MB | 2.2 s | 1.5 s median from the end of speech to the command (English, 87 synthetic clips) | not measured |
+| Model (CPU, XNNPACK) | Quantization | File size | Cold load | Median | p90 | Runs | Device current above idle | Charge per call |
+|---|---|---|---|---|---|---|---|---|
+| LFM2.5-VL-450M, one Describe (60 tokens) | 8da4w | 649 MB | 4.56 s | 7.18 s | 7.27 s | 20 | +3.4 A | ~25 C |
+| PP-OCRv6 small, one Read (3-line sign) | int8 | 24 MB | 0.77 s | 780 ms | 814 ms | 38 | +2.6 A | 2.1 C |
+| YOLOv8n OIV7, one frame | int8 | 3.7 MB | 12 ms | 34 ms | 49 ms | 796 | +1.5 A | 57 mC |
+| Whisper-tiny, one voice command | fp32 | 231 MB | 4.21 s | 1.50 s | 1.53 s | 20 | +3.2 A | 4.8 C |
+
+Idle (app running, models resident, display off) draws 966 mA. Current is the whole device's, from the system battery
+log; energy at a nominal 3.85 V is ~96 J per Describe, ~8 J per Read, ~0.2 J per detector frame ("On-device efficiency").
 
 | Target (SRS §5) | Measured | |
 |---|---|---|
 | Command recognized → action ≤ 1.5 s | not measured | |
 | Text Reader capture → first word ≤ 6 s | 1.27–1.72 s (3 worn runs) | pass in dev runs |
-| Audio Description capture → first word ≤ 8 s | not measured (VLM prefill alone is 6.0 s) | |
+| Audio Description capture → first word ≤ 8 s | 8.71–11.13 s worn with the headset VLM (4 runs); the opt-in cloud path was not measured worn (Gemini free-tier 429) | miss on the headset |
 | Detector ≥ 5 fps during Navigation | about 11 fps live | pass in 1 dev run |
 | Proximity warning ≤ 300 ms | 16–114 ms from depth sample to cue (speech not included) | pass for the perception part |
-| App memory with VLM loaded ≤ 4 GB | not measured | |
+| App memory with VLM loaded ≤ 4 GB | 1.84 GB peak PSS, all models resident | pass (protocol) |
 | 10 min Navigation without dropping below 3 fps | not measured | |
 | "stop" interrupts speech ≤ 300 ms | not measured | |
 

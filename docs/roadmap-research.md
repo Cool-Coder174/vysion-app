@@ -43,7 +43,8 @@ source and Maven, GitHub projects Isaac pointed to), plus probes run with `adb` 
   the device). Even `adb shell` cannot start an unsigned PD (the cDSP shell in `/vendor/dsp/` is unreadable). Exact
   logcat: `docs/stack.md` Corrections 2026-10-18.
 - No other route: SNPE (`libSNPE.so`) and FastCV (`libfastcvopt.so`) are public vendor libraries but use the same
-  FastRPC; there is no NNAPI HAL; the NPU's client is Google's `com.google.xr.hardware.dnn.IDnnService`, a vendor
+  FastRPC; there is no NNAPI HAL (no `android.hardware.neuralnetworks` service) and no AICore package (no Gemini Nano /
+  ML Kit GenAI on device; both re-checked 2026-10-18); the NPU's client is Google's `com.google.xr.hardware.dnn.IDnnService`, a vendor
   service with no app API. The only accelerator an app reaches is the Adreno GPU (`libOpenCL.so` is public; QNN GPU or
   `executorch-android-vulkan`), not measured.
 - So nothing below was built: no `executorch-android-qnn` dependency, no QNN export, ADR-0002 unchanged. The facts

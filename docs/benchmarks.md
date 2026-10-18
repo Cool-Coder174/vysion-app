@@ -49,6 +49,9 @@ What it says:
   battery). Peak memory with everything resident, 1.84 GB, is under the 4 GB NFR.
 - Not measured: worn (display + passthrough on) idle and inference current, a sustained soak, and the Silero VAD alone.
 
+Backend for every row: CPU through XNNPACK (4 threads). The Galaxy XR's NPU is closed to apps (ADR-0002 Update), so
+these are the numbers the shipping app gets.
+
 Reproduce: copy `ml/models.lock` to `app/src/main/assets/models/models.lock` before building (a stale copy loaded the FP32
 detector and no Whisper the first time), push a 16 kHz mono `files/smoke/asr.wav`, then for each path
 `adb shell am broadcast -n com.vysion.xr/.diagnostics.BenchmarkReceiver -a com.vysion.xr.BENCH --es model efficiency --es

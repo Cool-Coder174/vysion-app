@@ -67,7 +67,7 @@ Verbatim from SRS §8 (R2). Tick in the same PR as the code; P0 items need devic
   Files: `ml/export/export_vlm.sh --model <id>`, `ml/README.md`, `ml/models.lock` (same `vlm.pte` dest) · FR: FR-T1, FR-D1; RK-2 · Verify: two `docs/benchmarks.md` rows (one per model, 20 runs each); the faster one's name shows on the overlay. **Note**: at v1.3.1 there is no runnable SmolVLM example (`docs/stack.md` §3-R2); the practical A/B is a smaller `LlmModule`-compatible export from optimum-executorch, same recipe
 - [ ] P2 Door-class fine-tune on Colab, re-export, swap into `detect()`. Sun 09:00
   Files: `ml/export/export_detector.sh --model <fine-tuned>`, `YoloPostProcessor.decode(classNames = …)` · FR: FR-N8 · Verify: `detect()` returns `label == "door"` boxes on a venue door, logcat `detect ms=` still ≥ 5 fps
-- [ ] P2 QNN export of the VLM with on-site Qualcomm help; keep XNNPACK as the shipping build. Sun 11:00
+- [ ] ~~P2 QNN export of the VLM with on-site Qualcomm help; keep XNNPACK as the shipping build. Sun 11:00~~ **Closed 2026-10-18: no app route to the NPU on this headset** (ADR-0002 Update, `docs/stack.md` Corrections; re-check with `ml/qnn-probe/probe.sh` after an OTA)
   Files: `ml/models.lock` (new row, `backend: "QNN"`), `gradle/libs.versions.toml` (`org.pytorch:executorch-android-qnn:1.3.1`, only with a `docs/stack.md` line) · FR: FR-G5; ADR-0002 · Verify: a `docs/benchmarks.md` row with `backend = QNN` from the same 20-run protocol; the demo build still prints `XNNPACK`
 
 ## API cheat-sheet

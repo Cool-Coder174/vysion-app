@@ -8,7 +8,7 @@ Source: SRS §7. Two models ship; three more are stretch goals. **The VLM is the
 | YOLO26-n (COCO) | People and common obstacles during Navigation | ExecuTorch YOLO26 example, int8 | XNNPACK CPU | P0 | Detector off; proximity from depth alone |
 | YOLO26-n door fine-tune | Continuous door tracking | Colab fine-tune on a public door dataset, same export | XNNPACK | P2 | VLM one-shot + anchor (the P0 path) |
 | Supertonic or Voxtral TTS | ExecuTorch speech out | ExecuTorch TTS examples | XNNPACK | P2 | Android TTS |
-| Qualcomm QNN delegate | NPU speedup for the VLM, sponsor relevance | QNN export of the same model, with on-site Qualcomm help | Hexagon NPU | P2 | XNNPACK build stays the one we ship |
+| ~~Qualcomm QNN delegate~~ | NPU speedup for the VLM, sponsor relevance | **Closed 2026-10-18: a third-party app cannot reach the NPU on the Galaxy XR** (FastRPC denied, no NNAPI driver, no AICore; ADR-0002 Update) | Hexagon NPU | — | XNNPACK, the only backend |
 
 The verified export commands and the exact example paths that exist in the pinned ExecuTorch release live in [`ml/README.md`](../ml/README.md) and [`docs/stack.md`](stack.md) §3-R2.
 
