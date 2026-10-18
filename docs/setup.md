@@ -186,7 +186,8 @@ scripts/record_headset.sh --size 2880x2880  # full resolution; --seconds 60 stop
 - **No audio.** `screenrecord` records video only, so the app's spoken answers are missing. For a demo with sound use the
   headset's own recorder: Launcher (Top button) → Quick settings → **Screen record** → pick an audio option → Start; stop
   the same way; the file is in Gallery (pull it from `/sdcard/DCIM` or `/sdcard/Movies` with `adb pull`). Whether that
-  recorder includes the passthrough view is not verified. Or record the Mac's audio from the headset's speaker on the side.
+  recorder includes the passthrough view is not verified. Or record this script's video silently and add the sound afterwards
+  (a microphone near the wearer, synced in an editor).
 - **Bystanders appear in the picture.** Keep recordings out of the repo (`docs/demo.md`: do not commit the video).
 
 ## 7. Airplane mode: every benchmark and the demo
