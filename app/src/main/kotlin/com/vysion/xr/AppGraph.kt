@@ -142,7 +142,9 @@ class AppGraph(private val app: Application) {
         } else {
             ExecuTorchInferenceEngine(
                 app, modelCatalog, scope,
-                detectorRows = listOf(BuildConfig.DETECTOR),
+                // The int8 export (shipping default) is next, so a GPU row that is missing or will not load falls
+                // back to it before the FP32 row the engine always appends.
+                detectorRows = listOf(BuildConfig.DETECTOR, ModelCatalog.DETECTOR_INT8),
                 ocrRows = listOf(BuildConfig.OCR),
             )
         },

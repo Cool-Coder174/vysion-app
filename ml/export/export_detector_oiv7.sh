@@ -15,6 +15,7 @@
 #
 # Usage:   ml/export/export_detector_oiv7.sh [--imgsz 320] [--out ml/out]
 #          ml/export/export_detector_oiv7.sh --int8 [--calib-images 300] [--imgsz 320] [--out ml/out]
+#          ml/export/export_detector_oiv7.sh --vulkan [--imgsz 320] [--out ml/out]
 # Prereq:  Docker running. Downloads: yolov8n-oiv7.pt (Ultralytics release, cached in ml/.cache/weights).
 # Output:  <out>/detector.pte, and the lockfile fields (bytes, sha256, classes map) printed at the end.
 #
@@ -25,21 +26,28 @@
 #   <out>/detector.pte on every Open Images *test* image with a door (held out). Runs in the vysion-ml:1.3.1 image
 #   (built from ml/export/Dockerfile if missing); images and weights are cached in ml/.cache/ (gitignored, ~300 MB).
 #   Output: <out>/detector-int8.pte, its lockfile fields, and the recall table for docs/benchmarks.md.
+#
+# --vulkan (row detector-vulkan): the same graph lowered for the Adreno GPU, VulkanPartitioner with force_fp16 and
+#   XnnpackPartitioner for anything Vulkan does not take (export_detector_vulkan.py; on YOLOv8n it takes the whole
+#   graph). Measurement artifact for docs/benchmarks.md "Adreno GPU"; runs only on a -Pexecutorch=vulkan build.
+#   Output: <out>/detector-vulkan.pte and its lockfile fields.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_DIR="$ROOT/ml/out"
 IMGSZ=320
 INT8=0
+VULKAN=0
 CALIB=300
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --imgsz) IMGSZ="$2"; shift 2 ;;
     --int8) INT8=1; shift ;;
+    --vulkan) VULKAN=1; shift ;;
     --calib-images) CALIB="$2"; shift 2 ;;
     --out) OUT_DIR="$2"; shift 2 ;;
-    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -49,6 +57,13 @@ IMAGE=vysion-ml:1.3.1
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" "$ROOT/ml/export"
 CACHE="$ROOT/ml/.cache"
 mkdir -p "$CACHE/weights"
+
+if [ "$VULKAN" = 1 ]; then
+  docker run --rm -v "$ROOT/ml/export":/tools:ro -v "$CACHE":/data -v "$OUT_DIR":/out -w /data/weights \
+    -e PYTHONUNBUFFERED=1 "$IMAGE" python /tools/export_detector_vulkan.py --imgsz "$IMGSZ" --out /out/detector-vulkan.pte
+  echo "wrote $OUT_DIR/detector-vulkan.pte"
+  exit 0
+fi
 
 if [ "$INT8" = 1 ]; then
   run() {

@@ -72,7 +72,7 @@ class ModelCatalogTest {
         val entries = ModelCatalog.parse(repoLock.readText())
         assertEquals(
             setOf(
-                "vlm", "vlm-tokenizer", "detector", "detector-int8", "ocr", "ocr-vulkan", "ocr-charset",
+                "vlm", "vlm-vulkan", "vlm-tokenizer", "detector", "detector-int8", "detector-vulkan", "ocr", "ocr-vulkan", "ocr-charset",
                 "asr", "asr-preprocessor", "asr-tokenizer", "vad",
             ),
             entries.map { it.name }.toSet(),
@@ -84,6 +84,10 @@ class ModelCatalogTest {
         assertEquals(det.classMap, int8.classMap)
         assertEquals(det.outputLayout, int8.outputLayout)
         assertEquals(det.inputWidth to det.inputHeight, int8.inputWidth to int8.inputHeight)
+        val gpu = entries.first { it.name == "detector-vulkan" }
+        assertEquals(det.classMap, gpu.classMap)
+        assertEquals(det.outputLayout, gpu.outputLayout)
+        assertEquals(det.inputWidth to det.inputHeight, gpu.inputWidth to gpu.inputHeight)
         // `-Pocr=ocr-vulkan` swaps the OCR program only: the Vulkan row is pinned and names its backend (ADR-0002).
         val ocrVulkan = entries.first { it.name == "ocr-vulkan" }
         assertTrue(ocrVulkan.hasSha256 && ocrVulkan.hasBytes)

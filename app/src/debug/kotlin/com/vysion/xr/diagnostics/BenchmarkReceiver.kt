@@ -30,6 +30,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
+import org.pytorch.executorch.EValue
+import org.pytorch.executorch.Module
+import org.pytorch.executorch.Tensor
 import java.io.File
 import java.time.Instant
 import kotlin.math.roundToLong
@@ -95,12 +98,13 @@ class BenchmarkReceiver : BroadcastReceiver() {
         // runs; a held background broadcast keeps the process running for up to 60 s, so keep each held run short.
         val hold = intent.getBooleanExtra(EXTRA_HOLD, false)
         val path = intent.getStringExtra(EXTRA_PATH)
+        val file = intent.getStringExtra(EXTRA_FILE)?.takeIf { FILE_NAME.matches(it) }
         val pending = goAsync()
         graph.scope.launch {
             var finished = false
             try {
                 val outDir = File(app.filesDir, BENCH_DIR)
-                val runner = BenchmarkRunner(app, graph, outDir, onlyPath = path)
+                val runner = BenchmarkRunner(app, graph, outDir, onlyPath = path, file = file)
                 Log.i(TAG, "accepted: $request hold=$hold path=$path → ${File(outDir, request.model.fileName)}")
                 if (!hold) {
                     pending.finish() // see class KDoc: the runs outlive the broadcast window
@@ -124,8 +128,12 @@ class BenchmarkReceiver : BroadcastReceiver() {
         const val EXTRA_RUNS: String = "runs"
         const val EXTRA_HOLD: String = "hold"
 
-        /** Efficiency only: run one path (idle, detector, ocr, asr, vlm) instead of all of them. */
+        /** Efficiency only: run one path (idle, detector, ocr, asr, vlm, or vision on request) instead of all of them. */
         const val EXTRA_PATH: String = "path"
+
+        /** Efficiency path `vision` only: the program under `files/models/` whose `vision_encoder` runs (default `vlm.pte`). */
+        const val EXTRA_FILE: String = "file"
+        private val FILE_NAME = Regex("[A-Za-z0-9._-]{1,64}\\.pte")
         const val EXTRA_SECONDS: String = "seconds"
         const val DEFAULT_RUNS: Int = 20
         const val MAX_RUNS: Int = 1_000
@@ -177,6 +185,7 @@ internal class BenchmarkRunner(
     private val graph: AppGraph,
     private val outDir: File,
     private val onlyPath: String? = null,
+    private val file: String? = null,
 ) {
     private fun wants(path: String): Boolean = onlyPath == null || onlyPath == path
 
@@ -292,7 +301,8 @@ internal class BenchmarkRunner(
      * files, so every run sees the same content; nothing is spoken.
      */
     private suspend fun efficiency(): Map<String, Any?> {
-        engine.warmUp() // idempotent: measure with the models resident, as the app runs
+        // idempotent: measure with the models resident, as the app runs; `vision` measures one method with nothing else
+        if (onlyPath != VISION_PATH) engine.warmUp()
         val meter = PowerMeter(app)
         val paths = ArrayList<Map<String, Any?>>()
         val idle = if (wants("idle")) window(meter, "idle", EFFICIENCY_IDLE_S, minOps = 1, idlePowerW = null) { delay(1_000) } else null
@@ -335,12 +345,88 @@ internal class BenchmarkRunner(
                 scene.recycle()
             }
         }
+        if (onlyPath == VISION_PATH) smokeImage("scene.png")?.let { scene ->
+            try {
+                paths += visionEncoder(meter, scene)
+            } finally {
+                scene.recycle()
+            }
+        }
         return linkedMapOf(
             "model" to BenchmarkModel.EFFICIENCY.wire,
             "runs" to paths.size,
             "current_unit_note" to meter.unitNote,
             "paths" to paths,
         )
+    }
+
+    /**
+     * Path `vision` (only when asked for by name): the VLM's `vision_encoder` method alone, the 4.5–7 s step of
+     * Describe, from `files/models/<file>` (`--es file`, default `vlm.pte`; `vlm-vulkan.pte` is the Adreno GPU export)
+     * on `files/smoke/scene.png` scaled to 512×512, raw 0–255 CHW as the lockfile's `float_0_255`. One untimed first
+     * call (delegate init, shader compile), then the efficiency window. A plain `Module` with nothing else loaded,
+     * debug only (like `ModelSmokeReceiver`'s `vlm-probe`). For a file other than `vlm.pte`, the same input then goes
+     * once through `vlm.pte` (XNNPACK) and the two outputs are compared.
+     */
+    private suspend fun visionEncoder(meter: PowerMeter, scene: Bitmap): Map<String, Any?> {
+        val name = file ?: CPU_VLM_FILE
+        val dir = File(app.getExternalFilesDir(null), "models")
+        val scaled = Bitmap.createScaledBitmap(scene, ENCODER_SIDE, ENCODER_SIDE, true)
+        val argb = IntArray(ENCODER_SIDE * ENCODER_SIDE).also {
+            scaled.getPixels(it, 0, ENCODER_SIDE, 0, 0, ENCODER_SIDE, ENCODER_SIDE)
+        }
+        if (scaled !== scene) scaled.recycle()
+        val n = argb.size
+        val chw = FloatArray(3 * n)
+        for (i in 0 until n) {
+            chw[i] = ((argb[i] shr 16) and 0xFF).toFloat()
+            chw[n + i] = ((argb[i] shr 8) and 0xFF).toFloat()
+            chw[2 * n + i] = (argb[i] and 0xFF).toFloat()
+        }
+        val input = EValue.from(Tensor.fromBlob(chw, longArrayOf(1, 3, ENCODER_SIDE.toLong(), ENCODER_SIDE.toLong())))
+        val t0 = System.nanoTime()
+        val module = Module.load(File(dir, name).absolutePath, Module.LOAD_MODE_MMAP, VLM_THREADS)
+        try {
+            val first = module.execute("vision_encoder", input)[0].toTensor().dataAsFloatArray
+            val firstMs = (System.nanoTime() - t0) / NANOS_PER_MS
+            val backends = runCatching { module.getMethodMetadata("vision_encoder").backends.joinToString() }.getOrDefault("")
+            val result = window(meter, VISION_PATH, EFFICIENCY_SHORT_S, minOps = 3, idlePowerW = null) {
+                module.execute("vision_encoder", input)
+            }
+            val reference = if (name == CPU_VLM_FILE) {
+                null
+            } else {
+                val cpu = Module.load(File(dir, CPU_VLM_FILE).absolutePath, Module.LOAD_MODE_MMAP, VLM_THREADS)
+                try {
+                    cpu.execute("vision_encoder", input)[0].toTensor().dataAsFloatArray
+                } finally {
+                    cpu.close()
+                }
+            }
+            return result + linkedMapOf(
+                "file" to name,
+                "backend" to backends,
+                "load_and_first_ms" to firstMs,
+                "vs_vlm_pte_cosine" to reference?.let { cosine(first, it) },
+                "vs_vlm_pte_max_abs_diff" to reference?.let { ref -> first.indices.maxOf { kotlin.math.abs(first[it] - ref[it]) }.toDouble() },
+                "vs_vlm_pte_ref_max_abs" to reference?.maxOf { kotlin.math.abs(it) }?.toDouble(),
+            )
+        } finally {
+            module.close()
+        }
+    }
+
+    private fun cosine(a: FloatArray, b: FloatArray): Double? {
+        if (a.size != b.size) return null
+        var dot = 0.0
+        var na = 0.0
+        var nb = 0.0
+        for (i in a.indices) {
+            dot += a[i].toDouble() * b[i]
+            na += a[i].toDouble() * a[i]
+            nb += b[i].toDouble() * b[i]
+        }
+        return dot / kotlin.math.sqrt(na * nb)
     }
 
     private suspend fun window(
@@ -563,6 +649,10 @@ internal class BenchmarkRunner(
         const val EFFICIENCY_SHORT_S: Double = 30.0
         const val EFFICIENCY_VLM_S: Double = 30.0
         const val POWER_SAMPLE_MS: Long = 100L
+        const val VISION_PATH: String = "vision"
+        const val CPU_VLM_FILE: String = "vlm.pte"
+        const val ENCODER_SIDE: Int = 512 // LFM2.5-VL's vision_encoder input, both exports (lockfile vlm row)
+        const val VLM_THREADS: Int = 4 // as ModuleVlmRunner
 
         /** Per-run latencies are listed for slow paths only (the detector runs ~800 times in a window). */
         const val MAX_LISTED_LATENCIES: Int = 100

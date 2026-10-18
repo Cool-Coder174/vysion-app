@@ -22,7 +22,8 @@ android {
         buildConfigField("boolean", "USE_FAKES", (project.findProperty("useFakes")?.toString() ?: "false"))
 
         // Which detector lockfile row the engine tries first; the FP32 row "detector" is always the fallback.
-        // Shipping default: the int8 export (Isaac, 2026-10-18; docs/benchmarks.md). -Pdetector=detector tries FP32 first.
+        // Shipping default: the int8 export (Isaac, 2026-10-18; docs/benchmarks.md). -Pdetector=detector tries FP32 first;
+        // -Pdetector=detector-vulkan (with -Pexecutorch=vulkan) tries the fp16 GPU export, then int8, then FP32.
         buildConfigField("String", "DETECTOR", "\"${project.findProperty("detector")?.toString() ?: "detector-int8"}\"")
 
         // Which OCR lockfile row the engine tries first; "ocr" (PP-OCRv6 int8, XNNPACK) is always the fallback.

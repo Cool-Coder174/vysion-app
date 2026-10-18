@@ -58,6 +58,48 @@ detector and no Whisper the first time), push a 16 kHz mono `files/smoke/asr.wav
 path <p> --ez hold true` and read `files/bench/efficiency-latest.json`. Broadcasts must name the receiver (`-n`): an
 implicit one is dropped ("Background execution not allowed"), which also affected `scripts/benchmark.sh` (fixed).
 
+## Adreno GPU (Vulkan) vs CPU (XNNPACK) (2026-10-18)
+
+The NPU is closed to apps (ADR-0002 Update), so the Adreno 740 GPU is the only accelerator left. Build:
+`./gradlew assembleDebug -Pexecutorch=vulkan -Pocr=ocr-vulkan` (`executorch-android-vulkan` 1.4.0: the same runtime
+plus the Vulkan delegate; `docs/stack.md`), main 1cc8eb0. Galaxy XR SM-I610, airplane mode on, **nobody wearing it,
+unplugged**, battery 62 → 60 %, thermal `none` in every window. Same efficiency protocol as above (`--es model efficiency
+--es path ocr --ez hold true`, 30 s windows, `files/smoke/sign.png`), whole-device current from `dumpsys batterystats
+--history` in mA.
+
+**Method change: settled windows.** The gauge lags 7–10 s: in the raw series of run 1 the first 2–3 points of each
+window still show the step before it (idle, or the model load between legs), and the same CPU leg came out at 1.68 C or
+0.86 C per read depending on what preceded it. So in run 2 every leg is two windows back to back and only the second
+counts, idle included. Settled idle is **672 mA**; the 966 mA idle in the table above is higher in the same way, so
+compare charge per read within this section, not with the table above.
+
+**OCR, PP-OCRv6 small** (run 2, second window of each pair; A-B-A in one sitting, 13:51–13:55):
+
+| Leg | Row (delegates the runtime reports) | Reads in 30 s | Median | p90 | Device current | Net above idle | Charge per read | ~Energy per read | CPU cores busy | Process PSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A: GPU | `ocr-vulkan`, fp16 (VulkanBackend, XnnpackBackend) | 86 | **346 ms** | 365 ms | 4,190 mA | +3,518 mA | **1.24 C** | ~4.8 J | 1.35 | 698 MB |
+| B: CPU | `ocr`, int8 (XnnpackBackend) | 39 | **780 ms** | 796 ms | 3,696 mA | +3,024 mA | **2.36 C** | ~9.1 J | 1.59 | 924 MB |
+| C: GPU (warm-up window only; the measured one was lost when the headset was plugged in at 13:55:07) | `ocr-vulkan` | 85 | 350 ms | 373 ms | settling: 3,681 → 4,215 → 4,231 mA | — | — | — | 1.35 | 695 MB |
+
+Run 1 (13:46–13:50, same sitting conditions, one window per leg): GPU 352 / 350 ms median (p90 371 / 369 ms, 84 / 85
+reads); CPU on the Vulkan AAR 780 ms (p90 801 ms) and on the shipping XNNPACK AAR 781 ms (p90 802 ms), 39 reads each,
+so the Vulkan AAR does not slow XNNPACK. Its charge figures are not used (lag, above); its settled points agree with
+run 2: GPU 4,186–4,228 mA, CPU 3,612–3,730 mA, idle 691–692 mA.
+
+Same text on every leg: `MEETING ROOMS | Floor 2 | Exit / Salida` (3 lines). First read after a fresh load: GPU 600 /
+610 ms, CPU 1,062–1,076 ms. Load (once per process, in `warmUp`): `ocr-vulkan` 1.26–1.27 s vs `ocr` 0.52–0.54 s. GPU
+activity (`/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage`, 1 Hz): peaks at 99 % in every GPU leg, 0 % in every CPU and
+idle leg. Native library: `libexecutorch.so` 17.6 MB vs 8.9 MB (+8.8 MB APK).
+
+What it says:
+- **The GPU wins OCR on both latency and charge per read**: 2.25× faster (346 vs 780 ms) and about half the charge
+  (1.24 vs 2.36 C), although the device draws ~0.5 A more while it runs: each read ends in less than half the time.
+- The CPU still has 1.35 cores busy on the GPU path: the Kotlin pre- and post-processing (resize, boxes, CTC) and the
+  part of the program Software Mansion left on XNNPACK. Process memory is 226 MB lower.
+- **Not measured: worn.** Worn, the same GPU renders passthrough and the panels, so a GPU Read competes with the
+  compositor; latency, and passthrough frame time while it runs, have to be checked worn before this becomes the default.
+- Shipping default unchanged: XNNPACK (ADR-0002). See ADR-0002 "Update: the Adreno GPU, measured".
+
 ## Detector int8 vs FP32 (2026-10-18)
 
 **Latency on the headset.** Debug `ModelSmokeReceiver` (`--es model detector --es image scene.png --ei runs 30`): one
