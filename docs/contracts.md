@@ -59,6 +59,7 @@ interface InferenceEngine {
     fun describeStreaming(bitmap: Bitmap, prompt: String, maxNewTokens: Int = DEFAULT_MAX_NEW_TOKENS): Flow<String>   // default wraps describe
     suspend fun detect(bitmap: Bitmap): List<Detection>
     suspend fun readText(bitmap: Bitmap): List<String>? = null   // FR-T1 OCR fast path: lines in reading order, [] = no text, null = no OCR model (use describe + READ)
+    suspend fun readTextIn(bitmap: Bitmap, region: NormalizedBox): List<String>? = null   // reading crosshair: only the text inside region (cropped before detection); null = regions unsupported, read the whole frame
     suspend fun release()                                        // once, from AppGraph.release() (onDestroy when finishing), never onStop
     companion object { const val DEFAULT_MAX_NEW_TOKENS: Int = 60; const val VLM_TIMEOUT_MS: Long = 15_000 }
 }
@@ -77,6 +78,7 @@ interface HeadPoseSource { val pose: StateFlow<HeadPose?> }
 enum class HandGesture { TALK_START, TALK_END, ACTIVATE, NEXT_PAGE, STOP }   // middle pinch hold/tap, ring tap, palm out; never index, never palm-toward-user
 interface HandGestureSource { val gestures: Flow<HandGesture> }
 // ModePhrasebook.pageFocused(mode): String = modeAnnounced(mode)   // spoken on NEXT_PAGE: page name + how to run it
+// ModePhrasebook.readingWholeView: String = ""   // reading crosshair found nothing: spoken before the whole view is read
 // AnchorStore.placeAtGaze(fallbackDistanceM = 1.0f): AnchorId? = null   // augmented: anchor where the wearer looks (yaw + pitch), depth hit or 1 m along the gaze
 interface AnchorStore {
     suspend fun placeFromBearing(bearing: HorizontalBearing): AnchorId?; fun track(id: AnchorId): Flow<RelativeTarget>

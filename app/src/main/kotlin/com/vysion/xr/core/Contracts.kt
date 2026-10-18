@@ -190,6 +190,14 @@ interface InferenceEngine {
      */
     suspend fun readText(bitmap: Bitmap): List<String>? = null
 
+    /**
+     * Augmented Read (reading crosshair): the text inside [region] of [bitmap] only, one entry per line in reading
+     * order, so the wearer chooses what is read by pointing their head. The region is cropped before detection, which
+     * also gives small print more pixels. Same `[]` / `null` meaning as [readText]; the default `null` means "regions
+     * not supported", and the caller reads the whole frame instead. [bitmap] is only read (INV-9).
+     */
+    suspend fun readTextIn(bitmap: Bitmap, region: NormalizedBox): List<String>? = null
+
     /** Unload everything. Called once from `AppGraph.release()` (`onDestroy` when finishing), never from `onStop`. */
     suspend fun release()
 
@@ -495,6 +503,12 @@ interface ModePhrasebook {
      * check. Default blank (= not wired, skipped).
      */
     val modelNotFound: String get() = ""
+
+    /**
+     * Augmented Read: nothing readable inside the reading crosshair, so the whole view is read next. Spoken before
+     * that text. Default blank (= not wired, skipped).
+     */
+    val readingWholeView: String get() = ""
 
     /** FR-G3: "<mode> mode" on every mode change. */
     fun modeAnnounced(mode: Mode): String
