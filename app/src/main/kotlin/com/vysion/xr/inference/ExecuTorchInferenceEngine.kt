@@ -31,9 +31,6 @@ import kotlinx.coroutines.withTimeout
 import org.pytorch.executorch.EValue
 import org.pytorch.executorch.Module
 import org.pytorch.executorch.Tensor
-import org.pytorch.executorch.extension.llm.LlmCallback
-import org.pytorch.executorch.extension.llm.LlmModule
-import org.pytorch.executorch.extension.llm.LlmModuleConfig
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -57,7 +54,7 @@ import kotlin.coroutines.resumeWithException
  *   through `Module.load(path, LOAD_MODE_MMAP, numThreads)`, `forward(EValue.from(Tensor.fromBlob(chw,
  *   longArrayOf(1, 3, h, w))))[0].toTensor()`, `getMethodMetadata("forward").getBackends()`, `close()`.
  *   `seqLen` is an absolute position budget (prefilled tokens + new tokens); `maxNewTokens` is not forwarded in
- *   1.3.1, so [generateLocked] counts streamed chunks with [TokenCap] and calls the lock-free `stop()`.
+ *   1.3.1, so each [VlmRunner] caps the answer itself and stops with a lock-free `stop()` (VlmRunners.kt).
  * - Assumptions: A-3 (the Maven AAR has `LlmModule` + XNNPACK), A-13 / Q9 (the chosen VLM `.pte` loads with
  *   `MODEL_TYPE_MULTIMODAL` and answers on the headset; the SRS Gemma 4 export does NOT, `docs/stack.md` D5),
  *   A-15 / Q20 (multi-GB `.pte` in the external files dir loads with mmap), Q7 (detector loads on the 1.3.1 AAR).
@@ -94,7 +91,7 @@ class ExecuTorchInferenceEngine(
     override val stats: StateFlow<InferenceStats> = _stats.asStateFlow()
 
     // Everything below is guarded by [mutex].
-    private var vlm: LlmModule? = null
+    private var vlm: VlmRunner? = null
     private var detector: Module? = null
     private var vlmFile: File? = null
     private var tokenizerFile: File? = null
@@ -356,7 +353,7 @@ class ExecuTorchInferenceEngine(
         }
     }
 
-    /** Preconditions and the FR-D2 prefill cache; the runtime calls are in [prefillLocked] / [generateLocked]. */
+    /** Preconditions and the FR-D2 prefill cache; the model calls are in the [VlmRunner]. */
     private suspend fun runVlmLocked(
         bitmap: Bitmap,
         prompt: String,
@@ -370,7 +367,7 @@ class ExecuTorchInferenceEngine(
         require(maxNewTokens > 0) { "maxNewTokens must be positive: $maxNewTokens" }
         if (prefilled?.get() !== bitmap) {
             // New frame: fresh context, then its image tokens into the KV cache (RK-2 "prefill once").
-            prefillLocked(runner, bitmap)
+            runner.prefill(bitmap)
             prefilled = WeakReference(bitmap)
         }
         // The answer's tokens stay in the KV cache, so an FR-D2 follow-up on the same frame continues this context.
@@ -378,86 +375,22 @@ class ExecuTorchInferenceEngine(
     }
 
     /**
-     * Reset the context and prefill one frame: the chat preamble from the lockfile, if any, then the image as CHW RGB
-     * in the encoder's format from the lockfile: raw 0..255 float (`image_format: float_0_255`), normalized float
-     * (`image_mean` / `image_std`), else uint8 (`prefillImages(int[])` truncates each int to uint8). The frame is already the VLM's input size: `captureStill()` center-crops
-     * to `vlmInfo.inputWidth`. Pixels live in local arrays only (INV-3).
-     */
-    private fun prefillLocked(runner: LlmModule, bitmap: Bitmap) {
-        runner.resetContext()
-        val entry = vlmEntry
-        entry?.chatBeforeImage?.takeIf { it.isNotEmpty() }?.let { runner.prefillPrompt(it) }
-        // The encoder's input size is fixed by the export; a frame of another size is center-cropped and scaled here
-        // (the camera path already delivers it at size: captureStill() crops to vlmInfo.inputWidth).
-        val fitted = VlmFrames.fit(bitmap, entry?.inputWidth ?: 0, entry?.inputHeight ?: 0)
-        val w = fitted.width
-        val h = fitted.height
-        val argb = IntArray(w * h)
-        fitted.getPixels(argb, 0, w, 0, 0, w, h)
-        if (fitted !== bitmap) fitted.recycle() // ours, not the caller's (INV-9)
-        val mean = entry?.imageMean.orEmpty()
-        val std = entry?.imageStd.orEmpty()
-        when {
-            entry?.imageFormat.equals(IMAGE_FORMAT_FLOAT_0_255, ignoreCase = true) ->
-                runner.prefillImages(VlmPixels.toFloatChw(argb), w, h, 3)
-            mean.size == 3 && std.size == 3 -> runner.prefillImages(VlmPixels.toNormalizedChw(argb, mean, std), w, h, 3)
-            else -> runner.prefillImages(VlmPixels.toUint8Chw(argb), w, h, 3)
-        }
-    }
-
-    /**
-     * Generate the answer to [prompt] (wrapped in the lockfile's `chat_template`, if any), streaming every
-     * `onResult` chunk to [onToken]. `generate()` BLOCKS until the runner ends; it is given the whole remaining
-     * context ([SEQ_LEN_REQUEST], clamped by the runner) and stopped after [maxNewTokens] chunks with the lock-free
-     * `stop()`, the one `LlmModule` call allowed inside a callback: 1.3.1 does not forward `maxNewTokens`, and
-     * counting here needs no guess of how many tokens the image took. Cancellation (Stop, the watchdog) also calls
-     * `stop()` (FR-G4), so `generate()` returns promptly.
+     * Generate the answer to [prompt] on the prefilled context, streaming each chunk to [onToken]. The runner BLOCKS
+     * this thread; cancellation (Stop, the watchdog) calls its lock-free `stop()` (FR-G4) so it returns promptly.
      */
     private suspend fun generateLocked(
-        runner: LlmModule,
+        runner: VlmRunner,
         prompt: String,
         maxNewTokens: Int,
         onToken: (String) -> Unit,
-    ): String {
-        val text = vlmEntry?.chatTemplate?.takeIf { "{prompt}" in it }?.replace("{prompt}", prompt) ?: prompt
-        return suspendCancellableCoroutine { cont ->
-            cont.invokeOnCancellation { runner.stop() }
-            val answer = StringBuilder()
-            val cap = TokenCap(maxNewTokens)
-            var failure: Throwable? = null
-            val callback = object : LlmCallback {
-                override fun onResult(result: String) {
-                    if (cap.reached || failure != null) return
-                    try {
-                        answer.append(result)
-                        onToken(result)
-                    } catch (t: Throwable) { // never throw into the native runner
-                        failure = t
-                        runner.stop()
-                        return
-                    }
-                    if (cap.add()) runner.stop()
-                }
-
-                override fun onStats(stats: String) {
-                    Log.i(TAG_LATENCY, "vlm stats=$stats")
-                }
-
-                override fun onError(errorCode: Int, message: String) {
-                    failure = InferenceException("runner error $errorCode: $message")
-                }
-            }
-            try {
-                runner.generate(text, SEQ_LEN_REQUEST, callback, false)
-                val error = failure
-                when {
-                    error is InferenceException -> cont.resumeWithException(error)
-                    error != null -> cont.resumeWithException(InferenceException("token stream failed: ${error.message}", error))
-                    else -> cont.resume(answer.toString().trim())
-                }
-            } catch (t: Throwable) {
-                cont.resumeWithException(InferenceException("generate failed: ${t.message}", t))
-            }
+    ): String = suspendCancellableCoroutine { cont ->
+        cont.invokeOnCancellation { runner.stop() }
+        try {
+            cont.resume(runner.generate(prompt, maxNewTokens, onToken))
+        } catch (e: InferenceException) {
+            cont.resumeWithException(e)
+        } catch (t: Throwable) {
+            cont.resumeWithException(InferenceException("generate failed: ${t.message}", t))
         }
     }
 
@@ -527,16 +460,13 @@ class ExecuTorchInferenceEngine(
             return
         }
         val t0 = System.nanoTime()
+        val entry = vlmEntry
         val module = try {
-            LlmModule(
-                LlmModuleConfig.create()
-                    .modulePath(pte.absolutePath)
-                    .tokenizerPath(tok.absolutePath)
-                    .modelType(LlmModuleConfig.MODEL_TYPE_MULTIMODAL)
-                    .temperature(0f)
-                    .loadMode(LlmModuleConfig.LOAD_MODE_MMAP)
-                    .build(),
-            ).also { it.load() }
+            if (entry?.runner.equals(RUNNER_MODULE, ignoreCase = true)) {
+                ModuleVlmRunner(pte, tok, entry)
+            } else {
+                LlmModuleRunner(pte, tok, entry)
+            }
         } catch (t: Throwable) {
             Log.w(TAG, "vlm load failed (A-13): ${t.message}")
             return
@@ -544,7 +474,7 @@ class ExecuTorchInferenceEngine(
         vlm = module
         _stats.update { it.copy(vlmLoaded = true) }
         _vlmInfo.value = vlmInfoPending // FR-G5: only once it loaded
-        Log.i(TAG_LATENCY, "vlm load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} file=${pte.name}")
+        Log.i(TAG_LATENCY, "vlm load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} file=${pte.name} runner=${module.javaClass.simpleName}")
     }
 
     /**
@@ -650,6 +580,9 @@ class ExecuTorchInferenceEngine(
          * "whatever context is left"; [TokenCap] ends the answer at `maxNewTokens`.
          */
         const val SEQ_LEN_REQUEST: Int = 1 shl 15
+
+        /** Lockfile `runner` value for exports the stock `LlmModule` runner cannot drive ([ModuleVlmRunner]). */
+        const val RUNNER_MODULE: String = "module"
 
         /** Lockfile `image_format` for encoders that take raw pixel values as float. */
         const val IMAGE_FORMAT_FLOAT_0_255: String = "float_0_255"

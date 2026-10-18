@@ -99,6 +99,8 @@ class ModelCatalog(private val app: Application) {
          * normalize inside the graph but take float input (LFM2.5-VL). Otherwise empty and [imageMean] decides.
          */
         val imageFormat: String = "",
+        /** VLM runner: `"module"` drives the methods itself ([ModuleVlmRunner]); otherwise the stock `LlmModule`. */
+        val runner: String = "",
     ) {
         val hasSha256: Boolean get() = sha256.isNotBlank() && !sha256.equals(TBD, ignoreCase = true)
         val hasBytes: Boolean get() = bytes > 0L
@@ -316,6 +318,7 @@ class ModelCatalog(private val app: Application) {
                     imageMean = (obj["image_mean"] as? List<*>).orEmpty().filterIsInstance<Number>().map { it.toFloat() },
                     imageStd = (obj["image_std"] as? List<*>).orEmpty().filterIsInstance<Number>().map { it.toFloat() },
                     imageFormat = obj.str("image_format") ?: "",
+                    runner = obj.str("runner") ?: "",
                 )
             }
         }

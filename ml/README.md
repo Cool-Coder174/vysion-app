@@ -12,7 +12,7 @@ Tags on commands below: **VERIFIED** = the flag set was checked against the Exec
 |---|---|---|---|
 | `ocr` + `ocr-charset` | `ocr.pte`, `ocr-charset.json` | PP-OCRv6 small, prebuilt by Software Mansion (Apache-2.0), URL in `models.lock` | loads 0.2 s; read a 960×720 test sign exactly in 1.1 s |
 | `detector` | `detector.pte` | YOLOv8n Open Images V7 (Door 164, Stairs 489, people, furniture): `ml/export/export_detector_oiv7.sh` | loads; `[1, 605, 2100]` decoded as columns + Kotlin NMS |
-| `vlm` + `vlm-tokenizer` | `vlm.pte`, `vlm-tokenizer.json` | LFM2.5-VL-450M, prebuilt by Software Mansion v0.11.0 (LFM Open License v1.0) | loads 1 s; needs the padded-embedding runner (`docs/stack.md` Corrections) |
+| `vlm` + `vlm-tokenizer` | `vlm.pte`, `vlm-tokenizer.json` | LFM2.5-VL-450M, prebuilt by Software Mansion v0.11.0 (LFM Open License v1.0) | answers on the headset via `ModuleVlmRunner` (`runner: module`): 7.8 s for 60 tokens |
 
 Exports run in Docker on any laptop (PyTorch has no Intel-Mac wheels): `docker build -t vysion-ml:1.3.1 ml/export`, then
 `ml/export/export_detector_oiv7.sh`. `python /tools/inspect_pte.py <file>` inside that image prints every method's shapes.
