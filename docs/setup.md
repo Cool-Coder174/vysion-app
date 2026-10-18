@@ -151,6 +151,25 @@ scripts/push_models.sh                      # sideload whatever is in assets/mod
 
 Both scripts verify what they move: sha256 against the lockfile for fetch, byte size on the device for push (`--sha256` for a full hash). The app checks again before loading: a sideloaded file whose size or sha256 differs from a non-`TBD` lockfile row is refused and logged under `vysion.security` (fail closed, plan.md Security). Export recipes: `ml/README.md` (R2). Prebuilt artifacts are attached to the release tag ([`modules/r5-integration.md`](modules/r5-integration.md), release procedure).
 
+## 6b. Optional: the Gemini key for cloud Describe (ADR-0010)
+
+Without a key, Describe runs on the headset as before. The key lives only in your gitignored `local.properties` and is
+restricted in Google Cloud to the Gemini API and to this app signed with your debug keystore, so it is useless outside
+the app. Isaac's key for project `vysion-app` was created this way on 2026-10-18; make your own for your keystore:
+
+```bash
+keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android | grep SHA1
+gcloud services enable generativelanguage.googleapis.com --project vysion-app
+gcloud services api-keys create --project vysion-app --display-name="Vysion XR (<you>, Android only)" \
+  --allowed-application=sha1_fingerprint=<SHA1 from keytool>,package_name=com.vysion.xr \
+  --api-target=service=generativelanguage.googleapis.com
+gcloud services api-keys get-key-string <uid printed above> --project vysion-app --format="value(keyString)"
+```
+
+Put `GEMINI_API_KEY=<that string>` in `local.properties` and rebuild. The app sends `X-Android-Package` and
+`X-Android-Cert` with every request (`AppGraph.signingCertSha1`); a request without them gets 403. Billing is off on
+`vysion-app`: Gemini's free tier answers, but Maps grounding returns 429 until billing is enabled.
+
 ## 7. Airplane mode: every benchmark and the demo
 
 The product claim is "nothing leaves the device" (ADR-0003). The manifest has no network permission and the overlay prints `Network permission: none`, but the demo still runs with the radios off so there is nothing to argue about (RK-4: never demo with Wi-Fi on).

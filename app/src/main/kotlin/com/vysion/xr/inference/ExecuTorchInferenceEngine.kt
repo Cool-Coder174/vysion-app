@@ -14,6 +14,8 @@ import java.lang.ref.WeakReference
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
@@ -128,20 +130,39 @@ class ExecuTorchInferenceEngine(
      * models, so a loaded VLM returns at once (no reload, no second `LlmModule` beside the first; RK-3).
      */
     override suspend fun warmUp(): Unit = withContext(Dispatchers.Default) {
-        mutex.withLock {
-            if (vlm != null) return@withLock // already loaded; the detector reloads lazily in detect()
-            val t0 = System.nanoTime()
+        val t0 = System.nanoTime()
+        val load = mutex.withLock {
+            if (vlm != null || vlmLoad?.isActive == true) return@withContext // loaded, or loading right now
             resolveLocked()
-            loadOcrLocked() // small and fast: Read works before the multi-GB VLM finishes loading
-            loadVlmLocked()
+            loadOcrLocked() // milliseconds: Read works at once
             loadDetectorLocked()
-            Log.i(
-                TAG_LATENCY,
-                "warmUp ms=${(System.nanoTime() - t0) / NANOS_PER_MS} " +
-                    "vlmLoaded=${vlm != null} detectorLoaded=${detector != null} ocrLoaded=${ocr != null}",
-            )
+            CompletableDeferred<Unit>().also { vlmLoad = it }
         }
+        // The VLM (650 MB, 5.5 s on the headset) loads OUTSIDE the inference mutex: loading is not inference (INV-1),
+        // so Read and the detector run meanwhile. Before, warmUp held the mutex for the whole load and the first Read
+        // after launch waited up to ~7 s. describe() waits on [vlmLoad] instead of failing during startup.
+        try {
+            val runner = createVlmRunner()
+            if (runner != null) {
+                withContext(NonCancellable) { // a loaded runner is installed or closed, never leaked
+                    mutex.withLock { if (released) runner.close() else installVlmLocked(runner) }
+                }
+            }
+        } finally {
+            load.complete(Unit) // describe() stops waiting, loaded or not
+        }
+        Log.i(
+            TAG_LATENCY,
+            "warmUp ms=${(System.nanoTime() - t0) / NANOS_PER_MS} " +
+                "vlmLoaded=${vlm != null} detectorLoaded=${detector != null} ocrLoaded=${ocr != null}",
+        )
     }
+
+    /** The VLM load in flight, if any: [runVlmGuarded] waits for it rather than report "VLM not loaded". */
+    @Volatile private var vlmLoad: CompletableDeferred<Unit>? = null
+
+    /** Set by [release]: a VLM that finishes loading afterwards is closed, not installed. */
+    @Volatile private var released = false
 
     /**
      * FR-T1 / FR-D1 / FR-N3 / FR-N6. Inside the mutex: unload the detector (INV-2), prefill the image unless this
@@ -302,6 +323,7 @@ class ExecuTorchInferenceEngine(
      * (`onStop`) keeps the models. Never throws.
      */
     override suspend fun release(): Unit = withContext(Dispatchers.Default) {
+        released = true
         mutex.withLock {
             val runner = vlm
             vlm = null
@@ -328,6 +350,7 @@ class ExecuTorchInferenceEngine(
         maxNewTokens: Int,
         onToken: (String) -> Unit,
     ): String = withContext(Dispatchers.Default) {
+        vlmLoad?.await() // startup: the VLM is still loading outside the mutex; wait for it, do not fail
         mutex.withLock { // INV-1
             unloadDetectorLocked() // INV-2: never both resident while the VLM runs
             val t0 = System.nanoTime()
@@ -423,7 +446,7 @@ class ExecuTorchInferenceEngine(
 
     /**
      * Real: find the three artifacts through the catalog (which checks them against the lockfile and fails closed,
-     * plan.md Security) and prepare their [ModelInfo]. Nothing is published here: [loadVlmLocked] /
+     * plan.md Security) and prepare their [ModelInfo]. Nothing is published here: [installVlmLocked] /
      * [loadDetectorLocked] publish the info only after the model loaded, so the overlay never names a model that
      * is not resident (FR-G5, NFR Honesty). Failures are logged only.
      */
@@ -460,14 +483,14 @@ class ExecuTorchInferenceEngine(
      * VLM unloaded: the controller then speaks `inferenceFailed` (A-13 / Q9: only an `LlmModule`-compatible export
      * loads, `docs/stack.md` D5).
      */
-    private fun loadVlmLocked() {
-        if (vlm != null) return // idempotent (Contracts.kt warmUp)
+    /** Builds the VLM runner without touching engine state, so it can run outside the mutex. `null` = not loaded. */
+    private fun createVlmRunner(): VlmRunner? {
         val pte = vlmFile
         val tok = tokenizerFile
         if (pte == null || tok == null) {
             val missing = if (pte == null) "vlm.pte missing" else "tokenizer missing"
             Log.w(TAG, "vlm not loaded: $missing (sideload or fetch_models.sh)")
-            return
+            return null
         }
         val t0 = System.nanoTime()
         val entry = vlmEntry
@@ -479,12 +502,20 @@ class ExecuTorchInferenceEngine(
             }
         } catch (t: Throwable) {
             Log.w(TAG, "vlm load failed (A-13): ${t.message}")
+            return null
+        }
+        Log.i(TAG_LATENCY, "vlm load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} file=${pte.name} runner=${module.javaClass.simpleName}")
+        return module
+    }
+
+    private fun installVlmLocked(runner: VlmRunner) {
+        if (vlm != null) {
+            runner.close() // a concurrent warmUp won; keep one
             return
         }
-        vlm = module
+        vlm = runner
         _stats.update { it.copy(vlmLoaded = true) }
         _vlmInfo.value = vlmInfoPending // FR-G5: only once it loaded
-        Log.i(TAG_LATENCY, "vlm load ms=${(System.nanoTime() - t0) / NANOS_PER_MS} file=${pte.name} runner=${module.javaClass.simpleName}")
     }
 
     /**

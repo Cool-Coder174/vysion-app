@@ -55,7 +55,10 @@ The app is an augmented experience: the room stays visible and the UI lives in i
 
 Geospatial (the Maps Immersive View tour guide): **not available on the Galaxy XR.** Re-probed 2026-10-18 on the worn
 headset with the network permission and exception logging: `spatial=false vpsAndGps=false`, no exception, and the
-runtime logs `Cannot find extension ID for ANDROID_geospatial` (the OpenXR runtime does not expose the extension). Real Geospatial would also need location permission and a
+runtime logs `Cannot find extension ID for ANDROID_geospatial` (the OpenXR runtime does not expose the extension).
+The Android XR SDK Developer Preview 4 post (May 2026) confirms it: the Geospatial API preview is for wired XR glasses
+(XREAL Project Aura), not headsets. What does work on the headset from the tour-guide post is the Gemini half, called
+from the app (no server): cloud Describe uses it now; Maps grounding needs billing on the Cloud project (429 without). Real Geospatial would also need location permission and a
 Google Cloud API key, and its fallback is the existing on-device navigation. Immersive View itself is not an
 embeddable SDK.
 

@@ -117,9 +117,9 @@ object Cues {
         // Verbatim copy of R.string.product_sentence (res/values/strings.xml); the test keeps them equal.
         Key.PRODUCT_SENTENCE to "Vysion XR helps you read, understand, and move through a space. " +
             "It is not validated for unassisted travel by blind users.",
-        Key.MODE_TEXT_READER to "Text Reader mode",
-        Key.MODE_AUDIO_DESCRIPTION to "Audio Description mode",
-        Key.MODE_NAVIGATION to "Navigation mode",
+        Key.MODE_TEXT_READER to "Reading",
+        Key.MODE_AUDIO_DESCRIPTION to "Describing",
+        Key.MODE_NAVIGATION to "Finding the door",
         Key.PAGE_TEXT_READER to "Read. Tap your thumb to your middle finger to read.",
         Key.PAGE_AUDIO_DESCRIPTION to "Describe. Tap your thumb to your middle finger to describe.",
         Key.PAGE_NAVIGATION to "Find the door. Tap your thumb to your middle finger to find the door.",
@@ -158,9 +158,9 @@ object Cues {
             "y di lee esto, describe, o busca la puerta. Para callarme, extiende el pulgar y el meñique, o di alto.",
         Key.PRODUCT_SENTENCE to "Vysion XR te ayuda a leer, entender y moverte por un espacio. " +
             "No está validado para que personas ciegas viajen sin asistencia.",
-        Key.MODE_TEXT_READER to "Modo lector de texto",
-        Key.MODE_AUDIO_DESCRIPTION to "Modo descripción de audio",
-        Key.MODE_NAVIGATION to "Modo navegación",
+        Key.MODE_TEXT_READER to "Leyendo",
+        Key.MODE_AUDIO_DESCRIPTION to "Describiendo",
+        Key.MODE_NAVIGATION to "Buscando la puerta",
         Key.PAGE_TEXT_READER to "Leer. Toca el pulgar con el dedo medio para leer.",
         Key.PAGE_AUDIO_DESCRIPTION to "Describir. Toca el pulgar con el dedo medio para describir.",
         Key.PAGE_NAVIGATION to "Buscar la puerta. Toca el pulgar con el dedo medio para buscarla.",

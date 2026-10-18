@@ -128,11 +128,13 @@ class CuesTest {
     }
 
     @Test
-    fun `mode announcements name each mode (FR-G3)`() {
-        assertEquals("Text Reader mode", Cues.modeAnnouncement(Mode.TEXT_READER, en))
-        assertEquals("Audio Description mode", Cues.modeAnnouncement(Mode.AUDIO_DESCRIPTION, en))
-        assertEquals("Navigation mode", Cues.modeAnnouncement(Mode.NAVIGATION, en))
-        assertEquals("Modo navegación", Cues.modeAnnouncement(Mode.NAVIGATION, es))
+    fun `mode announcements name each mode in one short word or phrase (FR-G3)`() {
+        // Short on purpose: the answer queues behind the announcement, and "Text Reader mode" (about 2 s of speech)
+        // held the first word back 0.8 s on the worn headset.
+        assertEquals("Reading", Cues.modeAnnouncement(Mode.TEXT_READER, en))
+        assertEquals("Describing", Cues.modeAnnouncement(Mode.AUDIO_DESCRIPTION, en))
+        assertEquals("Finding the door", Cues.modeAnnouncement(Mode.NAVIGATION, en))
+        assertEquals("Buscando la puerta", Cues.modeAnnouncement(Mode.NAVIGATION, es))
     }
 
     @Test
@@ -147,7 +149,7 @@ class CuesTest {
             assertEquals(Cues.holdStill(es), CuesPhrasebook.holdStill)
             assertEquals(Cues.permissionExplanation(es), CuesPhrasebook.permissionExplanation)
             assertEquals(Cues.permissionDenied(es), CuesPhrasebook.permissionDenied)
-            assertEquals("Modo navegación", CuesPhrasebook.modeAnnounced(Mode.NAVIGATION))
+            assertEquals("Buscando la puerta", CuesPhrasebook.modeAnnounced(Mode.NAVIGATION))
             assertEquals("obstáculo adelante", CuesPhrasebook.navigationCue(NavigationCue.Proximity(0.7f)))
             assertEquals(null, CuesPhrasebook.navigationCue(NavigationCue.Arrived))
         } finally {

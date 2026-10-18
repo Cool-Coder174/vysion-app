@@ -31,8 +31,17 @@ interface CloudDescriber {
  * can carry it. Nothing is written to storage; the JPEG and its base64 live only for this request (INV-3).
  *
  * Built only when a key was compiled in ([orNull]); `CloudDescribeEngine` falls back to the headset on any failure.
+ *
+ * The key is restricted in Google Cloud to this Android app (package + signing-certificate SHA-1, ADR-0010), so every
+ * request names the app in [androidPackage] / [androidCert] (`X-Android-Package`, `X-Android-Cert`); without them the
+ * API answers 403 "Requests from this Android client application <empty> are blocked" (verified 2026-10-18).
  */
-class GeminiCloudDescriber(private val apiKey: String, override val model: String = MODEL) : CloudDescriber {
+class GeminiCloudDescriber(
+    private val apiKey: String,
+    override val model: String = MODEL,
+    private val androidPackage: String? = null,
+    private val androidCert: String? = null,
+) : CloudDescriber {
 
     override fun stream(jpeg: ByteArray, prompt: String): Flow<String> = callbackFlow {
         val body = GeminiWire.requestBody(
@@ -52,6 +61,8 @@ class GeminiCloudDescriber(private val apiKey: String, override val model: Strin
                 conn.setFixedLengthStreamingMode(body.size)
                 conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 conn.setRequestProperty("x-goog-api-key", apiKey)
+                androidPackage?.let { conn.setRequestProperty("X-Android-Package", it) }
+                androidCert?.let { conn.setRequestProperty("X-Android-Cert", it) }
                 conn.outputStream.use { it.write(body) }
                 val code = conn.responseCode
                 if (code != HTTP_OK) {
@@ -104,8 +115,10 @@ class GeminiCloudDescriber(private val apiKey: String, override val model: Strin
         private const val HTTP_OK: Int = 200
 
         /** `null` when no key was built in (`GEMINI_API_KEY` in `local.properties`): cloud Describe is "not set up". */
-        fun orNull(apiKey: String): GeminiCloudDescriber? =
-            apiKey.trim().takeIf { it.isNotEmpty() }?.let { GeminiCloudDescriber(it) }
+        fun orNull(apiKey: String, androidPackage: String? = null, androidCert: String? = null): GeminiCloudDescriber? =
+            apiKey.trim().takeIf { it.isNotEmpty() }?.let {
+                GeminiCloudDescriber(it, androidPackage = androidPackage, androidCert = androidCert)
+            }
     }
 }
 

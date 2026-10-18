@@ -131,7 +131,7 @@ class AppGraph(private val app: Application) {
      */
     val inferenceEngine: InferenceEngine = CloudDescribeEngine(
         headset = if (useFakes) FakeInferenceEngine() else ExecuTorchInferenceEngine(app, modelCatalog, scope),
-        cloud = GeminiCloudDescriber.orNull(BuildConfig.GEMINI_API_KEY),
+        cloud = GeminiCloudDescriber.orNull(BuildConfig.GEMINI_API_KEY, app.packageName, signingCertSha1(app)),
         isOnline = NetworkStatus(app)::isOnline,
     )
 
@@ -288,3 +288,17 @@ private const val RELIABILITY_TAG = "vysion.reliability"
 private const val GAZE_SAMPLE_MS = 200L
 
 private suspend fun XrPerceptionSession.gazeDistanceM(): Float? = GazeGeometry.distanceAlongGaze(this)
+
+/**
+ * The SHA-1 of the APK's signing certificate as Google Cloud's Android key restriction expects it in `X-Android-Cert`
+ * (40 upper-case hex digits, no colons). `null` if the package manager cannot tell; the cloud call then fails with 403
+ * and Describe stays on the headset.
+ */
+private fun signingCertSha1(app: Application): String? = runCatching {
+    val info = app.packageManager.getPackageInfo(
+        app.packageName,
+        android.content.pm.PackageManager.PackageInfoFlags.of(android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES.toLong()),
+    )
+    val cert = info.signingInfo?.apkContentsSigners?.firstOrNull()?.toByteArray() ?: return@runCatching null
+    java.security.MessageDigest.getInstance("SHA-1").digest(cert).joinToString("") { "%02X".format(it) }
+}.getOrNull()

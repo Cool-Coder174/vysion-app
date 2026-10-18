@@ -561,8 +561,8 @@ private val ORBITER_GAP = 20.dp
 /** Space between side-by-side windows. */
 private val SIDE_GAP = 48.dp
 
-/** Soft follow: the window catches up with the wearer's head in about half a second, not instantly. */
-private const val FOLLOW_DURATION_MS = 600
+/** Soft follow: the HUD catches up with the head in 0.4 s (0.6 s felt like it dragged behind on a quick turn). */
+private const val FOLLOW_DURATION_MS = 400
 
 /** The HUD's distance: farther than arm's length (0.5 m was too close to read comfortably), nearer than most signs. */
 private const val HUD_DISTANCE_M = 1.25f
