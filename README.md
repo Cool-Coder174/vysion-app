@@ -28,7 +28,7 @@ Design rules (from the SRS): every visual element has an audio twin; voice first
 
 ## Architecture
 
-Four layers in one Kotlin process. Input comes from Android XR's own camera, perception and speech stacks; Control decides what to run; two ExecuTorch models answer; Output is speech first, visuals second. No layer has a path to the network. Full diagrams, flows and the state machine: [`docs/architecture.md`](docs/architecture.md).
+Four layers in one Kotlin process. Input comes from Android XR's own camera, perception and speech stacks; Control decides what to run; two ExecuTorch models answer; Output is speech first, visuals second. The three core features have no path to the network; the optional network features (ADR-0010) are side paths with on-device fallbacks. Full diagrams, flows and the state machine: [`docs/architecture.md`](docs/architecture.md).
 
 ```mermaid
 flowchart LR
@@ -69,7 +69,7 @@ flowchart LR
 | Depth, planes, anchors, hands, head pose | headset | ARCore for Jetpack XR |
 | Panels, passthrough, spatial audio | headset | Jetpack Compose for XR + SceneCore |
 | Speech in / out | headset | Android `SpeechRecognizer` (on-device) / `TextToSpeech` |
-| Network | optional features only | `INTERNET` + `ACCESS_NETWORK_STATE` (ADR-0010); every network feature has an on-device fallback, and Read, Describe and Find the door never need it; printed on the overlay. Today one: opt-in cloud Describe ("cloud on"; Gemini, `GEMINI_API_KEY` in the gitignored `local.properties`, `docs/setup.md` §6b), falling back to the headset VLM |
+| Network | optional features only | `INTERNET` + `ACCESS_NETWORK_STATE` (ADR-0010); every network feature has an on-device fallback, and Read, Describe and Find the door never need it; printed on the overlay. The list of record, with what each one sends, is the ADR-0010 table: opt-in cloud Describe ("cloud on"; Gemini, `GEMINI_API_KEY` in the gitignored `local.properties`, `docs/setup.md` §6b; falls back to the headset VLM), the "where am I" map (FR-N9; falls back to the tiles already in memory and template sentences) and the system recognizer when the on-device one will not bind |
 
 ## Measured numbers
 

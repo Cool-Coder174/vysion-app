@@ -29,11 +29,11 @@ A task from a module doc (`docs/modules/r*.md`) is done when all of these hold:
 - Coroutines and `Flow` for everything asynchronous; no callbacks cross a module boundary.
 - Comments reference requirements by id (`// FR-G4: stop within 300 ms`) and decisions by ADR (`// ADR-0004`).
 - `TODO(FR-xx)` marks skeleton stubs; grep for `TODO(` to see what is left.
-- No new dependencies without a line in `docs/stack.md` saying what it is for and that it has no network path.
+- No new dependencies without a line in `docs/stack.md` saying what it is for and what network path it has, if any, with its on-device fallback (ADR-0010).
 
 ## Review checklist (reviewer ticks before approving)
 
-- [ ] Privacy: no frame leaves memory, no log of frame content, no network permission ([`scripts/check_privacy.sh`](scripts/check_privacy.sh))
+- [ ] Privacy: no frame leaves memory, no log of frame content, no network use without an on-device fallback ([`scripts/check_privacy.sh`](scripts/check_privacy.sh))
 - [ ] Honesty: every displayed or documented number traces to a measurement
 - [ ] Contracts: only `core` types cross module boundaries; no `import com.vysion.xr.<other role>`
 - [ ] Accessibility: every new control has a `contentDescription`; every new visual has an audio twin

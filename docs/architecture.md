@@ -1,8 +1,8 @@
 # Architecture
 
-Source: SRS §6, plus the package map and the two flows the skeleton codes against. **Four layers in one Kotlin process: input adapters feed a mode controller, the controller calls two ExecuTorch modules, and output goes to speech, spatial audio, and passthrough overlays. No layer has a path to the network.**
+Source: SRS §6, plus the package map and the two flows the skeleton codes against. **Four layers in one Kotlin process: input adapters feed a mode controller, the controller calls two ExecuTorch modules, and output goes to speech, spatial audio, and passthrough overlays. The three core features have no path to the network; the optional network features (ADR-0010) are separate side paths, each with an on-device fallback.**
 
-## Nothing leaves the headset: four layers, two ExecuTorch models
+## Four layers, two ExecuTorch models, on the headset
 
 ```mermaid
 flowchart TB
@@ -174,7 +174,7 @@ The number that matters is the measured VLM PSS; until it exists the overlay pri
 
 ## Privacy boundary
 
-- No `android.permission.INTERNET` in the manifest (CI grep + runtime audit printed on the overlay).
-- Camera frames live only in memory (`Bitmap` held by the active command, recycled after). There is no code path that writes a `Bitmap` to disk; `scripts/check_privacy.sh` greps for `Bitmap.compress`, `FileOutputStream`, `MediaStore` and `Log.*` of frame data.
+- The manifest declares only `INTERNET` and `ACCESS_NETWORK_STATE` (ADR-0010), for optional features that each have an on-device fallback. Any other network permission fails `scripts/check_privacy.sh` (source and merged manifest); the runtime audit prints what the APK requests on the overlay.
+- Camera frames live only in memory (`Bitmap` held by the active command, recycled after). There is no code path that writes a `Bitmap` to disk; `scripts/check_privacy.sh` greps for `.compress(` (any receiver; cloud Describe's in-memory JPEG carries a `privacy-allow:` marker and is never stored), `FileOutputStream`, `MediaStore` and `Log.*` of frame data.
 - The only files the app writes are the copied model files under `filesDir/models/`.
-- No analytics, no crash reporter, no third-party SDK with a network path.
+- No analytics and no crash reporter (ADR-0010 keeps both banned); every line that opens a connection names its on-device fallback (`network-fallback:`, checked by the gate).

@@ -10,7 +10,7 @@ Source: SRS §11. The demo is **90 seconds, three modes, one airplane-mode momen
 | 0:10 | Text Reader (20 s) | wearer | Looks at a printed menu or sign, says **"Vysion, read this."** Spoken transcript plus the large-print panel on the mirror screen. Then **"in Spanish."** (P1: today it switches the voice only; the Spanish re-read needs the retained still). If A-1 failed: the wearer holds the S25 Ultra at the sign for this beat and the next (`docs/assumptions.md` A-1 row) |
 | 0:30 | Audio Description (20 s) | wearer | Turns to a cluttered table, says **"Vysion, describe."** Three sentences, hazards first. |
 | 0:50 | Navigation (25 s) | wearer | Says **"Vysion, find the door."** Spatial ping, "door, 2 o'clock, 3 meters", wearer walks, outline follows, arrival cue with handle side. If A-1 or A-13 failed, this beat becomes "Vysion, guide me" toward a wall: the proximity tone and "obstacle ahead" (FR-N1), plus "wall ahead" if FR-N5 (P1) landed; no door, and no outlines when A-1 failed |
-| 1:15 | Proof (15 s) | speaker | Holds up the headset's airplane-mode status on the mirror, points at the diagnostics panel: model, backend, median ms, fps, memory, "Network permission: none." One sentence on the architecture slide. Done. |
+| 1:15 | Proof (15 s) | speaker | Holds up the headset's airplane-mode status on the mirror, points at the diagnostics panel: model, backend, median ms, fps, memory, the permission line ("Network permission: ACCESS_NETWORK_STATE, INTERNET": the network is for optional features, each with a headset fallback, and airplane mode is on, so every answer came from the headset). One sentence on the architecture slide. Done. |
 
 Rehearse twice before Sun 13:00. Keep the whole thing under 90 s; the recorded backup is the same script.
 
@@ -23,14 +23,14 @@ Rehearse twice before Sun 13:00. Keep the whole thing under 90 s; the recorded b
 | Last VLM latency, median of session | timing hooks around the runner call | `InferenceStats.lastVlmMs`, `InferenceStats.medianVlmMs` |
 | Detector fps, 5 s window | frame counter in `detect()` | `InferenceStats.detectorFps` |
 | App memory, MB | `Debug.getPss()` total PSS of the app process, every 1 s (`MemorySampler`; not rate-limited, unlike `ActivityManager.getProcessMemoryInfo`) | `DiagnosticsSnapshot.appMemoryMb` |
-| Network permission | read from the manifest at runtime, prints "none" | `DiagnosticsSnapshot.networkPermission` |
+| Network permission | read from the manifest at runtime, prints what the APK requests (`ACCESS_NETWORK_STATE, INTERNET`) | `DiagnosticsSnapshot.networkPermission` |
 
 A field whose value has not been measured yet renders as **"not measured"**, never as a placeholder number (NFR "Honesty").
 
 ## Three-slide pitch
 
 1. **Problem**: the three tasks, the users, the assistive-not-safety sentence.
-2. **Architecture**: the four-layer diagram from [`docs/architecture.md`](architecture.md) (export the Mermaid to PNG), "nothing leaves the headset".
+2. **Architecture**: the four-layer diagram from [`docs/architecture.md`](architecture.md) (export the Mermaid to PNG), "the three core features run on the headset" (the optional network features, each with a headset fallback, are off or unreachable in the demo).
 3. **Measured results**: the benchmark table from [`docs/benchmarks.md`](benchmarks.md), numbers from the device, misses shown as misses.
 
 ## Submission checklist

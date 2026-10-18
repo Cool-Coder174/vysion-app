@@ -252,7 +252,7 @@ dependencies {
     implementation(libs.androidx.xr.compose)
     implementation(libs.androidx.xr.arcore)
 
-    // R2: ExecuTorch runtime, XNNPACK flavor, includes LlmModule. No network permission in its manifest (ADR-0003).
+    // R2: ExecuTorch runtime, XNNPACK flavor, includes LlmModule. Declares no network permission of its own.
     implementation(libs.executorch.android)
 
     testImplementation(libs.junit4)
@@ -303,7 +303,8 @@ after `settings.gradle.kts` exists. (The wrapper in this repo was generated from
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Vysion XR manifest. Sources and verification for every entry: docs/stack.md §2.7.
-  Privacy boundary (ADR-0003): NO network permission. CI greps this file and the merged manifest.
+  Privacy boundary (ADR-0003, amended by ADR-0010): network only for optional features with an on-device fallback.
+  CI greps this file and the merged manifest.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
@@ -328,20 +329,25 @@ after `settings.gradle.kts` exists. (The wrapper in this repo was generated from
     <uses-permission android:name="android.permission.HAND_TRACKING" />              <!-- pinch-and-hold push-to-talk (FR-G2, P1) -->
     <uses-permission android:name="android.permission.HEAD_TRACKING" />              <!-- DeviceTrackingMode.SPATIAL → head pose (FR-N3/N4) -->
 
-    <!-- This app declares NO network permission (ADR-0003).
-         The next two lines are manifest-merger GUARDS, not grants: they strip the permission if a library
-         adds it, so the overlay's "Network permission: none" (FR-G5) stays true on the merged APK.
-         ACCESS_NETWORK_STATE arrives transitively from androidx.media3:media3-exoplayer (pulled in by
-         SceneCore); we never use ExoPlayer, and media3's NetworkTypeObserver catches the SecurityException
-         (verified with javap on media3-common 1.10.0, 2026-10-17). scripts/check_privacy.sh accepts only
-         the tools:node="remove" form. -->
-    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+    <!-- Network is allowed for optional features, each with an on-device fallback (ADR-0010, amends ADR-0003).
+         Read, Describe and Find the door always run on the headset; nothing here may make them depend on a
+         connection. ACCESS_NETWORK_STATE lets a feature skip the network at once when offline. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Package visibility for the SpeechRecognizer fallback (createSpeechRecognizer, targetSdk ≥ 30). -->
+    <!-- "Where am I" (FR-N9, ADR-0010 row "Where am I map"): network location (Wi-Fi through Play services; the Galaxy XR
+         has no GPS). Requested only the first time the wearer asks, never at launch; both names are needed for the
+         precise-location dialog. The fix is never stored or logged. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Package visibility (targetSdk ≥ 30): the on-device SpeechRecognizer service and the TextToSpeech engines. -->
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
     </queries>
 
@@ -378,13 +384,13 @@ after `settings.gradle.kts` exists. (The wrapper in this repo was generated from
 </manifest>
 ```
 
-Manifest notes (verified): without the second guard the merged debug APK carried the declared permissions plus
-transitive `ACCESS_NETWORK_STATE` (from `androidx.media3:media3-exoplayer`, pulled in by SceneCore), `WAKE_LOCK`
-and `com.vysion.xr.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, and no INTERNET (BS-AC aapt2). With both
-`tools:node="remove"` guards above, the merged APK keeps `WAKE_LOCK` (and the signature permission) only; any
-NET_PERMS entry (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_NETWORK_STATE`) is a bug, and
-`ManifestAudit` (overlay) and `scripts/check_privacy.sh` (CI, merged manifest) both flag the full set (see
-"Corrections found at build time"). The `configChanges` attribute keeps rotation (S25 Ultra) and Home Space
+Manifest notes (verified): ADR-0010 (2026-10-17) replaced the two `tools:node="remove"` guards this page used to
+show with plain `INTERNET` and `ACCESS_NETWORK_STATE` declarations. `ACCESS_NETWORK_STATE` also arrives transitively
+from `androidx.media3:media3-exoplayer` (pulled in by SceneCore; we never use ExoPlayer), and the merged debug APK
+carried `WAKE_LOCK` and `com.vysion.xr.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` (BS-AC aapt2, 2026-10-17). Any other
+network permission (`ACCESS_WIFI_STATE`, `CHANGE_NETWORK_STATE`, …) is a bug: `scripts/check_privacy.sh` (CI, source and
+merged manifests) fails on it, and `ManifestAudit` prints what the APK requests on the overlay (`ACCESS_NETWORK_STATE,
+INTERNET` is the expected value; see "Corrections found at build time"). The `configChanges` attribute keeps rotation (S25 Ultra) and Home Space
 resizes from recreating the activity. Lint warnings you will see and may ignore: `OldTargetApi` (36 vs 37),
 `MissingApplicationIcon` (add `android:icon` once a mipmap exists), `allowBackup` deprecated (use
 `dataExtractionRules` later), `ChromeOsAbiSupport` (expected with arm64-only).
@@ -1074,7 +1080,7 @@ class Diagnostics(private val ctx: Context) {
     fun networkPermission(): String {
         val info = ctx.packageManager.getPackageInfo(ctx.packageName, PackageManager.PackageInfoFlags.of(PackageManager.GET_PERMISSIONS.toLong()))
         val net = info.requestedPermissions.orEmpty().filter { it in NET_PERMS }   // INTERNET, ACCESS_NETWORK_STATE, …
-        return "Network permission: " + if (net.isNotEmpty()) "${net.joinToString()} (BUG)" else "none"
+        return "Network permission: " + if (net.isNotEmpty()) net.joinToString() else "none"   // ADR-0010: expect "INTERNET, ACCESS_NETWORK_STATE"; anything more is a bug
     }
 }
 ```
@@ -1140,7 +1146,7 @@ the headset before the demo, keep the 90-s demo well inside the 2 h rating, inst
 | Q13 | Does `TextToSpeech.getVoices()` contain an `es-MX` or `es-ES` voice with `isNetworkConnectionRequired == false` and no `"notInstalled"` feature? | R4 Sat 14:00 | install Google TTS Spanish pack on Wi-Fi before airplane mode |
 | Q14 | Does TalkBack announce controls inside a `SpatialPanel` (contentDescription read aloud)? | R4 Sun 09:00 | duplicate labels as spoken cues |
 | Q15 | Does `Hand.left/right(session).state` report `TRACKING` with 26 joints so pinch-and-hold (< 0.05 m thumb–index) works as push-to-talk? | R1 Sun 10:00 | panel mic button |
-| Q16 | Does the merged APK (aapt2 dump badging) list NO `android.permission.INTERNET`, and does the overlay print "Network permission: none"? | R5 after every merge | find the library; the `tools:node="remove"` guard should already strip it |
+| Q16 | Does the merged APK (aapt2 dump badging) list no network permission beyond `INTERNET` and `ACCESS_NETWORK_STATE` (ADR-0010), and does the overlay print exactly `ACCESS_NETWORK_STATE, INTERNET`? | R5 after every merge | find the library; add a `tools:node="remove"` guard for the extra permission |
 | Q17 | Does `./gradlew :app:lintDebug` pass once the OptIn (D6) and camera `uses-feature` are in, so lint can be promoted from `continue-on-error` in ci.yml? | R5 Sat | leave the flag |
 | Q18 | Is the submission format and judging slot confirmed in writing by the organizers (Luma/OSAW publish only "demo night Sunday")? | R5 Sat 10:30 | — |
 | Q19 | Does the ADB connection to the headset's data-only side port work from each laptop, and does Wi-Fi ADB pairing survive until airplane mode is toggled? | R5 Sat 10:30 | USB only; install before airplane mode |
@@ -1167,6 +1173,7 @@ Append a row whenever a device run or a Gradle build proves a line above wrong. 
 | 2026-10-17 | §2.7 manifest (one `INTERNET` guard only) and §3-R5 "Permissions" ("test for `android.permission.INTERNET` specifically: the merged APK legitimately contains `ACCESS_NETWORK_STATE`") | `ACCESS_NETWORK_STATE` was treated as a legitimate merged permission and the overlay snippet tested `INTERNET` alone | Both `INTERNET` and `ACCESS_NETWORK_STATE` are removed with `tools:node="remove"`; the merged APK keeps `WAKE_LOCK` only; `ManifestAudit` and `scripts/check_privacy.sh` flag the full NET_PERMS set (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_NETWORK_STATE`) | `javap -c -p` of `androidx.media3.common.util.NetworkTypeObserver` in `media3-common-1.10.0.aar` (the `getActiveNetworkInfo()` call sits in a `SecurityException` handler that returns "unknown"); merged manifest `app/build/intermediates/merged_manifest/debug/processDebugMainManifest/AndroidManifest.xml` lists neither permission |
 | 2026-10-17 | §3-R5 "Memory" (`getProcessMemoryInfo` … "poll ≤ every ~5 s") | The throttle is far longer than 5 s for apps: AOSP caches the calling process's sample for `MEMORY_INFO_THROTTLE_TIME` (5 min default), so a 1 Hz overlay would freeze | `MemorySampler` uses `Debug.getPss()` (own process, not rate-limited, same total PSS) | AOSP `ActivityManagerService.getProcessMemoryInfo` (`MEMORY_INFO_THROTTLE_TIME`); `MemorySampler.kt` KDoc |
 | 2026-10-17 | §2.4 `app/build.gradle.kts`, §2.7 manifest, §2.8 `ci.yml` | The ready-to-paste copies had drifted from the repo (no `USE_FAKES` `buildConfigField` / `buildConfig = true` / `testOptions`, no `configChanges`, no privacy or cue CI steps) | §2.4, §2.7 and §2.8 now hold the repo files verbatim | `diff` against `app/build.gradle.kts`, `app/src/main/AndroidManifest.xml`, `.github/workflows/ci.yml` |
+| 2026-10-18 | §2.7 manifest, its "Manifest notes", Q16 and the §3-R5 `networkPermission` snippet | Still showed the ADR-0003 form: `tools:node="remove"` guards on `INTERNET` and `ACCESS_NETWORK_STATE`, "Network permission: none", and a `(BUG)` suffix on any network permission | ADR-0010 declares `INTERNET` and `ACCESS_NETWORK_STATE`; §2.7 is the repo file verbatim again (including FR-N9's two location permissions); Q16 and the snippet expect exactly those two, and any other network permission is the bug | `diff` against `app/src/main/AndroidManifest.xml`; `scripts/check_privacy.sh` |
 | 2026-10-17 | §3 R3 "Hit test" / "Anchors" (`Ray` / `Pose` / `Vector3` in `androidx.xr.runtime.math`, no constructors given) and the `XrPerceptionSession` snippets (`v3()`, `toTracking()`, `toPlaneKind()`) | No constructor or type-mapping row; the snippets call bridge functions that exist nowhere | `Vector3(x: Float, y: Float, z: Float)` with `x/y/z`; `Pose(translation: Vector3 = Vector3(), rotation: Quaternion = Quaternion())` (default `Quaternion()` = (0, 0, 0, 1), identity) plus a `Pose(Vector3)` overload; `Vector2(x, y)`. `arcore.TrackingState`, `arcore.PlaneLabel` and `scenecore.SpatialCapability` are final classes with static instances, not enums, so every `when` over them needs `else`. R3 writes the bridges as private functions in `XrPerceptionSession.kt`: `Vector3.v3()`, `Vec3.toVector3()`, `TrackingState.toTracking()`, `PlaneLabel.toPlaneKind()` (code in its class KDoc) | javap on the cached runtime / arcore / scenecore 1.0.0-rc02 jars (`javap -c` of the `Pose` and `Quaternion` default constructors) |
 | 2026-10-17 | §3 R3 code block, step 1 (`speaker.error("XR session unavailable")`) and step 5 (`speaker.say(Cues.NO_DOOR)`) | Neither call exists (`Speaker` has no `error`; `Cues` has `doorNotFound`, no `NO_DOOR`), and R3 holding a `Speaker` breaks INV-4 and docs/contracts.md ("R3 never builds strings") | R3 never speaks: an unavailable session sets `SessionState.UNAVAILABLE`; a door with no hit makes `placeFromBearing` return `null` and R1 speaks `ModePhrasebook.doorNotFound`. The step 6 `pool.load(assets.openFd(…), 0)` needs an `AssetManager` (`XrPerceptionSession` must expose `internal val assets`) and should pass priority `1` (Android's documented value) | `core/Contracts.kt` (`Speaker`), `voice/Cues.kt`, docs/modules/r3-spatial-perception.md (adapted snippet) |
 | 2026-10-17 | §3 R3 "Depth" (`smoothDepthMap: FloatBuffer?` (meters)) | Does not say whether a value is the distance along the pixel's ray or along the optical axis, which changes FR-N3's off-axis door distance by up to 1/cos(angle) | still UNVERIFIED: on the first device run compare `sampleDepthAlongBearing` at ±30° against a tape measure; if the map is axial, divide by the cosine of the angle off the axis (`XrPerceptionSession.sampleDepthAlongBearing` KDoc) | none yet |

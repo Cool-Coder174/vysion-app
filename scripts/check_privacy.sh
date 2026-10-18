@@ -55,7 +55,9 @@ fi
 
 echo "== 3. frame persistence APIs in Kotlin sources (main + debug) =="
 # Java writers plus Kotlin's usual ones (kotlin.io writeBytes/writeText/outputStream/…), NIO and pixel copies.
-PERSIST='Bitmap\.compress\(|FileOutputStream\(|MediaStore\.Images|OutputFileOptions|Environment\.getExternalStorage|openFileOutput\(|ImageWriter|MediaRecorder|CameraX.*Recorder'
+# `\.compress\(` matches any receiver (`bitmap.compress(`, `scaled.compress(`, `Bitmap.compress(`): grep is case-sensitive, so
+# naming the class would miss a lower-case variable. An in-memory encode (cloud Describe's JPEG) carries `privacy-allow:`.
+PERSIST='\.compress\(|FileOutputStream\(|MediaStore\.Images|OutputFileOptions|Environment\.getExternalStorage|openFileOutput\(|ImageWriter|MediaRecorder|CameraX.*Recorder'
 PERSIST+='|writeBytes\(|writeText\(|appendBytes\(|appendText\(|\.outputStream\(|bufferedWriter\(|printWriter\(|FileWriter\('
 PERSIST+='|Files\.write|RandomAccessFile\(|openOutputStream\(|copyPixelsToBuffer\('
 if [ "${#KOTLIN_DIRS[@]}" -gt 0 ]; then

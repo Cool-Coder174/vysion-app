@@ -16,7 +16,7 @@ Vysion XR reads text, describes a scene, and guides the wearer to a door, using 
 
 ## Positioning
 
-Everything runs on the headset: nothing is sent unless the wearer says "cloud on" for Describe (ADR-0010), camera frames never saved, measured numbers shown live. A headset (not a phone) because hands stay free, the camera points where the head points, spatial audio can place a cue in the target's direction, and anchors keep a target in memory when it leaves view.
+Everything runs on the headset; the few optional network features (ADR-0010) each fall back to it and send only what the wearer switched on (a photo after "cloud on" for Describe, a map-area request after allowing location for "where am I"), camera frames never saved, measured numbers shown live. A headset (not a phone) because hands stay free, the camera points where the head points, spatial audio can place a cue in the target's direction, and anchors keep a target in memory when it leaves view.
 
 ## Operating Context
 
@@ -30,7 +30,7 @@ Everything runs on the headset: nothing is sent unless the wearer says "cloud on
 - Three modes: Text Reader ("read this"), Audio Description ("describe" / "what's here?"), Navigation ("guide me" / "find the door"). Commands: stop, repeat, slower, in Spanish, next, brief, detailed.
 - Every visual element has an audio twin; nothing is spoken that was not measured or seen; hazards first; clock-face bearings; every utterance interruptible by "stop" within 300 ms.
 - Spoken strings live only in `voice/Cues.kt`, prompts only in `inference/PromptLibrary.kt`; every displayed number is measured on the device or shows "not measured".
-- The app writes only model files and a single "onboarding finished" flag (ADR-0003, ADR-0009). `INTERNET` is used only by opt-in cloud Describe, which falls back to the headset (ADR-0010).
+- The app writes only model files and a single "onboarding finished" flag (ADR-0003, ADR-0009). `INTERNET` and `ACCESS_NETWORK_STATE` are used only by the optional features listed in ADR-0010 (cloud Describe, the "where am I" map), each of which falls back to the headset.
 - Typeface: the device's system font; no bundled fonts (decided 2026-10-17).
 - English and Spanish only.
 
@@ -50,7 +50,7 @@ Everything runs on the headset: nothing is sent unless the wearer says "cloud on
 2. Honest by construction: say only what was seen or measured, show "not measured" rather than a number nobody measured.
 3. Stop always wins: any utterance, any state, within 300 ms, by voice, palm or button.
 4. A helper, not a guide: never imply safety for unassisted travel; keep the cane in the copy.
-5. Nothing leaves the headset unless the wearer turns cloud Describe on, and the voice says so when they do.
+5. Nothing leaves the headset except through an optional network feature the wearer switched on or allowed, and the voice says so first: cloud Describe ("cloud on") and the "where am I" map (the location dialog). Each falls back to the headset. If the on-device recognizer will not start, the system speech service hears the microphone instead. ADR-0010 lists every feature and what it sends.
 
 ## Accessibility & Inclusion
 

@@ -14,7 +14,7 @@ The `.pte` files are hundreds of MB to a few GB. The SRS requires `scripts/fetch
 
 - Git LFS: quota and bandwidth limits on a public repo during a hackathon, and the clone-time cost hits everyone.
 - Committing the files: repository bloat that cannot be undone.
-- Downloading at app runtime: the app has no INTERNET permission (ADR-0003).
+- Downloading at app runtime: the app had no INTERNET permission (ADR-0003). Amended by ADR-0010: `INTERNET` is now declared, but only for optional features with an on-device fallback, and a model download is not one: Read and Describe would wait on it.
 
 ## Consequences
 

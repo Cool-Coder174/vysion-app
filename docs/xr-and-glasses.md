@@ -71,8 +71,10 @@ label doors ("Room 204") without a model; anchor persistence could remember a do
   the paired phone app. Camera stream 360×640 to 720×1280 at 2–30 fps over Bluetooth, photo capture, mic over HFP
   (8 kHz), speakers over A2DP, a 600×600 display on Ray-Ban Display.
 - Distribution is invite-only beta; public submissions "soon". Registration goes through the Meta AI app.
-- **Conflict with ADR-0003:** the toolkit's manifest needs `INTERNET` (and Bluetooth). Our privacy gate forbids network
-  permission, so a Meta target needs its own build variant or an ADR amendment before any code.
+- **ADR-0010 applies:** the toolkit's manifest needs `INTERNET` (and Bluetooth). `INTERNET` is allowed since ADR-0010,
+  but only for features with an on-device fallback, so a Meta target needs an ADR-0010 row naming what the toolkit
+  sends over the network and what runs when it is unreachable, and a check of its other permissions against
+  `scripts/check_privacy.sh`, before any code.
 - Fit: the phone runs our ExecuTorch models on glasses frames and speaks through the glasses. Meta explicitly lists
   "scene description" accessibility apps; covert capture and face/voice identification are banned; the capture LED
   must never be hidden.
@@ -90,5 +92,5 @@ label doors ("Room 204") without a model; anchor persistence could remember a do
 ## Recommendation
 
 Finish the Galaxy XR experience first. For glasses, the cheapest next step is an Android XR projected activity that
-reuses `CameraFrameSource`, the engine and the speaker (no network permission needed). A Meta target is worth it only
-after an ADR decides how to reconcile its `INTERNET` requirement with ADR-0003.
+reuses `CameraFrameSource`, the engine and the speaker (no network use needed). A Meta target is worth it only
+after an ADR-0010 row says what its `INTERNET` use sends and what runs without it.

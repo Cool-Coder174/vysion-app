@@ -16,7 +16,7 @@
 ## Checklist
 
 - [ ] `./gradlew assembleDebug testDebugUnitTest` passes
-- [ ] `scripts/check_privacy.sh` passes (no network permission, no frame persistence, no frame logging)
+- [ ] `scripts/check_privacy.sh` passes (no network permission beyond ADR-0010's two, every network call names its fallback, no frame persistence, no frame logging)
 - [ ] Every number shown or documented was measured on the device (NFR Honesty)
 - [ ] Only `core` types cross module boundaries (ADR-0005)
 - [ ] New controls have TalkBack labels; new visuals have an audio twin

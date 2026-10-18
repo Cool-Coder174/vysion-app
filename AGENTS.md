@@ -1,6 +1,6 @@
 # AGENTS.md — operating manual for coding agents (and humans) on Vysion XR
 
-Vysion XR is a native Android XR app for the Samsung Galaxy XR with three voice-driven modes, Text Reader, Audio Description and Navigation, where every model runs on the headset through ExecuTorch and nothing leaves the device. It is built by five people in ~30 hours at the ExecuTorch Hackathon (Oct 17–18, 2026). The product sentence, verbatim everywhere: **"Vysion XR helps you read, understand, and move through a space. It is not validated for unassisted travel by blind users."**
+Vysion XR is a native Android XR app for the Samsung Galaxy XR with three voice-driven modes, Text Reader, Audio Description and Navigation, where every model runs on the headset through ExecuTorch and the core features work with no connection; the few optional network features each have an on-device fallback (ADR-0010). It is built by five people in ~30 hours at the ExecuTorch Hackathon (Oct 17–18, 2026). The product sentence, verbatim everywhere: **"Vysion XR helps you read, understand, and move through a space. It is not validated for unassisted travel by blind users."**
 
 This file tells you how to work here without asking anyone. `CLAUDE.md` points at it; `CONTRIBUTING.md` is the human-process half.
 

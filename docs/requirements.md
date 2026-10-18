@@ -8,7 +8,7 @@ Source of truth: [`docs/srs/srs-extract.md`](srs/srs-extract.md) §1–§4 (tran
 |---|---|---|
 | Use case & impact (UC) | 40 | One headset, three real accessibility tasks, hands-free, voice in / spatial audio out |
 | Technical implementation (TI) | 25 | Kotlin + Jetpack XR app; ExecuTorch runs the VLM and the detector on live passthrough frames |
-| On-device AI & efficiency (OD) | 15 | Airplane-mode demo; live diagnostics panel (ms/frame, memory, backend); no network permission in the manifest |
+| On-device AI & efficiency (OD) | 15 | Airplane-mode demo; live diagnostics panel (ms/frame, memory, backend); only `INTERNET` and `ACCESS_NETWORK_STATE` in the manifest, every network feature with an on-device fallback (ADR-0010) |
 | Deployment & documentation | 10 | Reproducible README, pinned ExecuTorch version, prebuilt APK + `.pte` models, TalkBack-tested UI |
 | Presentation & demonstration | 10 | 90-second live demo with a recorded backup; architecture slide; measured numbers, not claims |
 
@@ -44,7 +44,7 @@ Target: **85+/100**. Anything that earns no rubric points is cut.
 | FR-G2 | Voice commands via on-device SpeechRecognizer, started by pinch-and-hold or the panel mic button: read, describe, guide me, find the door, stop, repeat, slower, in Spanish | P0 | UC | R4 (lead; `CommandBus`), R1 (mic button; pinch is P1) | F3 (pinch: F5) |
 | FR-G3 | Mode changes are announced by TTS; the active mode is also shown on the panel | P0 | UC | R1 (lead; `ModeController`, panel), R4 (`Cues.kt`) | F3 |
 | FR-G4 | All speech output through Android TextToSpeech; "stop" interrupts within 300 ms | P0 | UC | R4 (`Speaker`) | F3 |
-| FR-G5 | Diagnostics overlay (toggle): model name, backend, last inference ms, detector fps, app memory MB, "Network permission: none". Every value measured at runtime | P0 | OD | R5 (lead; `diagnostics/`), R2 (timing hooks) | F6 |
+| FR-G5 | Diagnostics overlay (toggle): model name, backend, last inference ms, detector fps, app memory MB, "Network permission: <what the APK requests>" (the SRS says "none"; it is `ACCESS_NETWORK_STATE, INTERNET` since ADR-0010). Every value measured at runtime | P0 | OD | R5 (lead; `diagnostics/`), R2 (timing hooks) | F6 |
 | FR-G6 | Spanish output in all three modes (TTS voice + VLM prompt) | P1 | UC | R4 (voice), R2 (prompt) | F6 |
 | FR-G7 | ExecuTorch TTS (Supertonic or Voxtral TTS) replaces Android TTS so speech out is also on ExecuTorch | P2 | TI, OD | R4 | stretch |
 
