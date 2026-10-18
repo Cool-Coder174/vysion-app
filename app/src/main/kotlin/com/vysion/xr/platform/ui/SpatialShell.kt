@@ -61,6 +61,10 @@ fun SpatialShell(graph: AppGraph) {
     val capabilities = LocalSpatialCapabilities.current
     val session = LocalSession.current
 
+    // One Session per activity: hand Compose's to R3 so perception never calls Session.create twice.
+    LaunchedEffect(session) {
+        graph.perception?.offerComposeSession(session)
+    }
     // A-2 fallback: ask for full passthrough as soon as we are allowed to control it.
     LaunchedEffect(session, capabilities.isPassthroughControlEnabled) {
         session?.let { forcePassthrough(it) }

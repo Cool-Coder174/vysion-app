@@ -4,12 +4,30 @@ import android.app.Activity
 import android.app.Application
 import android.media.SoundPool
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import androidx.xr.arcore.Anchor
+import androidx.xr.arcore.Depth
+import androidx.xr.arcore.RenderViewpoint
+import androidx.xr.runtime.AnchorPersistenceMode
+import androidx.xr.runtime.Config
+import androidx.xr.runtime.DepthEstimationMode
+import androidx.xr.runtime.DeviceTrackingMode
+import androidx.xr.runtime.HandTrackingMode
+import androidx.xr.runtime.PlaneTrackingMode
+import androidx.xr.runtime.RenderingMode
 import androidx.xr.runtime.Session
+import androidx.xr.runtime.SessionConfigureSuccess
+import androidx.xr.runtime.SessionCreateSuccess
+import androidx.xr.runtime.XrDevice
 import com.vysion.xr.core.AnchorId
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,9 +35,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.lang.ref.WeakReference
 import kotlin.math.sqrt
 
@@ -29,8 +51,8 @@ import kotlin.math.sqrt
  *
  *  Everything below the "Value types" banner is pure Kotlin (no Android, no androidx.xr) so the
  *  cone math, plane semantics and relative geometry run in JVM unit tests. The session class at
- *  the bottom is the only place the XR runtime is touched, and in this skeleton every one of
- *  those touches is a stub that documents the exact call from docs/stack.md → R3.
+ *  the bottom is the only place the XR runtime is touched; session startup and depth streaming are
+ *  implemented, while plane, hand, head-pose, anchor, and spatial-audio hooks remain in progress.
  *
  *  Owner: R3 · SRS §8 "ARCore for Jetpack XR session, depth, planes, anchors, hands" · due Sat 12:00
  *  (session, A-5) and Sat 13:00 (spatial audio, A-6).
@@ -332,21 +354,10 @@ class XrPerceptionSession(
     /**
      * FR-N1 depth stream, ≤ runtime rate; [XrNavigationEngine] samples it at 10 Hz.
      *
-     * Feeder to implement (stack.md R3 "Depth"), launched in [scope] by [start]:
-     * ```
-     * val stereo = XrDevice.getCurrentDevice(app).isRenderingModeSupported(RenderingMode.STEREO)
-     * val depth = if (stereo) Depth.left(session) else Depth.mono(session)
-     * val view = if (stereo) RenderViewpoint.left(session) else RenderViewpoint.mono(session)
-     * depth.state.collect { d ->
-     *     val map = d.smoothDepthMap ?: return@collect            // IllegalStateException if SMOOTH not configured
-     *     val fov = view.state.value.fieldOfView                   // angleLeft/Right/Up/Down (radians, UNVERIFIED unit)
-     *     val floats = FloatArray(d.width * d.height).also { map.rewind(); map.get(it) }
-     *     val conf = d.smoothConfidenceMap?.let { b -> ByteArray(floats.size).also { b.rewind(); b.get(it) } }
-     *     _depthFrames.tryEmit(DepthFrame(d.width, d.height, floats, conf, FovDeg(hDeg, vDeg), SystemClock.elapsedRealtimeNanos()))
-     * }
-     * ```
-     * A-5 evidence line to log once from this feeder: `vysion: depth WxH, min trusted depth m` (the
-     * values are measured; never log the map itself, INV-3).
+     * The feeder selects a stereo-left or mono depth/view pair, copies each smooth depth map and
+     * optional confidence map into app-owned arrays, and emits only when the field of view is usable.
+     * The FOV angles are treated as radians per OpenXR convention (unit still UNVERIFIED; see
+     * `docs/stack.md`). It logs one trusted minimum-depth sample for A-5, never the map itself (INV-3).
      */
     override val depthFrames: Flow<DepthFrame> = _depthFrames.asSharedFlow()
 
@@ -399,6 +410,20 @@ class XrPerceptionSession(
     private val anchorPoses = HashMap<AnchorId, MutableStateFlow<AnchorPoseSample?>>()
     private var nextAnchorSeq = 0
     private val lifecycle = Mutex()
+    private var depthJob: Job? = null
+    private var loggedFirstDepthSample = false
+
+    /**
+     * The Session Compose for XR already created for the activity (`LocalSession.current`). The
+     * runtime allows one Session per activity, so [start] reuses this one instead of calling
+     * `Session.create` again ("Session already exists for context").
+     */
+    private val composeSession = MutableStateFlow<Session?>(null)
+
+    /** Called by the spatial UI with `LocalSession.current`; `null` clears it. */
+    fun offerComposeSession(xrSession: Session?) {
+        composeSession.value = xrSession
+    }
 
     /** The resumed activity, captured so the no-arg [start] can create the session (see KDoc above). */
     @Volatile
@@ -421,8 +446,9 @@ class XrPerceptionSession(
 
     /**
      * Creates and configures the session (SRS R3 task 1, Sat 12:00; plan.md F1 task 1.5; A-5).
-     * Idempotent. Never throws: on any failure [state] becomes [SessionState.UNAVAILABLE] and the
-     * NoOp-equivalent behavior continues (R1 speaks `Cues.navigationUnavailable`, an R4 string).
+     * Idempotent. Known platform startup failures are logged and set [state] to
+     * [SessionState.UNAVAILABLE]; cancellation and unexpected failures propagate. Starts the depth
+     * feed after successful configuration.
      *
      * Real implementation (docs/stack.md → R3; every line VERIFIED unless marked):
      * ```
@@ -450,14 +476,115 @@ class XrPerceptionSession(
         lifecycle.withLock {
             if (_state.value == SessionState.RUNNING || _state.value == SessionState.STARTING) return
             _state.value = SessionState.STARTING
-            Log.w(
-                TAG,
-                "TODO(FR-N1) XrPerceptionSession.start: Session.create(context = activity) on Dispatchers.IO, " +
-                    "Config.Builder(session.config).setPlaneTracking/.setDepthEstimation/.setHandTracking/" +
-                    ".setDeviceTracking/.setAnchorPersistence, session.configure(cfg), then launch the four feeders",
-            )
-            // Skeleton: no runtime session exists, so the streams stay silent and nothing is measured.
-            _state.value = SessionState.UNAVAILABLE
+            try {
+                // Prefer the Session Compose for XR owns; only create one if it never appears.
+                val shared = composeSession.value
+                    ?: withTimeoutOrNull(COMPOSE_SESSION_WAIT_MS) { composeSession.filterNotNull().first() }
+                val xrSession = if (shared != null) {
+                    shared
+                } else {
+                    val creationResult = try {
+                        withContext(Dispatchers.IO) { Session.create(context = activity) }
+                    } catch (e: IllegalStateException) {
+                        Log.e(TAG, "XR session already exists for this activity and was not shared", e)
+                        _state.value = SessionState.UNAVAILABLE
+                        return
+                    }
+                    when (creationResult) {
+                        is SessionCreateSuccess -> creationResult.session
+                        else -> {
+                            Log.e(TAG, "XR session creation failed: ${creationResult::class.java.simpleName}")
+                            _state.value = SessionState.UNAVAILABLE
+                            return
+                        }
+                    }
+                }
+
+                val config = Config.Builder(xrSession.config)
+                    .setPlaneTracking(PlaneTrackingMode.HORIZONTAL_AND_VERTICAL)
+                    .setDepthEstimation(DepthEstimationMode.SMOOTH_ONLY)
+                    .setHandTracking(HandTrackingMode.BOTH)
+                    .setDeviceTracking(DeviceTrackingMode.SPATIAL)
+                    .setAnchorPersistence(AnchorPersistenceMode.LOCAL)
+                    .build()
+
+                when (val configureResult = xrSession.configure(config)) {
+                    is SessionConfigureSuccess -> {
+                        session = xrSession
+                        depthJob = scope.launchDepthFeed(xrSession)
+                        _state.value = SessionState.RUNNING
+                        Log.i(TAG, "XR session configured successfully; state=${_state.value}")
+                    }
+                    else -> {
+                        Log.e(TAG, "XR session configuration failed: ${configureResult::class.java.simpleName}")
+                        _state.value = SessionState.UNAVAILABLE
+                    }
+                }
+            } catch (e: CancellationException) {
+                _state.value = SessionState.NOT_STARTED
+                throw e
+            } catch (e: SecurityException) {
+                Log.e(TAG, "XR session setup failed because a runtime permission is missing", e)
+                _state.value = SessionState.UNAVAILABLE
+            } catch (e: UnsupportedOperationException) {
+                Log.e(TAG, "XR session setup requested an unsupported tracking feature", e)
+                _state.value = SessionState.UNAVAILABLE
+            } finally {
+                if (_state.value == SessionState.STARTING) {
+                    _state.value = SessionState.UNAVAILABLE
+                }
+            }
+        }
+    }
+
+    private fun CoroutineScope.launchDepthFeed(xrSession: Session): Job = launch {
+        try {
+            val stereo = XrDevice.getCurrentDevice(app).isRenderingModeSupported(RenderingMode.STEREO)
+            val depth = if (stereo) Depth.left(xrSession) else Depth.mono(xrSession)
+            val view = if (stereo) RenderViewpoint.left(xrSession) else RenderViewpoint.mono(xrSession)
+
+            depth.state.collect { state ->
+                val map = state.smoothDepthMap ?: return@collect
+                val fov = view.state.value.fieldOfView
+                val fovDeg = FovDeg(
+                    horizontal = Math.toDegrees((fov.angleRight - fov.angleLeft).toDouble()).toFloat(),
+                    vertical = Math.toDegrees((fov.angleUp - fov.angleDown).toDouble()).toFloat(),
+                )
+                if (!fovDeg.horizontal.isFinite() || !fovDeg.vertical.isFinite() ||
+                    fovDeg.horizontal <= 0f || fovDeg.horizontal >= 180f ||
+                    fovDeg.vertical <= 0f || fovDeg.vertical >= 180f
+                ) {
+                    Log.w(TAG, "Skipping depth sample with invalid field of view: $fovDeg")
+                    return@collect
+                }
+
+                val expectedSize = state.width * state.height
+                val depthValues = FloatArray(expectedSize)
+                map.duplicate().apply { rewind() }.get(depthValues)
+                val confidence = state.smoothConfidenceMap?.let { source ->
+                    ByteArray(expectedSize).also { source.duplicate().apply { rewind() }.get(it) }
+                }
+                val frame = DepthFrame(
+                    width = state.width,
+                    height = state.height,
+                    depthM = depthValues,
+                    confidence = confidence,
+                    fov = fovDeg,
+                    timestampNanos = SystemClock.elapsedRealtimeNanos(),
+                )
+                _depthFrames.tryEmit(frame)
+
+                if (!loggedFirstDepthSample) {
+                    DepthCone.minTrustedDepth(frame)?.let { nearest ->
+                        Log.i(TAG, "depth ${state.width}x${state.height}, min trusted depth $nearest m (FR-N1)")
+                        loggedFirstDepthSample = true
+                    }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "XR depth feed stopped; proximity warnings are unavailable", e)
         }
     }
 
@@ -478,8 +605,9 @@ class XrPerceptionSession(
      */
     suspend fun stop() {
         lifecycle.withLock {
+            depthJob?.cancelAndJoin()
+            depthJob = null
             detachAllAnchors()
-            Log.w(TAG, "TODO(FR-N1) XrPerceptionSession.stop: cancel the feeder jobs; the Session follows the Activity lifecycle")
             session = null
             _state.value = SessionState.STOPPED
         }
@@ -579,5 +707,8 @@ class XrPerceptionSession(
 
     companion object {
         internal const val TAG = "vysion"
+
+        /** How long [start] waits for Compose for XR to publish its Session before creating one. */
+        private const val COMPOSE_SESSION_WAIT_MS = 5_000L
     }
 }

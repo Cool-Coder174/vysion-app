@@ -107,11 +107,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startGraph() {
-        if (graphStarted) return
-        graphStarted = true
-        graph.start() // → ModeController.start(): welcome (FR-G1), frames, warm-up
-        // R3: the ARCore for Jetpack XR session needs this Activity (stack.md D7); null on the S25 Ultra.
-        graph.perception?.let { session -> lifecycleScope.launch { session.start(this@MainActivity) } }
+        if (!graphStarted) {
+            graphStarted = true
+            graph.start() // → ModeController.start(): welcome (FR-G1), frames, warm-up
+        }
+        // XR permissions are optional for the rest of the app, but required before creating this session.
+        if (graph.deviceProfile.isXr && Permissions.xr.all { Permissions.isGranted(this, it) }) {
+            // R3: the ARCore for Jetpack XR session needs this Activity (stack.md D7); null on the S25 Ultra.
+            graph.perception?.let { session -> lifecycleScope.launch { session.start(this@MainActivity) } }
+        }
     }
 
     private companion object {
