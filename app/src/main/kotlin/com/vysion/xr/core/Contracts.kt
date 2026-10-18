@@ -493,6 +493,12 @@ interface ModePhrasebook {
     fun modeAnnounced(mode: Mode): String
 
     /**
+     * Eyes-free paging ([HandGesture.NEXT_PAGE]): the page's name and how to run it, for someone who cannot see the
+     * rail ("Read page. Tap your middle finger to read."). Defaults to [modeAnnounced].
+     */
+    fun pageFocused(mode: Mode): String = modeAnnounced(mode)
+
+    /**
      * FR-N1..FR-N5: words for a navigation cue ("door, 2 o'clock, 3 meters"); `null` means nothing to
      * say for this cue (for example [NavigationCue.Arrived], which triggers the ARRIVAL prompt).
      */

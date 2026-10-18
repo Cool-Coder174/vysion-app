@@ -76,6 +76,7 @@ data class HeadPose(val yawDeg: Float, val pitchDeg: Float, val rollDeg: Float, 
 interface HeadPoseSource { val pose: StateFlow<HeadPose?> }
 enum class HandGesture { TALK_START, TALK_END, ACTIVATE, NEXT_PAGE, STOP }   // middle pinch hold/tap, ring tap, palm out; never index, never palm-toward-user
 interface HandGestureSource { val gestures: Flow<HandGesture> }
+// ModePhrasebook.pageFocused(mode): String = modeAnnounced(mode)   // spoken on NEXT_PAGE: page name + how to run it
 interface AnchorStore {
     suspend fun placeFromBearing(bearing: HorizontalBearing): AnchorId?; fun track(id: AnchorId): Flow<RelativeTarget>
     suspend fun remove(id: AnchorId); suspend fun clear()
