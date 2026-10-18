@@ -60,6 +60,14 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher: ActivityResultLauncher<Array<String>> =
         Permissions.register(this) { grants -> onPermissionResult(grants) }
 
+    /** FR-N9: the location dialog, shown only when "where am I" is first asked (`ModeController.locationPermissionRequests`). */
+    private val locationLauncher: ActivityResultLauncher<Array<String>> =
+        Permissions.register(this) { grants ->
+            val granted = Permissions.preciseLocationGranted(grants, this)
+            if (!granted) Log.w(SECURITY_TAG, "permission denied: precise location")
+            graph.modeController.onLocationPermissionResult(granted)
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         graph = (application as VysionApplication).graph
@@ -100,6 +108,17 @@ class MainActivity : ComponentActivity() {
                 val command = if (mode == Mode.TEXT_READER) "read" else "describe"
                 Log.i(LATENCY_TAG, "$command capture->first-word ${nanos / NANOS_PER_MS} ms")
             }
+        }
+        // FR-N9: "where am I" recognized → first spoken word, and who worded it (cloud, template or a notice). Timings only:
+        // the location and the names are never logged (ADR-0010).
+        lifecycleScope.launch {
+            graph.modeController.whereAmILatency.filterNotNull().collect { (words, nanos) ->
+                Log.i(LATENCY_TAG, "whereami command->first-word ${nanos / NANOS_PER_MS} ms words=$words")
+            }
+        }
+        // FR-N9: precise location is asked for the first time "where am I" needs it, after the spoken explanation.
+        lifecycleScope.launch {
+            graph.modeController.locationPermissionRequests.collect { locationLauncher.launch(Permissions.location.toTypedArray()) }
         }
         // NFR reliability: every failure the controller spoke and recovered from, tag vysion.reliability.
         lifecycleScope.launch {
@@ -202,6 +221,7 @@ class MainActivity : ComponentActivity() {
             "read" -> Command.Read
             "describe" -> Command.Describe
             "door" -> Command.FindDoor
+            "whereami" -> Command.WhereAmI
             else -> null
         }
     }
@@ -230,7 +250,7 @@ class MainActivity : ComponentActivity() {
         const val NANOS_PER_MS = 1_000_000L
         const val EXTRA_PREVIEW = "vysion.preview"
 
-        /** DEBUG ONLY: a command run a few seconds after launch (`--es vysion.command read|describe|door`), so device
+        /** DEBUG ONLY: a command run a few seconds after launch (`--es vysion.command read|describe|door|whereami`), so device
          *  checks of the augmented layer (pinned read card, door marker) need nobody to talk or pinch. */
         const val EXTRA_COMMAND = "vysion.command"
         private const val DEBUG_COMMAND_DELAY_MS = 6_000L

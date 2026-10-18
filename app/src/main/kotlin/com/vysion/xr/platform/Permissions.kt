@@ -68,6 +68,17 @@ object Permissions {
     fun isGranted(context: Context, permission: String): Boolean =
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
+    /**
+     * FR-N9 "where am I", asked only the first time the command is used, never at launch, so they are not in [all].
+     * Both names go in one request (Android 12+ ignores a fine-only request); only a grant of fine location counts,
+     * since approximate location is fuzzed to kilometers and names no street.
+     */
+    val location: List<String> = listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+
+    /** FR-N9: whether the location dialog's [grants] (or an earlier grant) include precise location. */
+    fun preciseLocationGranted(grants: Map<String, Boolean>, context: Context): Boolean =
+        grants[Manifest.permission.ACCESS_FINE_LOCATION] == true || isGranted(context, Manifest.permission.ACCESS_FINE_LOCATION)
+
     /** The subset of [required] that is not granted yet; empty means "start the app". */
     fun missing(context: Context, isXr: Boolean): List<String> =
         required(isXr).filterNot { isGranted(context, it) }

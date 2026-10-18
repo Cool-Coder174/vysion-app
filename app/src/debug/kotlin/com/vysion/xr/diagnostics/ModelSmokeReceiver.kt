@@ -31,6 +31,10 @@ import kotlinx.coroutines.launch
  * (ADR-0010). `vysion.latency: describe source=…` says which answered. `--es model cloud` sends the same request to
  * the cloud only (no headset hedge) and logs its time to the first chunk, to tell a slow network from a slow model.
  *
+ * `--es model whereami [--ez cold true]` runs FR-N9 at a fixed test point (the Civic Center tile in the unit tests,
+ * never the wearer's location, which needs a worn headset and Location on): the tiles (cold = dropped from memory
+ * first), the on-device finder, the cloud wording and the template, with their times. No image is needed.
+ *
  * The image is a test fixture pushed by the developer, never a camera frame (ADR-0003); the receiver writes nothing
  * and is guarded by `android.permission.DUMP` like [BenchmarkReceiver]. Only file names under `files/smoke/` are
  * accepted, so the broadcast cannot point the app at another path.
@@ -41,6 +45,21 @@ class ModelSmokeReceiver : BroadcastReceiver() {
         if (intent.action != ACTION) return
         val app = context.applicationContext as? VysionApplication ?: return
         val model = intent.getStringExtra(EXTRA_MODEL)?.lowercase()
+        if (model == "whereami") {
+            val pending = goAsync()
+            app.graph.scope.launch {
+                try {
+                    smokeWhereAmI(app, cold = intent.getBooleanExtra(EXTRA_COLD, true))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    Log.e(TAG, "whereami failed: $t", t)
+                } finally {
+                    pending.finish()
+                }
+            }
+            return
+        }
         val name = intent.getStringExtra(EXTRA_IMAGE)?.takeIf { NAME.matches(it) }
         val dir = app.getExternalFilesDir(null)?.let { File(it, DIR) }
         if (model !in MODELS || name == null || dir == null) {
@@ -115,6 +134,35 @@ class ModelSmokeReceiver : BroadcastReceiver() {
         }
     }
 
+    /** FR-N9 at [TEST_LAT], [TEST_LON] (a public square, not anyone's location): lookup, cloud wording, template. */
+    private suspend fun smokeWhereAmI(app: VysionApplication, cold: Boolean) {
+        val graph = app.graph
+        val source = graph.places as? com.vysion.xr.perception.MapPlaceSource
+            ?: throw IllegalStateException("places is not MapPlaceSource (useFakes?)")
+        if (cold) source.forgetTiles()
+        val t0 = System.nanoTime()
+        val result = source.surroundingsAt(TEST_LAT, TEST_LON, TEST_ACCURACY_M, "smoke cold=$cold")
+        val lookupMs = (System.nanoTime() - t0) / 1_000_000
+        if (result !is com.vysion.xr.core.WhereAmI.Found) {
+            Log.i(TAG, "whereami lookup ms=$lookupMs -> $result")
+            return
+        }
+        val prompt = graph.prompts.forLocale(graph.prompts.whereAmI(result.surroundings).orEmpty(), graph.speaker.locale.value)
+        val c0 = System.nanoTime()
+        var firstMs: Long? = null
+        val cloud = StringBuilder()
+        val error = runCatching {
+            graph.inferenceEngine.cloudWording(prompt).collect {
+                if (firstMs == null && it.isNotBlank()) firstMs = (System.nanoTime() - c0) / 1_000_000
+                cloud.append(it)
+            }
+        }.exceptionOrNull()
+        val wordingMs = (System.nanoTime() - c0) / 1_000_000
+        Log.i(TAG, "whereami lookup ms=$lookupMs wording first-chunk ms=$firstMs total ms=$wordingMs error=${error?.message}")
+        Log.i(TAG, "whereami cloud: $cloud")
+        Log.i(TAG, "whereami template: ${graph.phrasebook.whereAmI(result)}")
+    }
+
     /**
      * Calls the VLM's three methods one at a time with the plain `Module` API and logs before each, so a native crash
      * names the method: `token_embedding` with [n] ids (padded to [pad] when pad > 0), `vision_encoder` on a gray
@@ -152,9 +200,15 @@ class ModelSmokeReceiver : BroadcastReceiver() {
         const val EXTRA_IMAGE = "image"
         const val EXTRA_PROMPT = "prompt"
         const val EXTRA_CLOUD = "cloud"
+        const val EXTRA_COLD = "cold"
+
+        /** Larkin Street by the Main Library, San Francisco: the unit tests' Civic Center tile (FR-N9 smoke). */
+        const val TEST_LAT = 37.779136
+        const val TEST_LON = -122.416605
+        const val TEST_ACCURACY_M = 30f
         const val DIR = "smoke"
         const val DEFAULT_PROMPT = "Describe what is in front of me in one short sentence."
-        val MODELS = setOf("ocr", "vlm", "detector", "vlm-probe", "tts", "describe", "cloud")
+        val MODELS = setOf("ocr", "vlm", "detector", "vlm-probe", "tts", "describe", "cloud", "whereami")
         val NAME = Regex("[A-Za-z0-9._-]{1,64}")
     }
 }

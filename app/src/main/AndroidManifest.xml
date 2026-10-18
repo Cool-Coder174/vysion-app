@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Vysion XR manifest. Sources and verification for every entry: docs/stack.md §2.7.
-  Privacy boundary (ADR-0003): NO network permission. CI greps this file and the merged manifest.
+  Privacy boundary (ADR-0003, amended by ADR-0010): network only for optional features with an on-device fallback.
+  CI greps this file and the merged manifest.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
@@ -31,6 +32,12 @@
          connection. ACCESS_NETWORK_STATE lets a feature skip the network at once when offline. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- "Where am I" (FR-N9, ADR-0010 row "Where am I map"): network location (Wi-Fi through Play services; the Galaxy XR
+         has no GPS). Requested only the first time the wearer asks, never at launch; both names are needed for the
+         precise-location dialog. The fix is never stored or logged. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- Package visibility (targetSdk ≥ 30): the on-device SpeechRecognizer service and the TextToSpeech engines. -->
     <queries>

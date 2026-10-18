@@ -20,9 +20,14 @@ import com.vysion.xr.core.ModeState
 import com.vysion.xr.core.NavigationCue
 import com.vysion.xr.core.NavigationEngine
 import com.vysion.xr.core.NormalizedBox
+import com.vysion.xr.core.CommandSource
 import com.vysion.xr.core.OverlayRenderer
+import com.vysion.xr.core.PlaceSource
 import com.vysion.xr.core.PromptSet
 import com.vysion.xr.core.Speaker
+import com.vysion.xr.core.WhereAmI
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -35,6 +40,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -87,6 +93,13 @@ import kotlinx.coroutines.withTimeout
  * - FR-G6 (prompt half): every prompt goes through `PromptSet.forLocale(prompt, Speaker.locale)` before
  *   `describe`, so after "in Spanish" the VLM is asked for Spanish output (R2 exempts DOOR).
  * - [stop] then [start] restarts cleanly (AppGraph's reversible onStop/onStart).
+ * - FR-N9 "where am I": [PlaceSource] (Wi-Fi fix + OpenFreeMap tiles decoded on the headset), then the cloud words the
+ *   facts ([InferenceEngine.cloudWording], prompt from [PromptSet.whereAmI]) and the wearer hears it sentence by
+ *   sentence; offline, on a cloud error, or with no sentence after [WORDING_FIRST_SENTENCE_MS], R4's template
+ *   ([ModePhrasebook.whereAmI]) answers instead. Precise location is asked for only the first time the command is used:
+ *   the explanation is spoken, then [locationPermissionRequests] asks `MainActivity` to show the dialog, and
+ *   [onLocationPermissionResult] runs the command again or says how to allow it. Navigation keeps running: nothing here
+ *   touches the inference mutex.
  *
  * Clocks: [commandLatencyNanos] uses `System.nanoTime()` only (H-21).
  * Assumptions: A-1 (frames), A-7 (voice; the panel buttons inject the same commands when it fails).
@@ -103,6 +116,7 @@ class ModeController(
     private val scope: CoroutineScope,
     private val phrasebook: ModePhrasebook = ModePhrasebook.Unwired,
     private val prompts: PromptSet = PromptSet.Unwired,
+    private val places: PlaceSource = NO_PLACES,
 ) {
 
     private val _state = MutableStateFlow(ModeState.IDLE)
@@ -127,6 +141,24 @@ class ModeController(
 
     /** FR-T2: the last VLM text, for the transcript panel. `null` until the first result. */
     val transcript: StateFlow<String?> = _transcript
+
+    private val _transcriptKind = MutableStateFlow(TranscriptKind.ANSWER)
+
+    /** What [transcript] holds: a Read / Describe answer, or a "where am I" answer (FR-N9, which credits the map). */
+    val transcriptKind: StateFlow<TranscriptKind> = _transcriptKind
+
+    private val _locationPermissionRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /**
+     * FR-N9: "where am I" needs precise location and it is not granted. `MainActivity` shows the system dialog (after
+     * the controller spoke why) and reports back through [onLocationPermissionResult].
+     */
+    val locationPermissionRequests: SharedFlow<Unit> = _locationPermissionRequests
+
+    private val _whereAmILatency = MutableStateFlow<WhereAmILatency?>(null)
+
+    /** FR-N9 evidence: command recognized → first spoken word, and who worded it. `MainActivity` logs it. */
+    val whereAmILatency: StateFlow<WhereAmILatency?> = _whereAmILatency
 
     private val _commandLatencyNanos = MutableStateFlow<Long?>(null)
 
@@ -257,6 +289,18 @@ class ModeController(
     /** FR-G1: spoken when camera or microphone is denied (`Cues.permissionDenied`, R4). */
     fun speakPermissionDenied(): Job = scope.launch { say(phrasebook.permissionDenied, interrupt = true) }
 
+    /**
+     * FR-N9: the location dialog closed. Granted: "where am I" runs again as if asked; refused: the way to allow it is
+     * spoken (precise location only: approximate is fuzzed to kilometers and names no street).
+     */
+    fun onLocationPermissionResult(granted: Boolean) {
+        if (granted) {
+            commands.inject(Command.WhereAmI, CommandSource.PANEL)
+        } else {
+            launchOneShot(ModeState.SPEAKING) { sayNotice(phrasebook.whereAmI(WhereAmI.PermissionDenied)) }
+        }
+    }
+
     // ── Command lanes ─────────────────────────────────────────────────────────────────────────────
 
     /**
@@ -311,7 +355,7 @@ class ModeController(
             }
             is Command.SelectDoor -> Unit // TODO(FR-N7): choose among door candidates (P2)
             is Command.CloudDescribe -> launchOneShot(ModeState.SPEAKING) { setCloudDescribe(command.on) } // ADR-0010
-            Command.WhereAmI -> Unit // TODO(FR-N9): PlaceSource → cloud wording or Cues template
+            Command.WhereAmI -> launchOneShot(ModeState.INFERRING) { whereAmI(event) } // FR-N9
             Command.Stop -> Unit // handled on its own lane
         }
     }
@@ -398,7 +442,7 @@ class ModeController(
                 speakWhileGenerating(mode, still, prompt, capturedAtNanos)
                 if (mode == Mode.TEXT_READER) pinReadText(_transcript.value)
             } else {
-                _transcript.value = ocrText // FR-T2
+                showTranscript(ocrText) // FR-T2
                 _state.value = ModeState.SPEAKING
                 pinReadText(ocrText) // in parallel with the speech, never before it
                 sayTimed(ocrText, mode, capturedAtNanos)
@@ -443,6 +487,135 @@ class ModeController(
         }
         _cloudDescribe.value = on
         say(phrasebook.cloudDescribe(on))
+    }
+
+    /**
+     * FR-N9: where the wearer is. The lookup (fix + tiles) runs under [WHERE_AM_I_TIMEOUT_MS] with the THINKING tick;
+     * the answer is the cloud's wording when it speaks in time, else the template, and every other outcome is one
+     * sentence that says what is wrong and how to fix it.
+     */
+    private suspend fun whereAmI(event: CommandEvent) {
+        markActionStarted(event)
+        speaker.earcon(Earcon.THINKING)
+        try {
+            val result = coroutineScope {
+                val thinking = launchThinkingTicker()
+                try {
+                    withTimeout(WHERE_AM_I_TIMEOUT_MS) { places.whereAmI() }
+                } finally {
+                    thinking.cancel()
+                }
+            }
+            _state.value = ModeState.SPEAKING
+            when (result) {
+                is WhereAmI.Found -> {
+                    val prompt = prompts.whereAmI(result.surroundings)?.let { prompts.forLocale(it, speaker.locale.value) }
+                    val worded = prompt != null && speakCloudWording(prompt, event)
+                    if (!worded) {
+                        val template = phrasebook.whereAmI(result)
+                        showTranscript(template, TranscriptKind.WHERE_AM_I)
+                        sayWhereAmI(template, event, WORDS_TEMPLATE)
+                    }
+                }
+                WhereAmI.PermissionNeeded -> {
+                    sayNotice(phrasebook.whereAmI(result)) // what leaves the headset, before the dialog
+                    _locationPermissionRequests.tryEmit(Unit)
+                }
+                else -> sayNotice(phrasebook.whereAmI(result), event)
+            }
+        } catch (e: TimeoutCancellationException) {
+            speakFailure(InferenceException("where am I exceeded $WHERE_AM_I_TIMEOUT_MS ms", e))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            speakFailure(e)
+        }
+    }
+
+    /**
+     * FR-N9: the cloud's wording, spoken sentence by sentence as it streams (as Describe does). Returns whether at least
+     * one sentence was spoken; `false` (offline, no key, an error, or no sentence within [WORDING_FIRST_SENTENCE_MS])
+     * means nothing was said and the caller speaks the template. A failure after the first sentence ends the answer
+     * there and is recorded on [lastError].
+     */
+    private suspend fun speakCloudWording(prompt: String, event: CommandEvent): Boolean = coroutineScope {
+        val sentences = Channel<String>(Channel.UNLIMITED)
+        launch {
+            var first = true
+            for (sentence in sentences) {
+                ensureActive()
+                if (first) sayWhereAmI(sentence, event, WORDS_CLOUD) else say(sentence)
+                first = false
+            }
+        }
+        val spoken = AtomicInteger(0)
+        val failure = AtomicReference<Throwable?>(null)
+        val splitter = SentenceSplitter()
+        val generated = StringBuilder()
+        fun onSegment(segment: String) {
+            generated.append(segment)
+            val sentence = segment.trim()
+            if (sentence.isEmpty()) return
+            spoken.incrementAndGet()
+            showTranscript(generated.toString().trim(), TranscriptKind.WHERE_AM_I)
+            sentences.trySend(sentence)
+        }
+        val collector = launch {
+            try {
+                withTimeout(InferenceEngine.VLM_TIMEOUT_MS) {
+                    engine.cloudWording(prompt).collect { chunk -> splitter.push(chunk).forEach(::onSegment) }
+                }
+                onSegment(splitter.finish())
+            } catch (e: TimeoutCancellationException) {
+                failure.compareAndSet(null, InferenceException("cloud wording exceeded ${InferenceEngine.VLM_TIMEOUT_MS} ms", e))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failure.compareAndSet(null, e)
+            }
+        }
+        val deadline = launch {
+            delay(WORDING_FIRST_SENTENCE_MS)
+            if (spoken.get() == 0) {
+                failure.compareAndSet(null, InferenceException("cloud wording: no sentence in $WORDING_FIRST_SENTENCE_MS ms"))
+                collector.cancel()
+            }
+        }
+        collector.join()
+        deadline.cancel()
+        sentences.close() // the speech coroutine finishes what is queued, then this scope returns
+        failure.get()?.let { _lastError.value = it }
+        spoken.get() > 0
+    }
+
+    /**
+     * FR-N9: [say] [text] and, when it is the first words of the answer to [event], record command → first spoken word
+     * ([whereAmILatency]). The watcher subscribes before speaking (UNDISPATCHED; `progress` has no replay).
+     */
+    private suspend fun sayWhereAmI(text: String, event: CommandEvent?, words: String) = coroutineScope {
+        val watcher = event?.let { e ->
+            launch(start = CoroutineStart.UNDISPATCHED) {
+                speaker.progress.first { !it.done && it.text == text }
+                _whereAmILatency.value = WhereAmILatency(words, System.nanoTime() - e.recognizedAtNanos)
+            }
+        }
+        try {
+            say(text)
+        } finally {
+            watcher?.cancel()
+        }
+    }
+
+    /** FR-N9: a one-sentence status (Location off, no fix, …), shown without the map credit and spoken. */
+    private suspend fun sayNotice(text: String, event: CommandEvent? = null) {
+        showTranscript(text, TranscriptKind.WHERE_AM_I_NOTICE)
+        sayWhereAmI(text, event, WORDS_NOTICE)
+    }
+
+    /** FR-T2: every transcript write goes through here, so the UI knows what kind of answer it shows. */
+    private fun showTranscript(text: String?, kind: TranscriptKind = TranscriptKind.ANSWER) {
+        _transcriptKind.value = kind
+        _transcript.value = text
     }
 
     /** FR-N3 / RK-6: two stills, two answers, agreement required; then anchor and guide. */
@@ -611,7 +784,7 @@ class ModeController(
                     thinking.cancel()
                     _state.value = ModeState.SPEAKING
                 }
-                _transcript.value = generated.toString().trim() // FR-T2
+                showTranscript(generated.toString().trim()) // FR-T2
                 sentences.trySend(sentence) // unlimited: never fails, never suspends
             }
             try {
@@ -732,8 +905,36 @@ class ModeController(
          * panel prints this same constant, so the screen and the sound cannot disagree.
          */
         const val THINKING_EARCON_PERIOD_MS: Long = 1_500
+
+        /**
+         * FR-N9: the whole lookup (a 10 s fix at worst, then up to four tiles with 3 s connect + 6 s read timeouts).
+         * Past it the wearer hears [ModePhrasebook.inferenceFailed].
+         */
+        const val WHERE_AM_I_TIMEOUT_MS: Long = 25_000
+
+        /**
+         * FR-N9: the cloud's first sentence must arrive within this, or the template answers. Gemini worded a place
+         * in 1.35 s from a laptop (docs/roadmap-research.md §3); the headset number is in docs/benchmarks.md.
+         */
+        const val WORDING_FIRST_SENTENCE_MS: Long = 4_000
+
+        /** [WhereAmILatency.words] values. */
+        const val WORDS_CLOUD: String = "cloud"
+        const val WORDS_TEMPLATE: String = "template"
+        const val WORDS_NOTICE: String = "notice"
+
+        /** A graph built without R3's place source: every "where am I" says there is no fix. */
+        private val NO_PLACES: PlaceSource = object : PlaceSource {
+            override suspend fun whereAmI(): WhereAmI = WhereAmI.NoFix
+        }
     }
 }
+
+/** What [ModeController.transcript] holds (FR-T2): a Read / Describe answer, or FR-N9's answer or status sentence. */
+enum class TranscriptKind { ANSWER, WHERE_AM_I, WHERE_AM_I_NOTICE }
+
+/** FR-N9 evidence: "where am I" recognized → first spoken word, and who worded it (cloud, template or notice). */
+data class WhereAmILatency(val words: String, val nanos: Long)
 
 /** NFR latency: `captureStill()` return → the first spoken word of the answer, in [mode] (Read or Describe). */
 data class FirstWordLatency(val mode: Mode, val nanos: Long)

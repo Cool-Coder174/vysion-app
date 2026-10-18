@@ -103,4 +103,14 @@ class GeminiWireTest {
         assertNull(GeminiCloudDescriber.orNull("   "))
         assertEquals(GeminiCloudDescriber.MODEL, GeminiCloudDescriber.orNull("k")?.model)
     }
+
+    @Test
+    fun `a text-only request has the prompt and no image part`() {
+        val body = GeminiWire.requestBody("Where am I?", PromptLibrary.WHERE_AM_I_STYLE, jpegBase64 = null, maxOutputTokens = 400, thinkingLevel = "minimal")
+        val root = LockJson.parse(body) as Map<*, *>
+        val parts = ((root["contents"] as List<*>).single() as Map<*, *>)["parts"] as List<*>
+        assertEquals(listOf(mapOf("text" to "Where am I?")), parts)
+        val system = ((root["systemInstruction"] as Map<*, *>)["parts"] as List<*>).single() as Map<*, *>
+        assertEquals(PromptLibrary.WHERE_AM_I_STYLE, system["text"])
+    }
 }

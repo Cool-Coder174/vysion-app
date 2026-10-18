@@ -1,6 +1,9 @@
 package com.vysion.xr.voice
 
 import com.vysion.xr.core.Mode
+import com.vysion.xr.core.NamedPlace
+import com.vysion.xr.core.Surroundings
+import com.vysion.xr.core.WhereAmI
 import com.vysion.xr.core.NavigationCue
 import com.vysion.xr.core.Speaker
 import org.junit.Assert.assertEquals
@@ -180,5 +183,88 @@ class CuesTest {
         val text = xml.readText()
         assertTrue("strings.xml product_sentence drifted from Cues", text.contains(expected))
         assertFalse(expected.isEmpty())
+    }
+
+    // ── FR-N9 where am I ─────────────────────────────────────────────────────────────────────────
+
+    private val larkin = Surroundings(
+        street = NamedPlace("Larkin Street", "secondary", 9.9f),
+        crossStreets = listOf(NamedPlace("Grove Street", "minor", 50f), NamedPlace("Fulton Street", "tertiary", 53f)),
+        places = listOf(
+            NamedPlace("Portrait of a Phenomenal Woman", "monument", 11.9f),
+            NamedPlace("Larkin Street & Grove Street", "bus stop", 23.4f),
+            NamedPlace("Double L Excentric Gyratory", "artwork", 25.6f),
+        ),
+        accuracyM = 30f,
+    )
+
+    @Test
+    fun `the where am I template names the street, the cross streets and three places, in both languages`() {
+        assertEquals(
+            "You are near Larkin Street, between Grove Street and Fulton Street. Nearby: Portrait of a Phenomenal " +
+                "Woman, about 10 meters; Larkin Street & Grove Street, about 20 meters; and Double L Excentric " +
+                "Gyratory, about 30 meters.",
+            Cues.whereAmI(WhereAmI.Found(larkin), en),
+        )
+        assertEquals(
+            "Estás cerca de Larkin Street, entre Grove Street y Fulton Street. Cerca: Portrait of a Phenomenal " +
+                "Woman, a unos 10 metros; Larkin Street & Grove Street, a unos 20 metros; y Double L Excentric " +
+                "Gyratory, a unos 30 metros.",
+            Cues.whereAmI(WhereAmI.Found(larkin), es),
+        )
+    }
+
+    @Test
+    fun `the template never gives a direction and keeps the phrasing rules`() {
+        val variants = listOf(
+            larkin,
+            larkin.copy(crossStreets = larkin.crossStreets.take(1)),
+            larkin.copy(crossStreets = emptyList(), places = larkin.places.take(1)),
+            larkin.copy(street = NamedPlace("Market Street", "primary", 230f), accuracyM = 120f),
+            larkin.copy(street = null),
+            larkin.copy(accuracyM = Float.NaN),
+        )
+        for (s in variants) for (locale in listOf(en, es)) {
+            val words = Cues.surroundings(s, locale)
+            assertEquals(words, emptyList<String>(), Cues.violatesPhrasingRules(words))
+            for (direction in listOf("left", "right", "ahead", "behind", "north", "south", "east", "west", "o'clock",
+                "izquierda", "derecha", "adelante", "detrás", "norte", "sur", "este", "oeste")) {
+                assertFalse("$direction in: $words", (" " + words.lowercase() + " ").contains(" $direction "))
+            }
+        }
+    }
+
+    @Test
+    fun `a far street, one cross street, a vague fix and an empty map each read right`() {
+        assertEquals(
+            "You are near Larkin Street, about 50 meters from Grove Street.",
+            Cues.surroundings(larkin.copy(crossStreets = larkin.crossStreets.take(1), places = emptyList()), en),
+        )
+        assertEquals(
+            "The nearest street is Market Street, about 250 meters away. Your location is accurate only to about 120 meters.",
+            Cues.surroundings(Surroundings(NamedPlace("Market Street", "primary", 230f), emptyList(), emptyList(), 120f), en),
+        )
+        assertEquals(Cues.text(Cues.Key.NOTHING_NAMED_NEARBY, en), Cues.surroundings(Surroundings(null, emptyList(), emptyList(), 30f), en))
+        assertEquals("Nearby: Main Library, about 20 meters.", Cues.surroundings(Surroundings(null, emptyList(), listOf(NamedPlace("Main Library", null, 18f)), 30f), en))
+    }
+
+    @Test
+    fun `rough meters do not claim precision a Wi-Fi fix lacks`() {
+        assertEquals("about 10 meters", Cues.roughMeters(2f, en))
+        assertEquals("about 40 meters", Cues.roughMeters(44f, en))
+        assertEquals("about 250 meters", Cues.roughMeters(230f, en))
+        assertEquals("about 1200 meters", Cues.roughMeters(1_234f, en))
+        assertEquals("unos 40 metros", Cues.roughMeters(44f, es))
+    }
+
+    @Test
+    fun `every where am I outcome has one sentence, and location off says how to fix it`() {
+        val outcomes = listOf(WhereAmI.PermissionNeeded, WhereAmI.PermissionDenied, WhereAmI.LocationOff, WhereAmI.NoFix, WhereAmI.NoMap)
+        for (o in outcomes) for (locale in listOf(en, es)) assertTrue("$o $locale", Cues.whereAmI(o, locale).isNotBlank())
+        val off = Cues.whereAmI(WhereAmI.LocationOff, en)
+        assertEquals("one sentence", 1, off.count { it == '.' })
+        assertTrue(off.contains("Settings"))
+        assertTrue("the permission explanation names what leaves", Cues.whereAmI(WhereAmI.PermissionNeeded, en).contains("OpenFreeMap"))
+        assertTrue(Cues.whereAmI(WhereAmI.PermissionNeeded, en).contains("Google"))
     }
 }

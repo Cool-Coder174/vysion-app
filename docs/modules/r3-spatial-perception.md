@@ -89,6 +89,7 @@ Note the pin is `arcore = "1.0.0-rc02"` (`gradle/libs.versions.toml`, stack.md �
 - [ ] P1 Keep guiding when the door leaves the field of view; test by turning 180 degrees and back. Sun 10:00
     Files: `XrAnchorStore.track` (done), `XrNavigationEngine.guidanceLoop` (done) · FR: FR-N4 · Verify: procedure in "How to test without the headset → The 180° test"; logcat (R1's cue log) shows `DoorBearing(clock=6, …, inView=false)` while turned away and `clock=12, inView=true` after turning back, with no `TargetLost` in between
 - [ ] P2 Pointing: index-finger ray from hand tracking to a region for region-only describe. Sun 11:00
+- [ ] P2 FR-N9 "where am I": `MapPlaceSource` (Wi-Fi fix, OpenFreeMap z14 tiles, `VectorTile` decoder, `SurroundingsFinder`), JVM-tested on a real tile (`VectorTileTest`, `SurroundingsFinderTest`); ticked when it answers on the headset with Location on (`docs/benchmarks.md`). Added 2026-10-18
     Files: `XrPerceptionSession.kt` hand feeder (`HandObservation.indexProximal` → `indexTip` ray), a new pure `PointingRay` helper · FR: FR-D4 · Verify: unit test that a ray from proximal to tip hits a 1 m box at 2 m inside a `NormalizedBox`; headset: pointing at a cup makes R1 pass the region box to R2's prompt (needs an additive contract change, see Contract issues)
 
 ## API cheat-sheet

@@ -80,6 +80,7 @@ Target: **85+/100**. Anything that earns no rubric points is cut.
 | FR-N6 | On arrival (anchor within 1 m), run the VLM once and speak handle side and whether the door is open | P1 | UC | R2 (arrival prompt), R3 | F7 |
 | FR-N7 | Multiple doors: "the one on the left" selects among candidates | P2 | UC | R3, R4 | stretch |
 | FR-N8 | Fine-tuned door class in the detector replaces the VLM one-shot for door finding | P2 | TI | R2 | stretch |
+| FR-N9 | "Where am I" (not in the SRS; the free replacement for the Geospatial tour guide, `docs/roadmap-research.md` §3): from Wi-Fi location and an OpenFreeMap tile decoded on the headset, say the nearest street, its cross streets and the 3 nearest named places with distances, never a direction (no compass); Gemini words it when online, `Cues` templates otherwise; "© OpenMapTiles, data from OpenStreetMap" shown with the answer (ADR-0010) | P2 | UC, TI | R3 (lead; `MapPlaceSource`, decoder, finder), R2 (prompt, `cloudWording`), R4 (grammar, cues), R1 (`ModeController`, location dialog, Place screen) | added 2026-10-18 |
 
 ## Traceability conventions
 

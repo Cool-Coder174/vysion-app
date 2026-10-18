@@ -90,6 +90,9 @@
     <string name="status_obstacle_sub">Something is close</string>
     <string name="status_obstacle_body">Stop and check with your cane.</string>
     <string name="status_obstacle_ahead">ahead</string>
+    <string name="status_where_am_i">Where am I</string>
+    <!-- FR-N9: required wherever OpenFreeMap / OpenStreetMap data is shown (OpenMapTiles CC-BY, OSM ODbL). -->
+    <string name="map_attribution">© OpenMapTiles, data from OpenStreetMap</string>
     <string name="status_no_text">No text found</string>
     <string name="status_no_text_sub">Move closer</string>
     <string name="status_no_text_body">Move closer or hold it in front of you.</string>

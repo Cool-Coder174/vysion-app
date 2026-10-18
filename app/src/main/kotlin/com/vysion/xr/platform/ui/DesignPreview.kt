@@ -9,6 +9,7 @@ import com.vysion.xr.core.ModeState
 import com.vysion.xr.core.NavigationCue
 import com.vysion.xr.core.NormalizedBox
 import com.vysion.xr.core.SpeechProgress
+import com.vysion.xr.platform.TranscriptKind
 
 /**
  * DEBUG BUILDS ONLY. Puts one of the designs' screens on the device with synthetic content, so the UI can be
@@ -24,7 +25,10 @@ import com.vysion.xr.core.SpeechProgress
  * build, the overlay of a real session, or the README (NFR Honesty).
  */
 enum class PreviewScreen {
-    READY, LISTENING, THINKING, LOOKING, READING, DESCRIBING, GUIDING, ARRIVED, LOST, OBSTACLE, NO_TEXT, ERROR, DIAGNOSTICS;
+    READY, LISTENING, THINKING, LOOKING, READING, DESCRIBING, GUIDING, ARRIVED, LOST, OBSTACLE, NO_TEXT, ERROR, DIAGNOSTICS,
+
+    /** FR-N9 "where am I" with the map credit (not in the comps; the sample is the template's wording). */
+    WHERE_AM_I;
 
     companion object {
         fun parse(value: String?): PreviewScreen? = value?.let { v -> entries.firstOrNull { it.name.equals(v.replace('-', '_'), ignoreCase = true) } }
@@ -42,6 +46,8 @@ internal object DesignPreview {
         "Meeting rooms are on floor 2. Also on 2: California Lawyers for the Arts, FMCAC Main Office."
     private const val DESCRIBE_SAMPLE = "Bags on the floor ahead, on your right. Tables with people on both sides."
     private const val NO_TEXT = "No text found"
+    private const val WHERE_SAMPLE =
+        "You are near Larkin Street, between Fulton Street and Grove Street. Nearby: Main Library, about 20 meters."
     private const val NOW = 10_000L
 
     fun input(screen: PreviewScreen): ScreenInput {
@@ -59,6 +65,8 @@ internal object DesignPreview {
             PreviewScreen.OBSTACLE -> base.copy(mode = Mode.NAVIGATION, hazard = NavigationCue.Proximity(0.9f), hazardAtMs = NOW)
             PreviewScreen.NO_TEXT -> base.copy(mode = Mode.TEXT_READER, transcript = NO_TEXT)
             PreviewScreen.ERROR -> base.copy(lastCommand = Command.Read, lastCommandAtMs = NOW - 1, lastErrorAtMs = NOW)
+            PreviewScreen.WHERE_AM_I ->
+                base.copy(state = ModeState.SPEAKING, transcript = WHERE_SAMPLE, transcriptKind = TranscriptKind.WHERE_AM_I)
         }
     }
 
@@ -66,6 +74,7 @@ internal object DesignPreview {
     fun progress(screen: PreviewScreen): SpeechProgress? = when (screen) {
         PreviewScreen.READING -> SpeechProgress("preview", READ_SAMPLE, 0, 8, done = false)
         PreviewScreen.DESCRIBING -> SpeechProgress("preview", DESCRIBE_SAMPLE, 0, 4, done = false)
+        PreviewScreen.WHERE_AM_I -> SpeechProgress("preview", WHERE_SAMPLE, 0, 4, done = false)
         else -> null
     }
 

@@ -45,12 +45,12 @@ object CommandGrammar {
 
     private val BIASING_EN = listOf(
         "read this", "read that", "describe", "what's here", "what's in front of me", "find the door", "guide me",
-        "stop", "repeat", "say that again", "slower", "in Spanish", "more detail", "next",
+        "stop", "repeat", "say that again", "slower", "in Spanish", "more detail", "next", "where am I",
     )
 
     private val BIASING_ES = listOf(
         "lee esto", "lee eso", "describe", "qué hay aquí", "qué hay enfrente", "busca la puerta", "guíame",
-        "alto", "para", "repite", "más despacio", "más detalle", "siguiente",
+        "alto", "para", "repite", "más despacio", "más detalle", "siguiente", "dónde estoy",
     )
 
     /** Leading tokens dropped before matching (FR-G2: "Vysion, read this"). Matched within distance 1. */
@@ -269,6 +269,20 @@ object CommandGrammar {
         pattern(CLOUD_OFF, Lang.ES, "desactiva", "nube", maxTokens = 4),
         pattern(CLOUD_OFF, Lang.ES, "apaga", "nube", maxTokens = 4),
         pattern(CLOUD_OFF, Lang.ES, "nube", "desactivada", maxTokens = 4),
+        // FR-N9 where am I (more keys than Describe's "que hay", so "qué hay cerca" is this one)
+        pattern(Command.WhereAmI, Lang.EN, "where", "am", exact = true),
+        pattern(Command.WhereAmI, Lang.EN, "where", "are", "we", exact = true),
+        // exact: a fuzzy "what" would take "read that street sign" (two keys beat Read's one)
+        pattern(Command.WhereAmI, Lang.EN, "what", "street", exact = true),
+        pattern(Command.WhereAmI, Lang.EN, "whats", "street", exact = true),
+        pattern(Command.WhereAmI, Lang.EN, "which", "street", exact = true),
+        pattern(Command.WhereAmI, Lang.EN, "my", "location"),
+        pattern(Command.WhereAmI, Lang.EN, "nearby", maxTokens = 4),
+        pattern(Command.WhereAmI, Lang.ES, "donde", "estoy"),
+        pattern(Command.WhereAmI, Lang.ES, "donde", "estamos"),
+        pattern(Command.WhereAmI, Lang.ES, "que", "calle", exact = true),
+        pattern(Command.WhereAmI, Lang.ES, "mi", "ubicacion"),
+        pattern(Command.WhereAmI, Lang.ES, "que", "hay", "cerca"),
         // FR-N7 single-word side, short utterances only ("the left", "on the left", "la izquierda")
         pattern(LEFT, Lang.EN, "left", maxTokens = 3),
         pattern(CENTER, Lang.EN, "middle", maxTokens = 3),

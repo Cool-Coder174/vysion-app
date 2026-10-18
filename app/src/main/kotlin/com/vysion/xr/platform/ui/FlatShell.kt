@@ -329,6 +329,16 @@ private fun AnswerBlock(shell: ShellState, talkBack: Boolean) {
                     )
                 }
             }
+            is HeadsetScreen.Place -> ColorBlock(Accent.cyan, stringResource(R.string.status_where_am_i).uppercase()) {
+                Text(
+                    screen.text,
+                    color = Ink.onLight,
+                    style = PhoneType.answer,
+                    modifier = Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState()),
+                )
+                // FR-N9: the map's credit wherever its data is shown.
+                if (screen.mapCredit) Text(stringResource(R.string.map_attribution), color = Ink.onLight, style = PhoneType.chip)
+            }
             is HeadsetScreen.Guiding -> ColorBlock(Accent.cyan, stringResource(R.string.phone_label_door, clockText(screen.clock)).uppercase()) {
                 Text(metersText(screen.distanceM), color = Ink.onLight, style = PhoneType.distance)
             }

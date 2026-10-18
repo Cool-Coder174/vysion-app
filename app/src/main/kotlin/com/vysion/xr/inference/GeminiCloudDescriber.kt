@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 
 /**
@@ -21,6 +22,12 @@ interface CloudDescriber {
     val model: String
 
     fun stream(jpeg: ByteArray, prompt: String): Flow<String>
+
+    /**
+     * FR-N9: a text-only answer to [prompt] with [system] as the system instruction (ADR-0010 row "Where am I
+     * wording"); same error and cancellation rules as [stream]. The default has no text model.
+     */
+    fun streamText(prompt: String, system: String): Flow<String> = flow { throw InferenceException("no text model") }
 }
 
 /**
@@ -43,15 +50,30 @@ class GeminiCloudDescriber(
     private val androidCert: String? = null,
 ) : CloudDescriber {
 
-    override fun stream(jpeg: ByteArray, prompt: String): Flow<String> = callbackFlow {
-        val body = GeminiWire.requestBody(
+    override fun stream(jpeg: ByteArray, prompt: String): Flow<String> = post(
+        GeminiWire.requestBody(
             prompt = prompt,
             system = PromptLibrary.CLOUD_SPOKEN_STYLE,
             jpegBase64 = Base64.getEncoder().encodeToString(jpeg),
             maxOutputTokens = MAX_OUTPUT_TOKENS,
             thinkingLevel = THINKING_LEVEL,
-        ).toByteArray(Charsets.UTF_8)
-        val conn = URL(GeminiWire.streamUrl(model)).openConnection() as java.net.HttpURLConnection // network-fallback: on-device LFM2.5-VL Describe (CloudDescribeEngine)
+        ),
+    )
+
+    override fun streamText(prompt: String, system: String): Flow<String> = post(
+        GeminiWire.requestBody(
+            prompt = prompt,
+            system = system,
+            jpegBase64 = null,
+            maxOutputTokens = MAX_OUTPUT_TOKENS,
+            thinkingLevel = THINKING_LEVEL,
+        ),
+    )
+
+    /** One `streamGenerateContent` request with [json] as the body, its answer streamed chunk by chunk. */
+    private fun post(json: String): Flow<String> = callbackFlow {
+        val body = json.toByteArray(Charsets.UTF_8)
+        val conn = URL(GeminiWire.streamUrl(model)).openConnection() as java.net.HttpURLConnection // network-fallback: on-device LFM2.5-VL Describe (CloudDescribeEngine); Cues template sentences for where am I (ModeController)
         launch(Dispatchers.IO) {
             try {
                 conn.requestMethod = "POST"
@@ -128,10 +150,14 @@ internal object GeminiWire {
 
     fun streamUrl(model: String): String = "$BASE$model:streamGenerateContent?alt=sse"
 
-    /** One user turn: the image first, then the prompt (the order the Gemini docs use for image prompts). */
-    fun requestBody(prompt: String, system: String, jpegBase64: String, maxOutputTokens: Int, thinkingLevel: String): String =
+    /**
+     * One user turn: the image first, then the prompt (the order the Gemini docs use for image prompts). Without an
+     * image ([jpegBase64] `null`) the turn is the prompt alone (FR-N9 wording).
+     */
+    fun requestBody(prompt: String, system: String, jpegBase64: String?, maxOutputTokens: Int, thinkingLevel: String): String =
         """{"systemInstruction":{"parts":[{"text":${quote(system)}}]},""" +
-            """"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/jpeg","data":${quote(jpegBase64)}}},""" +
+            """"contents":[{"role":"user","parts":[""" +
+            (jpegBase64?.let { """{"inlineData":{"mimeType":"image/jpeg","data":${quote(it)}}},""" } ?: "") +
             """{"text":${quote(prompt)}}]}],""" +
             """"generationConfig":{"maxOutputTokens":$maxOutputTokens,"thinkingConfig":{"thinkingLevel":${quote(thinkingLevel)}}}}"""
 

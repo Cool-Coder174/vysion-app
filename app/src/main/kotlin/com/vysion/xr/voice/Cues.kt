@@ -8,7 +8,10 @@ import com.vysion.xr.core.OnboardingPage
 import com.vysion.xr.core.OnboardingStep
 import com.vysion.xr.core.Speaker
 import com.vysion.xr.core.ModePhrasebook
+import com.vysion.xr.core.Surroundings
+import com.vysion.xr.core.WhereAmI
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * EVERY spoken string of the product, in en-US and es-MX, keyed (SRS §8 R4 "every cue string in `Cues.kt`,
@@ -106,6 +109,24 @@ object Cues {
 
         /** ADR-0010: "cloud on" in a build with no cloud key. */
         CLOUD_DESCRIBE_UNAVAILABLE,
+
+        /** FR-N9: said before the location dialog, the first time "where am I" is asked; names what leaves the headset. */
+        WHERE_AM_I_PERMISSION,
+
+        /** FR-N9: precise location refused (or only approximate allowed); the way out is the app's Settings page. */
+        WHERE_AM_I_PERMISSION_DENIED,
+
+        /** FR-N9: Location is off in Settings. One sentence with the way out. */
+        LOCATION_OFF,
+
+        /** FR-N9: no fix in time (no Wi-Fi nearby, or no network for the lookup). */
+        LOCATION_NO_FIX,
+
+        /** FR-N9: offline, and the map around the wearer is not in memory. */
+        MAP_UNAVAILABLE,
+
+        /** FR-N9: the map around the wearer names no street and no place. */
+        NOTHING_NAMED_NEARBY,
     }
 
     /** Languages this object speaks; anything else falls back to en-US (SRS scope: English and Spanish). */
@@ -151,6 +172,14 @@ object Cues {
             "Say cloud off to keep everything on this headset.",
         Key.CLOUD_DESCRIBE_OFF to "Cloud describe off. Everything stays on this headset.",
         Key.CLOUD_DESCRIBE_UNAVAILABLE to "Cloud describe is not set up on this headset. Describe works without it.",
+        Key.WHERE_AM_I_PERMISSION to "To say where you are, Vysion needs your precise location. It downloads the map " +
+            "around you from OpenFreeMap, and Google words the answer when you are online. Nothing is saved.",
+        Key.WHERE_AM_I_PERMISSION_DENIED to "Without precise location, Vysion cannot name the street. Allow it in " +
+            "Settings, Apps, Vysion XR, Permissions, Location.",
+        Key.LOCATION_OFF to "Location is off, so turn it on in Settings, under Location, and ask again.",
+        Key.LOCATION_NO_FIX to "I can't get your location right now, so check that Wi-Fi is on and ask again.",
+        Key.MAP_UNAVAILABLE to "I need an internet connection to load the map around you, so connect and ask again.",
+        Key.NOTHING_NAMED_NEARBY to "I found no named street or place near you.",
     )
 
     private val ES_MX: Map<Key, String> = mapOf(
@@ -192,6 +221,14 @@ object Cues {
             "Di desactiva la nube para que todo se quede en este visor.",
         Key.CLOUD_DESCRIBE_OFF to "Nube desactivada. Todo se queda en este visor.",
         Key.CLOUD_DESCRIBE_UNAVAILABLE to "La nube no está configurada en este visor. Describir funciona sin ella.",
+        Key.WHERE_AM_I_PERMISSION to "Para decir dónde estás, Vysion necesita tu ubicación precisa. Descarga el mapa " +
+            "de tu zona de OpenFreeMap, y Google redacta la respuesta cuando hay conexión. No se guarda nada.",
+        Key.WHERE_AM_I_PERMISSION_DENIED to "Sin la ubicación precisa, Vysion no puede nombrar la calle. Permítela en " +
+            "Ajustes, Aplicaciones, Vysion XR, Permisos, Ubicación.",
+        Key.LOCATION_OFF to "La ubicación está desactivada, así que actívala en Ajustes, en Ubicación, y vuelve a preguntar.",
+        Key.LOCATION_NO_FIX to "No puedo obtener tu ubicación ahora, así que revisa que el Wi-Fi esté activado y vuelve a preguntar.",
+        Key.MAP_UNAVAILABLE to "Necesito conexión a internet para cargar el mapa de tu zona, así que conéctate y vuelve a preguntar.",
+        Key.NOTHING_NAMED_NEARBY to "No encontré calles ni lugares con nombre cerca de ti.",
     )
 
     /** The one lookup; every named accessor below goes through it. Unknown languages speak en-US. */
@@ -227,6 +264,69 @@ object Cues {
     fun nothingToRepeat(locale: Locale = Speaker.EN_US): String = text(Key.NOTHING_TO_REPEAT, locale)
     fun permissionExplanation(locale: Locale = Speaker.EN_US): String = text(Key.PERMISSION_EXPLANATION, locale)
     fun permissionDenied(locale: Locale = Speaker.EN_US): String = text(Key.PERMISSION_DENIED, locale)
+
+    /**
+     * FR-N9: the words for every "where am I" outcome. [WhereAmI.Found] is the on-device template, spoken offline or
+     * when the cloud wording fails: "You are near Larkin Street, between Fulton Street and Grove Street. Nearby:
+     * Main Library, about 20 meters; …". No direction is ever said (the heading is unknown, no compass), and distances
+     * are rough ([roughMeters]) because a Wi-Fi fix is good to tens of meters.
+     */
+    fun whereAmI(result: WhereAmI, locale: Locale = Speaker.EN_US): String = when (result) {
+        is WhereAmI.Found -> surroundings(result.surroundings, locale)
+        WhereAmI.PermissionNeeded -> text(Key.WHERE_AM_I_PERMISSION, locale)
+        WhereAmI.PermissionDenied -> text(Key.WHERE_AM_I_PERMISSION_DENIED, locale)
+        WhereAmI.LocationOff -> text(Key.LOCATION_OFF, locale)
+        WhereAmI.NoFix -> text(Key.LOCATION_NO_FIX, locale)
+        WhereAmI.NoMap -> text(Key.MAP_UNAVAILABLE, locale)
+    }
+
+    /** FR-N9 template: the street (with its cross streets), then up to three places, then a vague fix's accuracy. */
+    fun surroundings(s: Surroundings, locale: Locale = Speaker.EN_US): String {
+        val es = locale.language == ES
+        val sentences = mutableListOf<String>()
+        s.street?.let { street ->
+            val opening = when {
+                street.distanceM <= NEAR_STREET_M -> if (es) "Estás cerca de ${street.name}" else "You are near ${street.name}"
+                es -> "La calle más cercana es ${street.name}, a ${roughMeters(street.distanceM, locale)}"
+                else -> "The nearest street is ${street.name}, ${roughMeters(street.distanceM, locale)} away"
+            }
+            val cross = s.crossStreets
+            sentences += when {
+                cross.size >= 2 -> if (es) "$opening, entre ${cross[0].name} y ${cross[1].name}." else
+                    "$opening, between ${cross[0].name} and ${cross[1].name}."
+                cross.size == 1 -> if (es) "$opening, a ${roughMeters(cross[0].distanceM, locale)} de ${cross[0].name}." else
+                    "$opening, ${roughMeters(cross[0].distanceM, locale)} from ${cross[0].name}."
+                else -> "$opening."
+            }
+        }
+        if (s.places.isNotEmpty()) {
+            val items = s.places.map { place ->
+                if (es) "${place.name}, a ${roughMeters(place.distanceM, locale)}" else "${place.name}, ${roughMeters(place.distanceM, locale)}"
+            }
+            val list = if (items.size == 1) items[0] else items.dropLast(1).joinToString("; ") + (if (es) "; y " else "; and ") + items.last()
+            sentences += (if (es) "Cerca: " else "Nearby: ") + list + "."
+        }
+        if (sentences.isEmpty()) return text(Key.NOTHING_NAMED_NEARBY, locale)
+        if (!s.accuracyM.isNaN() && s.accuracyM > VAGUE_FIX_M) {
+            sentences += if (es) "Tu ubicación es precisa solo a ${roughMeters(s.accuracyM, locale)}." else
+                "Your location is accurate only to ${roughMeters(s.accuracyM, locale)}."
+        }
+        return sentences.joinToString(" ")
+    }
+
+    /**
+     * FR-N9 distances from a Wi-Fi fix, rounded so they do not claim precision they lack: to 10 m below 200 m, to 50 m
+     * below 1 km, else to 100 m, never below 10: "about 40 meters" / "unos 40 metros".
+     */
+    fun roughMeters(distanceM: Float, locale: Locale = Speaker.EN_US): String {
+        val step = when {
+            distanceM < 200f -> 10
+            distanceM < 1_000f -> 50
+            else -> 100
+        }
+        val rounded = maxOf(10, (distanceM / step).roundToInt() * step)
+        return if (locale.language == ES) "unos $rounded metros" else "about $rounded meters"
+    }
 
     /** FR-G3: spoken on every mode change; the panel shows the same mode. */
     /** Eyes-free paging: the page's name and how to run it with the middle-finger tap. */
@@ -295,6 +395,12 @@ object Cues {
     }
 
     // ── phrasing rules ───────────────────────────────────────────────────────────────────────────────
+
+    /** FR-N9: a street this close is the one the wearer is "near" (a Wi-Fi fix is good to tens of meters). */
+    const val NEAR_STREET_M: Float = 40f
+
+    /** FR-N9: a fix vaguer than this is said aloud after the answer. */
+    const val VAGUE_FIX_M: Float = 75f
 
     /** The rules, as text, for the module doc and for anyone writing a new cue. */
     val PHRASING_RULES: List<String> = listOf(
@@ -389,6 +495,7 @@ object CuesPhrasebook : ModePhrasebook {
     override val readingWholeView: String get() = Cues.readingWholeView(locale())
     override fun cloudDescribe(on: Boolean): String = Cues.cloudDescribe(on, locale())
     override val cloudDescribeUnavailable: String get() = Cues.cloudDescribeUnavailable(locale())
+    override fun whereAmI(result: WhereAmI): String = Cues.whereAmI(result, locale())
     override fun modeAnnounced(mode: Mode): String = Cues.modeAnnouncement(mode, locale())
     override fun pageFocused(mode: Mode): String = Cues.pageFocused(mode, locale())
     override fun navigationCue(cue: NavigationCue): String? =

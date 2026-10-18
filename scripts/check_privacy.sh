@@ -9,6 +9,8 @@
 #   5. No analytics or crash-reporter SDK.
 #   6. Every line that opens a network connection names its on-device fallback: `network-fallback: <what runs
 #      offline>` on the same line (ADR-0010: every network feature has one).
+#   7. No location in logs (FR-N9, ADR-0010 row "Where am I map"): no log call names coordinates, the fix's accuracy,
+#      a tile, or what "where am I" found (the street and place names locate the wearer too).
 #
 # A line that legitimately needs a flagged storage API (e.g. copying model files with openFileOutput)
 # carries the marker `privacy-allow: <reason>` on the same line, which this script honors.
@@ -90,6 +92,17 @@ NETCALL='openConnection\(|HttpURLConnection|HttpsURLConnection|OkHttpClient|Http
 if [ "${#KOTLIN_DIRS[@]}" -gt 0 ]; then
   if grep -rnE "$NETCALL" "${KOTLIN_DIRS[@]}" | grep -v 'network-fallback:'; then
     echo "FAIL: a network call without a 'network-fallback: <what runs offline>' marker on the same line"
+    fail=1
+  else
+    echo "ok"
+  fi
+fi
+
+echo "== 7. location in logs (FR-N9) =="
+LOGLOC='(Log\.[dviwe]\(|\blog\()[^;]*(latitude|longitude|accuracy|\.location\b|surroundings|crossStreets|\.street\b|\.places\b|TileKey|tileOf|urlFor|key\.x|key\.y)'
+if [ "${#KOTLIN_DIRS[@]}" -gt 0 ]; then
+  if grep -rnE "$LOGLOC" "${KOTLIN_DIRS[@]}" | grep -v 'privacy-allow:'; then
+    echo "FAIL: a log call carries the wearer's location (coordinates, accuracy, a tile, or the street and places found)"
     fail=1
   else
     echo "ok"

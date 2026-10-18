@@ -22,15 +22,21 @@ import com.vysion.xr.core.Mode
 import com.vysion.xr.core.ModePhrasebook
 import com.vysion.xr.core.ModeState
 import com.vysion.xr.core.NavigationCue
+import com.vysion.xr.core.NamedPlace
 import com.vysion.xr.core.NavigationEngine
+import com.vysion.xr.core.PlaceSource
 import com.vysion.xr.core.PromptSet
 import com.vysion.xr.core.RelativeTarget
 import com.vysion.xr.core.Speaker
 import com.vysion.xr.core.SpeechProgress
+import com.vysion.xr.core.Surroundings
+import com.vysion.xr.core.WhereAmI
 import com.vysion.xr.inference.FakeInferenceEngine
+import com.vysion.xr.perception.FakePlaceSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
@@ -39,6 +45,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -764,9 +771,142 @@ class ModeControllerTest {
         assertEquals(stopsBefore + 1, f.speaker.stopCalls)
     }
 
+    // ── FR-N9 where am I ───────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `where am I speaks the cloud's wording sentence by sentence and credits the map`() {
+        val places = FakePlaceSource(WhereAmI.Found(SURROUNDINGS))
+        lateinit var engine: WordingEngine
+        controllerTest(places = places, engineWrapper = { WordingEngine(it) { emit("You are near Larkin Street. "); emit("A library is close.") }.also { e -> engine = e } }) { f ->
+            startAndSettle(f)
+            f.commands.inject(Command.WhereAmI)
+            advanceUntilIdle()
+            assertEquals(listOf("You are near Larkin Street.", "A library is close."), f.speaker.said)
+            assertEquals(listOf(TestPrompts.whereAmI(SURROUNDINGS)), engine.prompts)
+            assertEquals("You are near Larkin Street. A library is close.", f.controller.transcript.value)
+            assertEquals(TranscriptKind.WHERE_AM_I, f.controller.transcriptKind.value)
+            assertEquals(ModeController.WORDS_CLOUD, f.controller.whereAmILatency.value?.words)
+            assertNull("no mode change: where am I is not a mode", f.controller.mode.value)
+            assertEquals(ModeState.IDLE, f.controller.state.value)
+        }
+    }
+
+    @Test
+    fun `where am I speaks the template when the cloud cannot word it (offline, no key)`() {
+        val places = FakePlaceSource(WhereAmI.Found(SURROUNDINGS))
+        controllerTest(places = places) { f -> // the fake engine has no cloud: cloudWording throws
+            startAndSettle(f)
+            f.commands.inject(Command.WhereAmI)
+            advanceUntilIdle()
+            val template = TestPhrasebook.whereAmI(WhereAmI.Found(SURROUNDINGS))
+            assertEquals(listOf(template), f.speaker.said)
+            assertEquals(template, f.controller.transcript.value)
+            assertEquals(TranscriptKind.WHERE_AM_I, f.controller.transcriptKind.value)
+            assertEquals(ModeController.WORDS_TEMPLATE, f.controller.whereAmILatency.value?.words)
+            assertTrue(f.speaker.earcons.contains(Earcon.THINKING))
+        }
+    }
+
+    @Test
+    fun `a cloud with no sentence in time loses to the template`() {
+        val places = FakePlaceSource(WhereAmI.Found(SURROUNDINGS))
+        controllerTest(places = places, engineWrapper = { WordingEngine(it) { delay(10_000); emit("Too late.") } }) { f ->
+            startAndSettle(f)
+            f.commands.inject(Command.WhereAmI)
+            advanceTimeBy(ModeController.WORDING_FIRST_SENTENCE_MS + 1)
+            runCurrent()
+            assertEquals(listOf(TestPhrasebook.whereAmI(WhereAmI.Found(SURROUNDINGS))), f.speaker.said)
+            advanceUntilIdle()
+            assertFalse("the late cloud text is never spoken", f.speaker.said.contains("Too late."))
+        }
+    }
+
+    @Test
+    fun `location off is one sentence, shown without the map credit, and nothing goes to the cloud`() {
+        val places = FakePlaceSource(WhereAmI.LocationOff)
+        lateinit var engine: WordingEngine
+        controllerTest(places = places, engineWrapper = { WordingEngine(it) { emit("x.") }.also { e -> engine = e } }) { f ->
+            startAndSettle(f)
+            f.commands.inject(Command.WhereAmI)
+            advanceUntilIdle()
+            assertEquals(listOf(TestPhrasebook.whereAmI(WhereAmI.LocationOff)), f.speaker.said)
+            assertEquals(TranscriptKind.WHERE_AM_I_NOTICE, f.controller.transcriptKind.value)
+            assertTrue(engine.prompts.isEmpty())
+        }
+    }
+
+    @Test
+    fun `precise location is explained, asked for once, and a grant runs the lookup again`() {
+        val places = FakePlaceSource(WhereAmI.PermissionNeeded)
+        controllerTest(places = places) { f ->
+            startAndSettle(f)
+            val requests = mutableListOf<Unit>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { f.controller.locationPermissionRequests.collect { requests += it } }
+            f.commands.inject(Command.WhereAmI)
+            advanceUntilIdle()
+            assertEquals(listOf(TestPhrasebook.whereAmI(WhereAmI.PermissionNeeded)), f.speaker.said)
+            assertEquals(1, requests.size)
+
+            places.result = WhereAmI.Found(SURROUNDINGS) // the wearer allowed it
+            f.speaker.said.clear()
+            f.controller.onLocationPermissionResult(granted = true)
+            advanceUntilIdle()
+            assertEquals(2, places.calls)
+            assertEquals(listOf(TestPhrasebook.whereAmI(WhereAmI.Found(SURROUNDINGS))), f.speaker.said)
+            assertEquals(1, requests.size)
+        }
+    }
+
+    @Test
+    fun `a refused location dialog says how to allow it`() {
+        controllerTest(places = FakePlaceSource(WhereAmI.PermissionNeeded)) { f ->
+            startAndSettle(f)
+            f.controller.onLocationPermissionResult(granted = false)
+            advanceUntilIdle()
+            assertEquals(listOf(TestPhrasebook.whereAmI(WhereAmI.PermissionDenied)), f.speaker.said)
+        }
+    }
+
+    @Test
+    fun `a hung lookup keeps ticking and speaks the failure at the timeout`() {
+        val hung = object : PlaceSource {
+            override suspend fun whereAmI(): WhereAmI = awaitCancellation()
+        }
+        controllerTest(places = hung) { f ->
+            startAndSettle(f)
+            f.commands.inject(Command.WhereAmI)
+            advanceTimeBy(ModeController.WHERE_AM_I_TIMEOUT_MS - 1)
+            assertTrue(f.speaker.said.isEmpty())
+            assertTrue("never silent while looking", f.speaker.earcons.count { it == Earcon.THINKING } > 10)
+            advanceUntilIdle()
+            assertEquals(listOf(TestPhrasebook.inferenceFailed), f.speaker.said)
+            assertNotNull(f.controller.lastError.value)
+        }
+    }
+
+    @Test
+    fun `stop while looking cancels the lookup and says nothing`() {
+        val hung = object : PlaceSource {
+            override suspend fun whereAmI(): WhereAmI = awaitCancellation()
+        }
+        controllerTest(places = hung) { f ->
+            startAndSettle(f)
+            f.commands.inject(Command.WhereAmI)
+            advanceTimeBy(2_000)
+            f.commands.inject(Command.Stop)
+            advanceUntilIdle()
+            assertTrue(f.speaker.said.isEmpty())
+            assertEquals(ModeState.IDLE, f.controller.state.value)
+        }
+    }
+
     // ── Harness ───────────────────────────────────────────────────────────────────────────────────
 
-    private class Fixture(scope: CoroutineScope, engineWrapper: (FakeInferenceEngine) -> InferenceEngine) {
+    private class Fixture(
+        scope: CoroutineScope,
+        engineWrapper: (FakeInferenceEngine) -> InferenceEngine,
+        places: PlaceSource,
+    ) {
         val frames = TestFrameSource(captureMs = CAPTURE_MS)
         val engine = FakeInferenceEngine(describeDelayMs = DESCRIBE_MS)
         val commands = TestCommandBus()
@@ -786,6 +926,7 @@ class ModeControllerTest {
             scope = scope,
             phrasebook = TestPhrasebook,
             prompts = TestPrompts,
+            places = places,
         )
 
         init {
@@ -798,10 +939,11 @@ class ModeControllerTest {
 
     private fun controllerTest(
         engineWrapper: (FakeInferenceEngine) -> InferenceEngine = { it },
+        places: PlaceSource = FakePlaceSource(),
         body: suspend TestScope.(Fixture) -> Unit,
     ) = runTest {
         val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
-        val fixture = Fixture(scope, engineWrapper)
+        val fixture = Fixture(scope, engineWrapper, places)
         try {
             body(fixture)
         } finally {
@@ -828,6 +970,12 @@ class ModeControllerTest {
         const val READ_ANSWER = "<vlm:read>"
         const val DESCRIBE_ANSWER = "<vlm:describe>"
         const val ARRIVAL_ANSWER = "<vlm:arrival>"
+        val SURROUNDINGS = Surroundings(
+            street = NamedPlace("Larkin Street", "secondary", 10f),
+            crossStreets = listOf(NamedPlace("Grove Street", "minor", 50f), NamedPlace("Fulton Street", "tertiary", 53f)),
+            places = listOf(NamedPlace("Main Library", "library", 20f)),
+            accuracyM = 30f,
+        )
     }
 }
 
@@ -1155,6 +1303,19 @@ private class CloudFlagEngine(
     }
 }
 
+/** FR-N9: a cloud that words "where am I" with [script]; records each prompt. Everything else is the fake's. */
+private class WordingEngine(
+    private val delegate: FakeInferenceEngine,
+    private val script: suspend kotlinx.coroutines.flow.FlowCollector<String>.() -> Unit,
+) : InferenceEngine by delegate {
+    val prompts = mutableListOf<String>()
+
+    override fun cloudWording(prompt: String): Flow<String> = flow {
+        prompts += prompt
+        script()
+    }
+}
+
 /** Scripts the DOOR answers in call order on top of the fake, so the two vote calls can disagree. */
 private class ScriptedDoorEngine(
     private val delegate: FakeInferenceEngine,
@@ -1185,6 +1346,7 @@ private object TestPhrasebook : ModePhrasebook {
     override fun modeAnnounced(mode: Mode) = "<cue:mode:${mode.name}>"
     override fun navigationCue(cue: NavigationCue): String? =
         if (cue == NavigationCue.Arrived) null else "<cue:${cue::class.simpleName}>"
+    override fun whereAmI(result: WhereAmI) = "<cue:whereAmI:${result::class.simpleName}>"
 }
 
 /** Test tokens, not prompts: the real text lives in inference/PromptLibrary.kt (R2). */
@@ -1196,6 +1358,7 @@ private object TestPrompts : PromptSet {
     override val arrival = "<prompt:arrival>"
     override val describeBrief = "<prompt:describeBrief>"
     override val describeDetailed = "<prompt:describeDetailed>"
+    override fun whereAmI(surroundings: Surroundings) = "<prompt:whereAmI:${surroundings.street?.name}>"
     override fun forLocale(prompt: String, locale: Locale): String =
         if (locale.language == "es") prompt + SPANISH_MARK else prompt
 

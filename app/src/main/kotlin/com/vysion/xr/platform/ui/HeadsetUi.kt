@@ -107,7 +107,7 @@ fun StatusWindow(shell: ShellState, type: VysionType, modifier: Modifier = Modif
 
 /** The kind of a screen: [AnimatedContent] animates only when this changes. */
 private enum class ScreenKey {
-    READY, LISTENING, THINKING, LOOKING, ANSWER, NO_TEXT, GUIDING, ARRIVED, LOST, ERROR;
+    READY, LISTENING, THINKING, LOOKING, ANSWER, PLACE, NO_TEXT, GUIDING, ARRIVED, LOST, ERROR;
 
     companion object {
         fun of(screen: HeadsetScreen): ScreenKey = when (screen) {
@@ -116,6 +116,7 @@ private enum class ScreenKey {
             is HeadsetScreen.Thinking -> THINKING
             HeadsetScreen.LookingForDoor -> LOOKING
             is HeadsetScreen.Answer -> ANSWER
+            is HeadsetScreen.Place -> PLACE
             HeadsetScreen.NoText -> NO_TEXT
             is HeadsetScreen.Guiding -> GUIDING
             is HeadsetScreen.Arrived -> ARRIVED
@@ -163,6 +164,12 @@ private fun ScreenContent(shell: ShellState, screen: HeadsetScreen, type: Vysion
                 val title = if (screen.mode == Mode.TEXT_READER) R.string.status_reading else R.string.status_describing
                 Header(Badge.ORB, stringResource(title), null, type)
                 AnswerText(text = screen.text, spoken = shell.spokenRange(screen.text), type = type)
+            }
+            is HeadsetScreen.Place -> {
+                Header(Badge.ORB, stringResource(R.string.status_where_am_i), null, type)
+                AnswerText(text = screen.text, spoken = shell.spokenRange(screen.text), type = type)
+                // OpenFreeMap's terms and the ODbL: the map's credit, wherever its data is shown (FR-N9).
+                if (screen.mapCredit) Footnote(stringResource(R.string.map_attribution), type)
             }
             HeadsetScreen.NoText -> {
                 Header(Badge.TEXT, stringResource(R.string.status_no_text), stringResource(R.string.status_no_text_sub), type)
@@ -274,6 +281,7 @@ private fun commandWord(command: Command): String? = when (command) {
     Command.Describe, Command.Brief, Command.Detailed -> stringResource(R.string.mode_describe)
     Command.FindDoor, Command.GuideMe -> stringResource(R.string.mode_navigate)
     is Command.FollowUp -> command.question
+    Command.WhereAmI -> stringResource(R.string.status_where_am_i)
     else -> null
 }
 
@@ -344,6 +352,10 @@ fun StatusToolbar(shell: ShellState, commands: CommandBus, type: VysionType, hei
                         modifier = Modifier.semantics { stateDescription = cloudState },
                     )
                 }
+            }
+            is HeadsetScreen.Place -> {
+                if (busy) stop() else talk()
+                repeat()
             }
             HeadsetScreen.NoText ->
                 PillButton(stringResource(R.string.action_try_again), { send(Command.Read) }, PillStyle.SECONDARY, type.label, height, icon = VysionIcons.Repeat)

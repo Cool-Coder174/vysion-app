@@ -14,6 +14,7 @@ import com.vysion.xr.core.InferenceEngine
 import com.vysion.xr.core.ModePhrasebook
 import com.vysion.xr.core.NavigationEngine
 import com.vysion.xr.core.OverlayRenderer
+import com.vysion.xr.core.PlaceSource
 import com.vysion.xr.core.PromptSet
 import com.vysion.xr.core.Speaker
 import com.vysion.xr.diagnostics.DiagnosticsCollector
@@ -24,7 +25,9 @@ import com.vysion.xr.inference.GeminiCloudDescriber
 import com.vysion.xr.inference.LibraryPromptSet
 import com.vysion.xr.inference.ModelCatalog
 import com.vysion.xr.inference.NetworkStatus
+import com.vysion.xr.perception.FakePlaceSource
 import com.vysion.xr.perception.GazeGeometry
+import com.vysion.xr.perception.MapPlaceSource
 import com.vysion.xr.perception.NoOpAnchorStore
 import com.vysion.xr.perception.NoOpHeadPoseSource
 import com.vysion.xr.perception.NoOpHandGestures
@@ -72,7 +75,7 @@ import kotlin.math.roundToInt
  * | R1   | platform.CameraFrameSource                        | (Application, CoroutineScope)                 |
  * | R1   | platform.FakeFrameSource                          | (Application)                                 |
  * | R1   | platform.PassthroughOverlayRenderer               | ()                                            |
- * | R1   | platform.ModeController                           | (frames, engine, commands, speaker, navigation, anchors, headPose, overlay, scope, phrasebook, prompts) |
+ * | R1   | platform.ModeController                           | (frames, engine, commands, speaker, navigation, anchors, headPose, overlay, scope, phrasebook, prompts, places) |
  * | R2   | inference.ModelCatalog                            | (Application)                                 |
  * | R2   | inference.ExecuTorchInferenceEngine               | (Application, ModelCatalog, CoroutineScope)   |
  * | R2   | inference.FakeInferenceEngine                     | ()                                            |
@@ -83,6 +86,7 @@ import kotlin.math.roundToInt
  * | R3   | perception.XrHeadPoseSource / NoOpHeadPoseSource  | (XrPerceptionSession) / ()                    |
  * | R3   | perception.XrAnchorStore / NoOpAnchorStore        | (XrPerceptionSession, HeadPoseSource) / ()    |
  * | R3   | perception.XrNavigationEngine / NoOpNavigationEngine | (XrPerceptionSession, FrameSource, InferenceEngine, AnchorStore, HeadPoseSource, CoroutineScope) / () |
+ * | R3   | perception.MapPlaceSource / FakePlaceSource       | (Context, userAgent) / ()                     |
  * | R4   | voice.SpeechCommandBus                            | (Application, CoroutineScope)                 |
  * | R4   | voice.AndroidSpeaker                              | (Application, CoroutineScope)                 |
  * | R4   | voice.CuesPhrasebook (object, ModePhrasebook)     | bind(Speaker) once                            |
@@ -156,6 +160,13 @@ class AppGraph(private val app: Application) {
         perception?.let { XrNavigationEngine(it, frameSource, inferenceEngine, anchorStore, headPose, scope) }
             ?: NoOpNavigationEngine()
 
+    /**
+     * FR-N9 "where am I": Wi-Fi location and OpenFreeMap tiles decoded on the device (ADR-0010 row "Where am I map"),
+     * on every device (the S25 Ultra has location too). The User-Agent names the app, as OpenFreeMap asks.
+     */
+    val places: PlaceSource =
+        if (useFakes) FakePlaceSource() else MapPlaceSource(app, userAgent = "VysionXR/${BuildConfig.VERSION_NAME} (Android XR accessibility app)")
+
     /** Eyes-free hand gestures (blind users): middle-finger pinch to talk, ring-finger tap to page, palm out to stop. */
     val handGestures: HandGestureSource = perception?.let { XrHandGestures(it) } ?: NoOpHandGestures()
 
@@ -185,6 +196,7 @@ class AppGraph(private val app: Application) {
         scope = scope,
         phrasebook = phrasebook,
         prompts = prompts,
+        places = places,
     )
 
     /**

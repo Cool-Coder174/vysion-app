@@ -2,7 +2,9 @@ package com.vysion.xr.inference
 
 import com.vysion.xr.core.HorizontalBearing
 import com.vysion.xr.core.PromptSet
+import com.vysion.xr.core.Surroundings
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * The only place prompt text may appear (SRS §7, AGENTS.md §5, CONTRIBUTING "prompts only in
@@ -12,7 +14,8 @@ import java.util.Locale
  * - Contract provided: `core.PromptSet` through [LibraryPromptSet] (`docs/contracts.md` row "`PromptSet` (seam in
  *   `core`)", gate 4). `PromptLibrary` itself is package-internal reading: no other package may import it.
  * - FR ids: FR-T1 ([READ]), FR-D1 ([DESCRIBE]), FR-N3 ([DOOR]), FR-N6 ([ARRIVAL]),
- *   FR-T4 ([TRANSLATE_ES]), FR-D2 ([followUp]), FR-D3 ([DESCRIBE_BRIEF], [DESCRIBE_DETAILED]), FR-G6 ([forLocale]).
+ *   FR-T4 ([TRANSLATE_ES]), FR-D2 ([followUp]), FR-D3 ([DESCRIBE_BRIEF], [DESCRIBE_DETAILED]), FR-G6 ([forLocale]),
+ *   FR-N9 ([whereAmI], [WHERE_AM_I_STYLE]).
  * - SRS §8 R2 due: "PromptLibrary.kt with the four prompts in section 7; tune wording against 10 real photos
  *   from the venue. Sat 19:00".
  * - Owner: R2 ML / ExecuTorch.
@@ -68,6 +71,14 @@ object PromptLibrary {
         "Your answer is read aloud to a blind person by text-to-speech. Use plain spoken sentences: no markdown, " +
             "no lists, no headings, no emoji. Describe only what is visible in the image."
 
+    /**
+     * FR-N9 "where am I", cloud wording only (ADR-0010 row "Where am I wording"): the system instruction sent with
+     * [whereAmI]. Offline, or when the cloud fails, `voice/Cues.kt` speaks a template instead and no prompt is used.
+     */
+    const val WHERE_AM_I_STYLE: String =
+        "Your answer is read aloud by text-to-speech to a blind pedestrian. Use plain spoken sentences: no markdown, " +
+            "no lists, no headings, no emoji. Use only the facts you are given."
+
     /** FR-T4 "in Spanish": re-prompt on the same frame (the engine keeps the prefill, FR-D2 / RK-2 "prefill once"). */
     const val TRANSLATE_ES: String = "Translate the text you read into Spanish; output only the translation."
 
@@ -105,6 +116,36 @@ object PromptLibrary {
         return "Answer this question about the image in at most two sentences, using only what is visible. " +
             "Do not guess. Question: $q"
     }
+
+    /**
+     * FR-N9: the facts "where am I" found on the headset ([Surroundings]), as a text-only prompt. The wearer's heading
+     * is unknown (no compass on the Galaxy XR), so the model is told never to give a direction; distances are
+     * straight-line meters from an approximate Wi-Fi fix, so it is told to round them. No coordinates are sent.
+     */
+    fun whereAmI(s: Surroundings): String = buildString {
+        append("Tell me where I am in at most three short sentences, using only the facts below. ")
+        append("My heading is unknown: never say left, right, ahead, behind, a compass direction or a clock position. ")
+        append("Start with the street. Say distances as round numbers of meters. Do not add any fact.\n")
+        append("Location accuracy: ").append(if (s.accuracyM.isNaN()) "unknown" else meters(s.accuracyM)).append(".\n")
+        val street = s.street
+        if (street == null) {
+            append("Nearest street: none named nearby.\n")
+        } else {
+            append("Nearest street: ").append(named(street.name, street.kind)).append(", ").append(meters(street.distanceM)).append(".\n")
+        }
+        if (street != null && s.crossStreets.isNotEmpty()) {
+            append("Streets crossing ").append(street.name).append(" nearest to me, with the distance to each crossing: ")
+            append(s.crossStreets.joinToString("; ") { "${it.name}, ${meters(it.distanceM)}" }).append(".\n")
+        }
+        if (s.places.isNotEmpty()) {
+            append("Nearest named places: ")
+            append(s.places.joinToString("; ") { "${named(it.name, it.kind)}, ${meters(it.distanceM)}" }).append(".")
+        }
+    }.trimEnd()
+
+    private fun named(name: String, kind: String?): String = if (kind.isNullOrBlank()) name else "$name ($kind)"
+
+    private fun meters(m: Float): String = "${m.roundToInt()} meters"
 
     /**
      * FR-G6 Spanish output in all three modes. For a Spanish [locale] the prompt gets [SPANISH_SUFFIX]; any other
@@ -160,6 +201,7 @@ object LibraryPromptSet : PromptSet {
     override val describeBrief: String get() = PromptLibrary.DESCRIBE_BRIEF
     override val describeDetailed: String get() = PromptLibrary.DESCRIBE_DETAILED
     override fun followUp(question: String): String = PromptLibrary.followUp(question)
+    override fun whereAmI(surroundings: Surroundings): String = PromptLibrary.whereAmI(surroundings)
     override fun forLocale(prompt: String, locale: Locale): String = PromptLibrary.forLocale(prompt, locale)
     override val noTextSentinel: String get() = PromptLibrary.NO_TEXT_SENTINEL
 }

@@ -5,6 +5,7 @@ import com.vysion.xr.core.ListeningState
 import com.vysion.xr.core.Mode
 import com.vysion.xr.core.ModeState
 import com.vysion.xr.core.NavigationCue
+import com.vysion.xr.platform.TranscriptKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -108,5 +109,18 @@ class HeadsetScreensTest {
         assertEquals(0 until 29, HeadsetScreens.spokenSentence(text, 0, 7))
         assertEquals(30 until 40, HeadsetScreens.spokenSentence(text, 30, 30))
         assertEquals(0 until 1, HeadsetScreens.spokenSentence("A", 0, 0))
+    }
+
+    @Test
+    fun `a where am I answer shows with the map credit, its status sentences without it`() {
+        val answer = idle.copy(mode = Mode.TEXT_READER, transcript = "You are near Larkin Street.", transcriptKind = TranscriptKind.WHERE_AM_I)
+        assertEquals(HeadsetScreen.Place("You are near Larkin Street.", mapCredit = true), HeadsetScreens.reduce(answer))
+        val notice = idle.copy(transcript = "Location is off.", transcriptKind = TranscriptKind.WHERE_AM_I_NOTICE)
+        assertEquals(HeadsetScreen.Place("Location is off.", mapCredit = false), HeadsetScreens.reduce(notice))
+        assertEquals(
+            "while looking it is Thinking",
+            HeadsetScreen.Thinking(Command.WhereAmI),
+            HeadsetScreens.reduce(answer.copy(state = ModeState.INFERRING, lastCommand = Command.WhereAmI)),
+        )
     }
 }

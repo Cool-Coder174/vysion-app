@@ -5,6 +5,7 @@ import com.vysion.xr.core.ListeningState
 import com.vysion.xr.core.Mode
 import com.vysion.xr.core.ModeState
 import com.vysion.xr.core.NavigationCue
+import com.vysion.xr.platform.TranscriptKind
 
 /**
  * Which of the designs' headset screens is showing (Michelle Bui, Headset 1-12). Derived, never stored: the
@@ -26,6 +27,12 @@ sealed interface HeadsetScreen {
 
     /** Headset 4 (Read) and 5 (Describe): the VLM's answer, spoken and shown. */
     data class Answer(val mode: Mode, val text: String) : HeadsetScreen
+
+    /**
+     * FR-N9 "where am I": the answer, or a one-sentence status (Location off, no fix). [mapCredit] is true when the text
+     * came from map data, so the window shows "© OpenMapTiles, data from OpenStreetMap" under it.
+     */
+    data class Place(val text: String, val mapCredit: Boolean) : HeadsetScreen
 
     /** Headset 11: the READ prompt came back with the no-text sentinel; say what to do instead of guessing. */
     data object NoText : HeadsetScreen
@@ -52,6 +59,8 @@ data class ScreenInput(
     val mode: Mode?,
     val transcript: String?,
     val listening: ListeningState,
+    /** What [transcript] is: a Read / Describe answer or a "where am I" one (FR-N9). */
+    val transcriptKind: TranscriptKind = TranscriptKind.ANSWER,
     val lastCommand: Command? = null,
     val lastCommandAtMs: Long? = null,
     val lastErrorAtMs: Long? = null,
@@ -88,6 +97,9 @@ object HeadsetScreens {
         navigationScreen(input)?.let { return it }
 
         val text = input.transcript
+        if (text != null && input.transcriptKind != TranscriptKind.ANSWER) {
+            return HeadsetScreen.Place(text, mapCredit = input.transcriptKind == TranscriptKind.WHERE_AM_I)
+        }
         if (text != null && (input.mode == Mode.TEXT_READER || input.mode == Mode.AUDIO_DESCRIPTION)) {
             return if (isNoText(text, input.noTextSentinel)) HeadsetScreen.NoText else HeadsetScreen.Answer(input.mode, text)
         }

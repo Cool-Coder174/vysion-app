@@ -210,4 +210,18 @@ class CommandGrammarTest {
         assertEquals(listOf("whats", "around", "me"), CommandGrammar.tokens("what's around me"))
         assertTrue(CommandGrammar.tokens("vysion").isEmpty())
     }
+
+    @Test
+    fun `where am I in both languages, and nearby questions about doors and signs stay theirs`() {
+        for (u in listOf("where am I", "Vysion, where am I?", "where are we", "what street is this", "what's my location", "what's nearby")) {
+            assertEquals(u, Command.WhereAmI, parse(u))
+        }
+        for (u in listOf("dónde estoy", "¿dónde estamos?", "en qué calle estoy", "mi ubicación", "qué hay cerca")) {
+            assertEquals(u, Command.WhereAmI, parse(u, es))
+        }
+        assertEquals(Command.FindDoor, parse("where is the door"))
+        assertEquals(Command.FindDoor, parse("dónde está la puerta", es))
+        assertEquals("a fuzzy what must not take a Read", Command.Read, parse("read that street sign"))
+        assertEquals("qué hay alone is still Describe", Command.Describe, parse("qué hay", es))
+    }
 }

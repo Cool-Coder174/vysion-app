@@ -59,6 +59,7 @@ fun rememberShellState(graph: AppGraph): ShellState {
     val state by graph.modeController.state.collectAsStateWithLifecycle()
     val mode by graph.modeController.mode.collectAsStateWithLifecycle()
     val transcript by graph.modeController.transcript.collectAsStateWithLifecycle()
+    val transcriptKind by graph.modeController.transcriptKind.collectAsStateWithLifecycle()
     val listening by graph.commandBus.state.collectAsStateWithLifecycle()
     val progress by graph.speaker.progress.collectAsStateWithLifecycle(initialValue = null)
     val cloudDescribe by graph.modeController.cloudDescribe.collectAsStateWithLifecycle()
@@ -120,6 +121,7 @@ fun rememberShellState(graph: AppGraph): ShellState {
         mode = mode,
         transcript = transcript,
         listening = listening,
+        transcriptKind = transcriptKind,
         lastCommand = lastCommand,
         lastCommandAtMs = lastCommandAt,
         lastErrorAtMs = lastErrorAt,

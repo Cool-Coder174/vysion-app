@@ -57,6 +57,25 @@ class CloudDescribeEngine(
 
     override val cloudDescribeAvailable: Boolean get() = cloud != null
 
+    /**
+     * FR-N9 (ADR-0010 row "Where am I wording"): the text-only cloud request, or an [InferenceException] at once when no
+     * key is built in or the headset is offline, so the controller speaks its template without waiting on a connect
+     * timeout. Unlike Describe it needs no "cloud on": only street and place names leave, no photo.
+     */
+    override fun cloudWording(prompt: String): Flow<String> = flow {
+        val describer = cloud ?: throw InferenceException("cloud wording: no key built in")
+        if (!isOnline()) throw InferenceException("cloud wording: offline")
+        val t0 = System.nanoTime()
+        var first = true
+        describer.streamText(prompt, PromptLibrary.WHERE_AM_I_STYLE).collect { chunk ->
+            if (first && chunk.isNotBlank()) {
+                first = false
+                log(TAG_LATENCY, "whereami wording source=cloud first-chunk ms=${(System.nanoTime() - t0) / NANOS_PER_MS} model=${describer.model}")
+            }
+            emit(chunk)
+        }
+    }
+
     override fun describeScene(bitmap: Bitmap, prompt: String, cloud: Boolean, maxNewTokens: Int): Flow<String> = flow {
         val onHeadset = headset.describeStreaming(bitmap, prompt, maxNewTokens)
         val describer = this@CloudDescribeEngine.cloud

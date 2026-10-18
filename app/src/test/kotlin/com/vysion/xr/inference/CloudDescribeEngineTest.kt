@@ -194,6 +194,33 @@ class CloudDescribeEngineTest {
         }
     }
 
+    // ── FR-N9 where am I wording ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `where am I wording streams from the cloud with its own system instruction, no photo`() = runTest {
+        val cloud = FakeCloud { emit("You are near Larkin Street.") }
+        val f = fixture(cloud, online = true)
+        assertEquals(listOf("You are near Larkin Street."), f.engine.cloudWording("<prompt:whereAmI>").toList())
+        assertEquals("<prompt:whereAmI>", cloud.lastPrompt)
+        assertEquals(PromptLibrary.WHERE_AM_I_STYLE, cloud.lastSystem)
+        assertEquals(0, f.encoded)
+        assertTrue(f.lines.any { it.contains("whereami wording source=cloud first-chunk ms=") })
+    }
+
+    @Test
+    fun `where am I wording fails at once offline or without a key, so the template speaks`() = runTest {
+        val cloud = FakeCloud { emit("never") }
+        for (f in listOf(fixture(cloud, online = false), fixture(null, online = true))) {
+            try {
+                f.engine.cloudWording("<prompt:whereAmI>").toList()
+                fail("expected InferenceException")
+            } catch (expected: InferenceException) {
+                // the controller falls back to Cues
+            }
+        }
+        assertEquals("nothing was sent", 0, cloud.calls)
+    }
+
     // ── Fixtures ────────────────────────────────────────────────────────────────────────────────────
 
     private class Fixture(val engine: CloudDescribeEngine, val headset: FakeInferenceEngine, val lines: List<String>) {
@@ -229,6 +256,15 @@ class CloudDescribeEngineTest {
             calls++
             lastPrompt = prompt
             assertEquals(JPEG_BYTES, jpeg.size)
+            script()
+        }
+
+        var lastSystem: String? = null
+
+        override fun streamText(prompt: String, system: String): Flow<String> = flow {
+            calls++
+            lastPrompt = prompt
+            lastSystem = system
             script()
         }
     }

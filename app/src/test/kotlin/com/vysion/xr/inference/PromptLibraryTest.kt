@@ -1,6 +1,8 @@
 package com.vysion.xr.inference
 
 import com.vysion.xr.core.HorizontalBearing
+import com.vysion.xr.core.NamedPlace
+import com.vysion.xr.core.Surroundings
 import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -100,5 +102,26 @@ class PromptLibraryTest {
         assertEquals(PromptLibrary.DOOR, PromptLibrary.forLocale(PromptLibrary.DOOR, es))
         assertEquals(PromptLibrary.TRANSLATE_ES, PromptLibrary.forLocale(PromptLibrary.TRANSLATE_ES, es))
         assertFalse(PromptLibrary.forLocale(PromptLibrary.DOOR, es).endsWith(PromptLibrary.SPANISH_SUFFIX))
+    }
+
+    @Test
+    fun `the where am I prompt carries the facts, forbids directions, and no coordinates`() {
+        val s = Surroundings(
+            street = NamedPlace("Larkin Street", "secondary", 9.9f),
+            crossStreets = listOf(NamedPlace("Grove Street", "minor", 50f), NamedPlace("Fulton Street", "tertiary", 53.4f)),
+            places = listOf(NamedPlace("Main Library", "library", 20.2f), NamedPlace("Kiosk", null, 31f)),
+            accuracyM = 30f,
+        )
+        val prompt = PromptLibrary.whereAmI(s)
+        for (fact in listOf("Larkin Street (secondary), 10 meters", "Grove Street, 50 meters", "Fulton Street, 53 meters",
+            "Main Library (library), 20 meters", "Kiosk, 31 meters", "Location accuracy: 30 meters")) {
+            assertTrue(fact, prompt.contains(fact))
+        }
+        assertTrue(prompt.contains("heading is unknown"))
+        assertFalse("no coordinates", Regex("\\d+\\.\\d{3,}").containsMatchIn(prompt))
+        assertEquals(PromptLibrary.whereAmI(s), LibraryPromptSet.whereAmI(s))
+        assertTrue(PromptLibrary.whereAmI(s.copy(accuracyM = Float.NaN)).contains("Location accuracy: unknown"))
+        assertTrue(PromptLibrary.whereAmI(s.copy(street = null)).contains("Nearest street: none named nearby"))
+        assertTrue(LibraryPromptSet.forLocale(prompt, Locale.forLanguageTag("es-MX")).endsWith(PromptLibrary.SPANISH_SUFFIX))
     }
 }
