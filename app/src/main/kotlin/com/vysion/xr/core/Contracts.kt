@@ -345,8 +345,10 @@ interface AnchorStore {
 
 /**
  * The Navigation background loop: proximity at 10 Hz, detector at ≥ 5 fps, plane semantics, and
- * guidance to the anchor every 3 s with a spatial-audio ping (FR-N1..FR-N6). Any one-shot command
- * calls [pause] before and [resume] after (ADR-0004), so the detector is never competing with the VLM.
+ * guidance to the anchor every 3 s with a spatial-audio ping (FR-N1..FR-N6). It runs only in Navigation mode: one
+ * mode at a time, so Read and Describe [stop] it (Isaac, 2026-10-18). The one-shots that belong to Navigation (the
+ * door vote, the arrival check) call [pause] before and [resume] after (ADR-0004), so the detector never competes
+ * with the VLM.
  */
 interface NavigationEngine {
     val cues: Flow<NavigationCue>

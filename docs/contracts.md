@@ -176,7 +176,8 @@ class AppGraph(private val app: Application) {
 
 | Rule | Where enforced | Why |
 |---|---|---|
-| `NavigationEngine.pause()` before any VLM call, `resume()` after | `ModeController` | ADR-0004: the detector is unloaded inside `describe`; the pause makes that visible and intentional |
+| One mode at a time: Read and Describe call `NavigationEngine.stop()` (guidance, pings, outlines, obstacle warnings end; the door marker goes); "find the door" / "guide me" start it again | `ModeController.stopNavigation` (`ModeControllerTest` "one mode at a time") | Isaac, 2026-10-18: modes are active one at a time |
+| Inside Navigation, `NavigationEngine.pause()` before a VLM call (door vote, arrival check), `resume()` after | `ModeController` | ADR-0004: the detector is unloaded inside `describe`; the pause makes that visible and intentional |
 | The detector is unloaded at the start of every VLM call and reloaded **lazily** by the next `detect()`, not eagerly after `describe` returns (the two door-vote calls do not churn it) | R2 `ExecuTorchInferenceEngine` (`describe` KDoc; nfr.md Memory row) | ADR-0004 / INV-2: peak memory is one model plus the runtime. The `InferenceEngine` KDoc in `Contracts.kt` still says "unloaded and reloaded after"; the lazy reload satisfies it, and the one-word KDoc fix waits for R5's next contract merge |
 | Nothing inside `InferenceEngine` calls another module | code review | deadlock-free under the single `Mutex` |
 | Only `Speaker.say` produces speech; only `voice/Cues.kt` (through `ModePhrasebook`) and the VLM produce text; a blank phrasebook value is skipped, never spoken | code review, `scripts/check_cues.sh` (CI step), `ModeController.say` | SRS §8 R4 "nothing hardcoded elsewhere"; INV-4 |
