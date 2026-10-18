@@ -5,14 +5,14 @@ Source: SRS §12. Each of these is a yes/no we can answer in under an hour with 
 | # | Owner | Assumption | By | Result | Evidence | Checked by |
 |---|---|---|---|---|---|---|
 | A-1 | R1 | CameraX delivers world-camera frames (camera id 0) to a third-party app on this Galaxy XR firmware with only the `CAMERA` permission; note resolution and format | Sat 11:00 | | | |
-| A-2 | R1 | Compose for XR Full Space keeps passthrough on while our panels are shown | Sat 11:00 | | | |
+| A-2 | R1 | Compose for XR Full Space keeps passthrough on while our panels are shown | Sat 11:00 | **yes** | 2026-10-17 17:16, Galaxy XR SM-I610, build I610UEU2AZF3 (Android 14 / API 34): the manifest start mode alone put the app in Full Space (`dumpsys window` → `xrDesktopMode=full-space-managed`); `adb exec-out screencap` showed the room in passthrough behind the transcript and control panels. No `requestFullSpace()` or passthrough-opacity call was needed. Screenshot kept out of the public repo (bystanders in frame). | Claude (Isaac's laptop) |
 | A-3 | R2 | The current `org.pytorch:executorch-android` 1.3.x AAR on Maven includes the multimodal runner and XNNPACK, so no from-source build is needed | Sat 11:00 | | | |
 | A-4 | R2 | Gemma 4 edge multimodal exports with the documented script and its `.pte` fits in memory on the headset; record file size and load time | Sat 14:00 | no (`docs/stack.md` D5, 2026-10-17) | `LlmModule(MODEL_TYPE_MULTIMODAL)` refuses the `examples/models/gemma4` `.pte` (no `token_embedding` method) at 1.3.1, 1.5.1 and main | research (stack.md D5) |
 | A-5 | R3 | ARCore for Jetpack XR `1.0.0-alpha15` (SRS wording; the build pins `1.0.0-rc02`, `docs/stack.md` §1) depth and plane tracking return data on the headset with the `SCENE_UNDERSTANDING_*` permissions granted | Sat 12:00 | | | |
 | A-6 | R3 | SceneCore spatial audio point source is available and audible through the headset speakers | Sat 13:00 | | | |
-| A-7 | R4 | `SpeechRecognizer` works with network off on the headset | Sat 14:00 | | | |
+| A-7 | R4 | `SpeechRecognizer` works with network off on the headset | Sat 14:00 | partial | 2026-10-17: `SpeechRecognizer.isOnDeviceRecognitionAvailable()` returned true on the headset (logcat `vysion: A-7 on-device speech recognition available=true`). Recognition in airplane mode is not tested yet: `SpeechCommandBus` is still a stub. | Claude (Isaac's laptop) |
 | A-8 | R4 | TTS has an es-MX or es-ES voice installed offline | Sat 14:00 | | | |
-| A-9 | R5 | We have both the Galaxy XR and the S25 Ultra from the track, ADB over Wi-Fi or USB-C to the headset works from each laptop, and the judging time and submission format are confirmed in writing from the organizers | Sat 10:30 | | | |
+| A-9 | R5 | We have both the Galaxy XR and the S25 Ultra from the track, ADB over Wi-Fi or USB-C to the headset works from each laptop, and the judging time and submission format are confirmed in writing from the organizers | Sat 10:30 | partial | 2026-10-17: ADB over USB-C works from Isaac's MacBook Pro (adb 37.0.1, serial R3GYB0225HT, model SM_I610). Still open: the other laptops, Wi-Fi ADB, the S25 Ultra, and the organizers' written confirmation. | Claude (Isaac's laptop) |
 
 ## If an assumption fails
 
