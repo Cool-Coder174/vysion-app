@@ -4,7 +4,9 @@ import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.os.BatteryManager
 import android.os.Build
@@ -17,14 +19,21 @@ import com.vysion.xr.core.Command
 import com.vysion.xr.core.CommandSource
 import com.vysion.xr.core.InferenceEngine
 import com.vysion.xr.core.ModelInfo
+import com.vysion.xr.voice.WhisperTranscriber
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.time.Instant
 import kotlin.math.roundToLong
+import kotlin.coroutines.resume
 
 /**
  * Debug-only measurement protocol (SRS §7: "20 runs per model on the headset in airplane mode; report
@@ -72,7 +81,7 @@ class BenchmarkReceiver : BroadcastReceiver() {
             seconds = intent.getIntExtra(EXTRA_SECONDS, DEFAULT_SOAK_SECONDS),
         )
         if (request == null) {
-            Log.e(TAG, "rejected: model=${intent.getStringExtra(EXTRA_MODEL)} (expected vlm|detector|soak)")
+            Log.e(TAG, "rejected: model=${intent.getStringExtra(EXTRA_MODEL)} (expected vlm|detector|soak|ocr|asr|efficiency)")
             return
         }
         val app = context.applicationContext as? VysionApplication
@@ -81,15 +90,22 @@ class BenchmarkReceiver : BroadcastReceiver() {
             return
         }
         val graph: AppGraph = app.graph
+        // `--ez hold true`: keep the broadcast open until the runs end. Android 14 freezes a cached app ~10 s after its
+        // receiver returns, so with nobody wearing the headset (activity stopped) a released broadcast stalls the
+        // runs; a held background broadcast keeps the process running for up to 60 s, so keep each held run short.
+        val hold = intent.getBooleanExtra(EXTRA_HOLD, false)
+        val path = intent.getStringExtra(EXTRA_PATH)
         val pending = goAsync()
         graph.scope.launch {
             var finished = false
             try {
                 val outDir = File(app.filesDir, BENCH_DIR)
-                val runner = BenchmarkRunner(app, graph, outDir)
-                Log.i(TAG, "accepted: $request → ${File(outDir, request.model.fileName)}")
-                pending.finish() // see class KDoc: the runs outlive the broadcast window
-                finished = true
+                val runner = BenchmarkRunner(app, graph, outDir, onlyPath = path)
+                Log.i(TAG, "accepted: $request hold=$hold path=$path → ${File(outDir, request.model.fileName)}")
+                if (!hold) {
+                    pending.finish() // see class KDoc: the runs outlive the broadcast window
+                    finished = true
+                }
                 runner.run(request)
             } catch (e: CancellationException) {
                 throw e
@@ -106,6 +122,10 @@ class BenchmarkReceiver : BroadcastReceiver() {
         const val ACTION: String = "com.vysion.xr.BENCH"
         const val EXTRA_MODEL: String = "model"
         const val EXTRA_RUNS: String = "runs"
+        const val EXTRA_HOLD: String = "hold"
+
+        /** Efficiency only: run one path (idle, detector, ocr, asr, vlm) instead of all of them. */
+        const val EXTRA_PATH: String = "path"
         const val EXTRA_SECONDS: String = "seconds"
         const val DEFAULT_RUNS: Int = 20
         const val MAX_RUNS: Int = 1_000
@@ -114,11 +134,20 @@ class BenchmarkReceiver : BroadcastReceiver() {
     }
 }
 
-/** The three protocols the script can request; `fileName` is what `benchmark.sh` polls for. */
+/** The protocols the script can request; `fileName` is what `benchmark.sh` polls for. */
 internal enum class BenchmarkModel(val wire: String) {
     VLM("vlm"),
     DETECTOR("detector"),
     SOAK("soak"),
+
+    /** PP-OCR on `files/smoke/sign.png` (a known 3-line sign), else the live still. */
+    OCR("ocr"),
+
+    /** Whisper on `files/smoke/asr.wav` (16 kHz mono), VAD skipped: the transcription itself. */
+    ASR("asr"),
+
+    /** Energy per inference: an idle baseline, then each on-device AI path for a fixed window (see [EnergyMath]). */
+    EFFICIENCY("efficiency"),
     ;
 
     val fileName: String get() = "$wire-latest.json"
@@ -147,7 +176,10 @@ internal class BenchmarkRunner(
     private val app: Application,
     private val graph: AppGraph,
     private val outDir: File,
+    private val onlyPath: String? = null,
 ) {
+    private fun wants(path: String): Boolean = onlyPath == null || onlyPath == path
+
     private val engine: InferenceEngine get() = graph.inferenceEngine
 
     /** SRS §7 protocol prompt: READ, from R2's PromptLibrary through `AppGraph.prompts` (no cross-package import). */
@@ -160,6 +192,9 @@ internal class BenchmarkRunner(
             BenchmarkModel.VLM -> vlm(request.runs)
             BenchmarkModel.DETECTOR -> detector(request.runs)
             BenchmarkModel.SOAK -> soak(request.seconds)
+            BenchmarkModel.OCR -> ocr(request.runs)
+            BenchmarkModel.ASR -> asr(request.runs)
+            BenchmarkModel.EFFICIENCY -> efficiency()
         }
         val result = LinkedHashMap<String, Any?>(body)
         result["device"] = Build.MODEL
@@ -213,6 +248,170 @@ internal class BenchmarkRunner(
             base.recycle()
         }
     }
+
+    // ── OCR: PP-OCR detect + recognize on a known sign ────────────────────────────────────────────────
+
+    private suspend fun ocr(runs: Int): Map<String, Any?> {
+        engine.warmUp() // idempotent; an unworn headset may never have started the graph
+        val base = smokeImage("sign.png") ?: still(preferredWidth = 0, preferredHeight = 0)
+        try {
+            val loadMs = null // OCR loads in warmUp (milliseconds); not re-timed here
+            val timed = timedRuns(runs, perRunTimeoutMs = OCR_RUN_TIMEOUT_MS) { engine.readText(base) }
+            return summary(BenchmarkModel.OCR, timed, loadMs, info = null, maxNewTokens = null) +
+                ("input" to "${base.width}x${base.height}")
+        } finally {
+            base.recycle()
+        }
+    }
+
+    // ── ASR: Whisper on one spoken clip ──────────────────────────────────────────────────────────────
+
+    private suspend fun asr(runs: Int): Map<String, Any?> {
+        val clip = smokeFile("asr.wav") ?: error("push a 16 kHz mono WAV to files/smoke/asr.wav first")
+        val pcm = WavClip.decode(clip.readBytes())
+        val timed = timedRuns(runs, perRunTimeoutMs = ASR_RUN_TIMEOUT_MS) { transcribe(pcm) }
+        return summary(BenchmarkModel.ASR, timed, loadMs = null, info = null, maxNewTokens = null) +
+            ("audio_ms" to pcm.size * 1000L / WhisperTranscriber.SAMPLE_RATE_HZ)
+    }
+
+    private suspend fun transcribe(pcm: ShortArray): String? {
+        val asr = graph.asr ?: error("no Whisper in this build")
+        withTimeout(ASR_RUN_TIMEOUT_MS) {
+            while (asr.state == WhisperTranscriber.State.LOADING) delay(100)
+        }
+        check(asr.state == WhisperTranscriber.State.READY) { "Whisper is ${asr.state}" }
+        return suspendCancellableCoroutine { cont -> asr.transcribe(pcm, pcm.size, "en-US") { cont.resume(it) } }
+    }
+
+    // ── Efficiency: energy per inference for every on-device AI path ───────────────────────────────────
+
+    /**
+     * An idle baseline (the app running, nothing inferring), then each path repeated for a fixed window while
+     * [PowerMeter] samples battery current and voltage, the process's CPU time and PSS. Energy per inference is the
+     * window's energy above the idle baseline divided by the inferences in it ([EnergyMath]). Inputs are the smoke
+     * files, so every run sees the same content; nothing is spoken.
+     */
+    private suspend fun efficiency(): Map<String, Any?> {
+        engine.warmUp() // idempotent: measure with the models resident, as the app runs
+        val meter = PowerMeter(app)
+        val paths = ArrayList<Map<String, Any?>>()
+        val idle = if (wants("idle")) window(meter, "idle", EFFICIENCY_IDLE_S, minOps = 1, idlePowerW = null) { delay(1_000) } else null
+        idle?.let { paths += it }
+        val idleW: Double? = null // net figures are computed against the idle run offline (each path is its own broadcast)
+
+        if (wants("detector")) smokeImage("door1.png")?.let { frame ->
+            try {
+                engine.detect(frame) // make sure it is resident (lazy load, ADR-0004)
+                paths += window(meter, "detector", EFFICIENCY_SHORT_S, minOps = 20, idlePowerW = idleW, info = engine.detectorInfo.value) {
+                    engine.detect(frame)
+                }
+            } finally {
+                frame.recycle()
+            }
+        }
+        if (wants("ocr")) smokeImage("sign.png")?.let { sign ->
+            try {
+                paths += window(meter, "ocr", EFFICIENCY_SHORT_S, minOps = 8, idlePowerW = idleW) { engine.readText(sign) }
+            } finally {
+                sign.recycle()
+            }
+        }
+        if (wants("asr")) smokeFile("asr.wav")?.let { clip ->
+            val pcm = WavClip.decode(clip.readBytes())
+            paths += window(meter, "asr", EFFICIENCY_SHORT_S, minOps = 5, idlePowerW = idleW) { transcribe(pcm) }
+        }
+        if (wants("vlm")) smokeImage("scene.png")?.let { scene ->
+            try {
+                val prompt = graph.prompts.describe
+                paths += window(meter, "vlm", EFFICIENCY_VLM_S, minOps = 3, idlePowerW = idleW, info = engine.vlmInfo.value) {
+                    val frame = scene.copy(Bitmap.Config.ARGB_8888, false) // fresh instance: no prefill reuse
+                    try {
+                        engine.describe(frame, prompt, InferenceEngine.DEFAULT_MAX_NEW_TOKENS)
+                    } finally {
+                        frame.recycle()
+                    }
+                }
+            } finally {
+                scene.recycle()
+            }
+        }
+        return linkedMapOf(
+            "model" to BenchmarkModel.EFFICIENCY.wire,
+            "runs" to paths.size,
+            "current_unit_note" to meter.unitNote,
+            "paths" to paths,
+        )
+    }
+
+    private suspend fun window(
+        meter: PowerMeter,
+        name: String,
+        seconds: Double,
+        minOps: Int,
+        idlePowerW: Double?,
+        info: ModelInfo? = null,
+        op: suspend () -> Any?,
+    ): Map<String, Any?> = coroutineScope {
+        val ampSamples = ArrayList<Double>()
+        var volts: Double? = null
+        var peakPss = 0
+        val sampler = launch(Dispatchers.Default) {
+            var tick = 0
+            while (isActive) {
+                if (tick % 10 == 0) {
+                    volts = meter.volts() ?: volts
+                    memory.sampleMb()?.let { if (it > peakPss) peakPss = it }
+                }
+                meter.amps()?.let { ampSamples += it }
+                tick++
+                delay(POWER_SAMPLE_MS)
+            }
+        }
+        val thermalBefore = thermalStatus()
+        val batteryBefore = batteryPercent()
+        val cpu0 = android.os.Process.getElapsedCpuTime()
+        val t0 = System.nanoTime()
+        val durations = ArrayList<Long>()
+        while ((System.nanoTime() - t0) / 1e9 < seconds || durations.size < minOps) {
+            durations += timedMs { op() }
+        }
+        val wallMs = (System.nanoTime() - t0) / NANOS_PER_MS
+        val cpuMs = android.os.Process.getElapsedCpuTime() - cpu0
+        sampler.cancelAndJoin()
+        val avgA = ampSamples.takeIf { it.isNotEmpty() }?.average()
+        val usedVolts = volts ?: EnergyMath.NOMINAL_CELL_VOLTS
+        val result = linkedMapOf<String, Any?>(
+            "path" to name,
+            "ops" to durations.size,
+            "median_ms" to BenchmarkStats.median(durations),
+            "p90_ms" to BenchmarkStats.p90(durations),
+            "latencies_ms" to durations.takeIf { it.size <= MAX_LISTED_LATENCIES },
+            "wall_s" to wallMs / 1000.0,
+            "current_samples" to ampSamples.size,
+            "current_distinct" to ampSamples.distinct().size, // the gauge updates every few seconds
+            "avg_current_ma" to avgA?.times(1000.0),
+            "gross_charge_per_op_mc" to EnergyMath.chargePerOpMillicoulombs(avgA, idleAmps = 0.0, wallMs, durations.size),
+            "voltage_v" to volts,
+            "voltage_source" to if (volts != null) "battery" else "nominal ${EnergyMath.NOMINAL_CELL_VOLTS} V (pack reports 0)",
+            "avg_power_w_est" to avgA?.times(usedVolts),
+            "gross_energy_per_op_mj_est" to EnergyMath.chargePerOpMillicoulombs(avgA, 0.0, wallMs, durations.size)?.times(usedVolts),
+            "cpu_cores" to EnergyMath.cores(cpuMs, wallMs),
+            "peak_pss_mb" to peakPss.takeIf { it > 0 },
+            "thermal_before" to thermalBefore,
+            "thermal_after" to thermalStatus(),
+            "battery_before" to batteryBefore,
+            "battery_after" to batteryPercent(),
+            "backend" to info?.backend?.takeIf { it.isNotBlank() },
+            "quantization" to info?.quantization?.takeIf { it.isNotBlank() },
+        )
+        Log.i(TAG, "efficiency $name: $result")
+        result
+    }
+
+    private fun smokeFile(name: String): File? =
+        app.getExternalFilesDir(null)?.let { File(it, "smoke/$name") }?.takeIf { it.isFile }
+
+    private fun smokeImage(name: String): Bitmap? = smokeFile(name)?.let { BitmapFactory.decodeFile(it.path) }
 
     // ── Soak: Navigation loop through the real command path, one sample every 5 s ────────────────────
 
@@ -356,6 +555,17 @@ internal class BenchmarkRunner(
          */
         const val VLM_RUN_TIMEOUT_MS: Long = 4 * InferenceEngine.VLM_TIMEOUT_MS
         const val DETECT_RUN_TIMEOUT_MS: Long = 10_000L
+        const val OCR_RUN_TIMEOUT_MS: Long = 20_000L
+        const val ASR_RUN_TIMEOUT_MS: Long = 40_000L
+
+        /** Efficiency windows: long enough for the battery gauge to average over many samples. */
+        const val EFFICIENCY_IDLE_S: Double = 30.0
+        const val EFFICIENCY_SHORT_S: Double = 30.0
+        const val EFFICIENCY_VLM_S: Double = 30.0
+        const val POWER_SAMPLE_MS: Long = 100L
+
+        /** Per-run latencies are listed for slow paths only (the detector runs ~800 times in a window). */
+        const val MAX_LISTED_LATENCIES: Int = 100
 
         /** nfr.md Thermal: "records fps every 5 s". */
         const val SOAK_SAMPLE_PERIOD_MS: Long = 5_000L
@@ -364,6 +574,65 @@ internal class BenchmarkRunner(
         private const val FALLBACK_WIDTH = 640
         private const val FALLBACK_HEIGHT = 480
     }
+}
+
+/**
+ * Battery current and voltage through public APIs (the kernel's power_supply nodes are closed to adb and apps):
+ * `BatteryManager.BATTERY_PROPERTY_CURRENT_NOW` (documented in µA; some vendors report mA, see [EnergyMath.amps]) and
+ * the sticky `ACTION_BATTERY_CHANGED` voltage in mV. The fuel gauge averages internally, so short windows are noisy.
+ */
+internal class PowerMeter(private val app: Application) {
+    private val battery = app.getSystemService(BatteryManager::class.java)
+    var unitNote: String? = null
+        private set
+
+    fun amps(): Double? {
+        val raw = runCatching { battery?.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) }.getOrNull()
+            ?: return null
+        if (raw == Long.MIN_VALUE || raw == 0L) return null
+        if (unitNote == null) unitNote = "first raw CURRENT_NOW=$raw (${EnergyMath.unitOf(raw)})"
+        return EnergyMath.amps(raw)
+    }
+
+    fun volts(): Double? = runCatching {
+        app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            ?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1)?.takeIf { it > 0 }?.div(1000.0)
+    }.getOrNull()
+}
+
+/** Pure energy arithmetic for the efficiency protocol (unit-tested). */
+internal object EnergyMath {
+    /** Below this magnitude a CURRENT_NOW value is taken as mA, not µA: a headset never draws under 20 mA. */
+    private const val MILLIAMP_CEILING = 20_000L
+
+    fun unitOf(raw: Long): String = if (kotlin.math.abs(raw) < MILLIAMP_CEILING) "mA" else "µA"
+
+    /** Amperes drawn, sign dropped (vendors disagree on whether discharge is negative). */
+    fun amps(raw: Long): Double = kotlin.math.abs(raw).toDouble() / if (kotlin.math.abs(raw) < MILLIAMP_CEILING) 1e3 else 1e6
+
+    /**
+     * Energy per operation in mJ: (window power − idle power) × window time / operations. `idlePowerW = 0` gives the
+     * gross figure. `null` when power or operations are missing; a negative net (noise below idle) is reported as is.
+     */
+    fun perOpMillijoules(avgPowerW: Double?, idlePowerW: Double?, wallMs: Long, ops: Int): Double? {
+        if (avgPowerW == null || idlePowerW == null || ops <= 0 || wallMs <= 0) return null
+        return (avgPowerW - idlePowerW) * wallMs / ops
+    }
+
+    /** Nominal Li-ion cell voltage, used only when the battery reports 0 V (the Galaxy XR pack does). */
+    const val NOMINAL_CELL_VOLTS: Double = 3.85
+
+    /**
+     * Charge per operation in mC (measured, unlike energy): (window current − idle current) in A × window ms / ops, since
+     * A × ms = mC. `idleAmps = 0` gives the gross figure. `null` when current or operations are missing.
+     */
+    fun chargePerOpMillicoulombs(avgAmps: Double?, idleAmps: Double?, wallMs: Long, ops: Int): Double? {
+        if (avgAmps == null || idleAmps == null || ops <= 0 || wallMs <= 0) return null
+        return (avgAmps - idleAmps) * wallMs / ops
+    }
+
+    /** Average CPU cores busy over the window: process CPU time / wall time. */
+    fun cores(cpuMs: Long, wallMs: Long): Double? = if (wallMs <= 0) null else cpuMs.toDouble() / wallMs
 }
 
 /**

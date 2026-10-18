@@ -12,7 +12,10 @@
 #   scripts/benchmark.sh --serial <serial> ...
 #
 # App-side contract (R5 implements `diagnostics/BenchmarkReceiver`, debug builds only):
-#   broadcast  : am broadcast -a com.vysion.xr.BENCH --es model <vlm|detector|soak> --ei runs <n> --ei seconds <s>
+#   broadcast  : am broadcast -n com.vysion.xr/.diagnostics.BenchmarkReceiver -a com.vysion.xr.BENCH
+#                --es model <vlm|detector|soak|ocr|asr|efficiency> --ei runs <n> --ei seconds <s> [--ez hold true]
+#                (explicit -n: an implicit broadcast is dropped, "Background execution not allowed"; hold keeps an
+#                unworn, cached app from being frozen, max ~60 s per held run; docs/benchmarks.md "On-device efficiency")
 #   result file: files/bench/<model>-latest.json written by the app, schema:
 #     { "model": "vlm", "runs": 20, "latencies_ms": [..], "median_ms": .., "p90_ms": .., "load_ms": ..,
 #       "file_bytes": .., "backend": "XNNPACK", "quantization": "..", "max_new_tokens": 60,
@@ -71,7 +74,7 @@ echo "== $device · airplane mode on · model=$MODEL runs=$RUNS soak=${SOAK}s ==
 "$ADB" shell am start -n "$APP_ID/.MainActivity" >/dev/null
 sleep 3
 "$ADB" shell run-as "$APP_ID" rm -f "$result_remote" 2>/dev/null || true
-"$ADB" shell am broadcast -a com.vysion.xr.BENCH --es model "$MODEL" --ei runs "$RUNS" --ei seconds "$SOAK" >/dev/null
+"$ADB" shell am broadcast -n "$APP_ID/.diagnostics.BenchmarkReceiver" -a com.vysion.xr.BENCH --es model "$MODEL" --ei runs "$RUNS" --ei seconds "$SOAK" >/dev/null
 
 # Sample PSS from outside while the app works; stop when the result file appears (or after the soak time + grace).
 peak=0

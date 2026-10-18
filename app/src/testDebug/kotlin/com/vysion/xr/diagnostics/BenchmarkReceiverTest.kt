@@ -13,7 +13,7 @@ import org.junit.Test
 class BenchmarkReceiverTest {
 
     @Test
-    fun `request accepts only the three models and clamps the ints`() {
+    fun `request accepts only the known models and clamps the ints`() {
         assertNull(BenchmarkRequest.parse(null, 20, 0))
         assertNull(BenchmarkRequest.parse("VLM", 20, 0))
         assertNull(BenchmarkRequest.parse("llama", 20, 0))
@@ -22,6 +22,28 @@ class BenchmarkReceiverTest {
         assertEquals(BenchmarkRequest(BenchmarkModel.SOAK, 1_000, 600), BenchmarkRequest.parse("soak", 99_999, 600))
         assertEquals("vlm-latest.json", BenchmarkModel.VLM.fileName)
         assertEquals("soak-latest.json", BenchmarkModel.SOAK.fileName)
+        assertEquals(BenchmarkRequest(BenchmarkModel.EFFICIENCY, 20, 0), BenchmarkRequest.parse("efficiency", 20, 0))
+        assertEquals(BenchmarkRequest(BenchmarkModel.OCR, 20, 0), BenchmarkRequest.parse("ocr", 20, 0))
+    }
+
+    @Test
+    fun `energy per op is the power above idle times the window, per operation`() {
+        // 3.5 W while inferring, 2.0 W idle, 10 s window, 20 inferences → 1.5 W × 10 s / 20 = 750 mJ each.
+        assertEquals(750.0, EnergyMath.perOpMillijoules(3.5, 2.0, 10_000, 20)!!, 1e-9)
+        assertEquals(1_750.0, EnergyMath.perOpMillijoules(3.5, 0.0, 10_000, 20)!!, 1e-9) // gross
+        assertNull(EnergyMath.perOpMillijoules(null, 2.0, 10_000, 20))
+        assertNull(EnergyMath.perOpMillijoules(3.5, 2.0, 10_000, 0))
+        assertEquals(2.5, EnergyMath.cores(25_000, 10_000)!!, 1e-9)
+        // 3.2 A while inferring, 2.9 A idle, 30 s, 60 ops → 0.3 A × 30 000 ms / 60 = 150 mC each.
+        assertEquals(150.0, EnergyMath.chargePerOpMillicoulombs(3.2, 2.9, 30_000, 60)!!, 1e-9)
+    }
+
+    @Test
+    fun `battery current is read as µA or mA by magnitude, sign dropped`() {
+        assertEquals(1.2, EnergyMath.amps(-1_200_000), 1e-9) // µA, discharging negative
+        assertEquals(1.2, EnergyMath.amps(1_200), 1e-9) // mA
+        assertEquals("µA", EnergyMath.unitOf(-1_200_000))
+        assertEquals("mA", EnergyMath.unitOf(1_200))
     }
 
     @Test

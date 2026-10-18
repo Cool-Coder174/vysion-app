@@ -11,9 +11,49 @@ Protocol (SRS §7): **20 runs per model on the headset in airplane mode; report 
 | Detector: YOLOv8n Open Images V7, 320×320 (`ml/export/export_detector_oiv7.sh`) | fp32 | XNNPACK | 14.1 MB | 2 ms (mmap) | dev runs: 95–160 ms per `detect()` incl. Kotlin letterbox + decode + NMS (960×960 input) | not measured | not measured | 3 (dev) | Galaxy XR | 2026-10-17 | no |
 | Detector: same model, FP32 (`detector` row), paired with the int8 row below | fp32 | XNNPACK | 14.1 MB | 22 ms (mmap + `loadMethod`) | dev runs, not the protocol: 93.0 ms per `detect()` (960×960 input) | 111 ms | not measured | 30 (dev) | Galaxy XR | 2026-10-18 | no |
 | Detector: same model, int8 (`detector-int8` row, `export_detector_oiv7.sh --int8`; the shipping default since 2026-10-18) | int8 (static 8-bit activations, per-channel 8-bit weights, decode fp32) | XNNPACK | 3.7 MB | 12 ms (mmap + `loadMethod`) | dev runs, not the protocol: 55.0 / 54.0 ms per `detect()` (960×960 input) | 70 / 62 ms | not measured | 2 × 30 (dev) | Galaxy XR | 2026-10-18 | no |
+| **Protocol, 2026-10-18 (airplane mode, unworn):** VLM LFM2.5-VL-450M, DESCRIBE prompt on `files/smoke/scene.png` 960×960, 60 max tokens | 8da4w | XNNPACK | 648.9 MB | 4.56 s cold | **7.18 s** (range 7.08–8.04 s) | 7.27 s | 1,586 MB (1,838 MB in one window) | 20 | Galaxy XR | 2026-10-18 | yes |
+| **Protocol:** OCR PP-OCRv6 small, `readText` on `files/smoke/sign.png` 960×720 (3 lines) | int8 | XNNPACK | 23.9 MB | 0.77 s cold | **780 ms** | 814 ms | 964 MB (process, VLM resident) | 38 | Galaxy XR | 2026-10-18 | yes |
+| **Protocol:** Detector YOLOv8n OIV7 int8 (shipping), `detect()` on `files/smoke/door1.png` 768×1024 → 320×320 | int8 | XNNPACK | 3.7 MB | 12 ms cold | **34 ms** | 49 ms | 686 MB (process) | 796 | Galaxy XR | 2026-10-18 | yes |
+| **Protocol:** Voice Whisper-tiny (`asr.pte`, plain `Module`s), "read this" (0.57 s clip, padded to the 30 s window), VAD skipped | fp32 | XNNPACK | 231 MB (+ 1.3 MB VAD) | 4.21 s cold | **1.50 s** | 1.53 s | 967 MB (process) | 20 | Galaxy XR | 2026-10-18 | yes |
 | VLM fallback (smaller `LlmModule`-compatible export), only if RK-2 triggers | not measured | not measured | not measured | not measured | not measured | not measured | not measured | 0 | Galaxy XR | | |
 
 VLM median/p90 = wall time of `InferenceEngine.describe(still, READ, 60)` from the debug `BenchmarkReceiver` (a fresh `Bitmap` per run, full generation, no TTS). The input is a live `captureStill()`, so point the headset at a printed sign for the whole run; without a camera the receiver uses a synthetic dark-gray frame (`vysion.bench: input: captureStill unavailable; synthetic …`), on which READ answers "No text found" in a few tokens: such a run is not pasted here. No bundled frame exists yet (r5 page P1 item). Capture → first spoken word is the NFR row below, taken from the `vysion.latency: read capture->first-word <ms> ms` / `describe capture->first-word <ms> ms` lines (`MainActivity`, from `ModeController.firstWordLatency`; the VLM answer is spoken sentence by sentence while it generates, so this is prefill + the first sentence, not the whole answer). Detector median/p90 = wall time of one `detect()` on one frame.
+
+## On-device efficiency: energy per inference (2026-10-18)
+
+Debug `BenchmarkReceiver --es model efficiency --es path <idle|detector|ocr|asr|vlm> --ez hold true` (main after
+4168efe), airplane mode on, **nobody wearing the headset** (display and passthrough off, so the idle baseline is lower
+than in use), models resident, battery 25 → 23 %. Each path runs back to back for a 30 s window on a fixed smoke input;
+nothing is spoken. Latency, CPU and memory come from the app; **current is the whole device's**, read afterwards from
+`dumpsys batterystats --history` (the battery pack reports 0 V and the app's `BatteryManager.CURRENT_NOW` is empty, so the
+system's gauge is the only source; it updates every ~5 s, 4–10 points per window). Charge per inference is measured
+(net current above idle × window ÷ inferences); **energy is an estimate** at a nominal 3.85 V cell.
+
+| Path | Inferences in window | Median | p90 | Device current | Net above idle | Charge per inference | ~Energy per inference | CPU cores busy | Process PSS | Thermal |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Idle (app running, models resident) | — | — | — | 966 mA (~3.7 W) | — | — | — | 0.09 | 600 MB | none |
+| Detector int8 (Navigation, per frame) | 796 | 34 ms | 49 ms | 2,474 mA | +1,508 mA | 57 mC | ~0.22 J | 1.83 | 686 MB | none |
+| OCR PP-OCRv6 (one Read) | 38 | 780 ms | 814 ms | 3,570 mA | +2,604 mA | 2.1 C | ~8 J | 1.59 | 964 MB | none |
+| Whisper-tiny (one voice command) | 20 | 1.50 s | 1.53 s | 4,176 mA | +3,210 mA | 4.8 C | ~19 J | 1.89 | 967 MB | none |
+| VLM LFM2.5-VL-450M (one Describe, 60 tokens) | 5 | 7.04 s | 8.00 s | 4,411 mA | +3,446 mA | 25 C | ~96 J | 1.92 | 1,838 MB | none |
+
+What it says:
+- **The VLM dominates**: one Describe costs about as much charge as 440 detector frames or 12 Reads. A cloud Describe
+  (0.9–1.4 s to the first chunk, "Cloud Describe" below) should spend far less of it on the headset (JPEG encode and
+  radio only; not measured), which is the efficiency case for the opt-in cloud path; the on-device path stays the
+  private, offline default.
+- **Navigation is cheap**: 34 ms per frame leaves headroom far past the 5 fps target; at 10 fps the detector adds about
+  +0.5 A over idle (1,508 mA × 0.34 s/s, estimate from this table).
+- **Whisper costs ~5 C per command because the clip is padded to 30 s**: a shorter encoder window is the obvious win.
+- All paths sit near 2 busy cores (XNNPACK, 4 threads), and nothing heated past `none` in these windows (unworn, ~30 °C
+  battery). Peak memory with everything resident, 1.84 GB, is under the 4 GB NFR.
+- Not measured: worn (display + passthrough on) idle and inference current, a sustained soak, and the Silero VAD alone.
+
+Reproduce: copy `ml/models.lock` to `app/src/main/assets/models/models.lock` before building (a stale copy loaded the FP32
+detector and no Whisper the first time), push a 16 kHz mono `files/smoke/asr.wav`, then for each path
+`adb shell am broadcast -n com.vysion.xr/.diagnostics.BenchmarkReceiver -a com.vysion.xr.BENCH --es model efficiency --es
+path <p> --ez hold true` and read `files/bench/efficiency-latest.json`. Broadcasts must name the receiver (`-n`): an
+implicit one is dropped ("Background execution not allowed"), which also affected `scripts/benchmark.sh` (fixed).
 
 ## Detector int8 vs FP32 (2026-10-18)
 
@@ -142,7 +182,7 @@ new row plus `-Pdetector=`); (2) a door-only floor: decode at 0.15 for the door 
 | Audio Description capture → first spoken word | ≤ 8 s | dev runs, not the protocol, worn, the headset VLM answering: 8.71, 9.79, 10.12 and 11.13 s (prefill 7.1–10.2 s; its vision encoder took 5.9–8.2 s, against 4.5 s in the 2026-10-17 dev runs, cause not measured). The cloud answering: not measured worn (every Gemini request at 11:41–11:43 got HTTP 429, free-tier quota; "Cloud Describe" below) | miss in 4 development runs (Wi-Fi on, not airplane mode) | `vysion.latency: describe capture->first-word`, worn Galaxy XR SM-I610, 2026-10-18: 02:33 and 07:59 with cloud off; 11:41 and 11:42 with cloud on, Gemini 429, headset fallback |
 | Detector throughput during Navigation | ≥ 5 fps | dev run, not the protocol: ~11 fps live (70–150 ms per frame) | pass in 1 development run (Wi-Fi on) | `vysion.latency` detect, worn Galaxy XR SM-I610, 2026-10-17 |
 | Proximity warning after threshold crossed | ≤ 300 ms | 16–40 ms depth copy → cue emitted (≈30 cues, 3 runs); a later worn run 17–114 ms; earcon/speech not included | pass for the R3 part (development runs, Wi-Fi on, not airplane mode) | `vysion.latency: proximity cue … after the depth sample`, Galaxy XR SM-I610, 2026-10-17 |
-| App resident memory with VLM loaded | ≤ 4 GB | not measured | | |
+| App resident memory with VLM loaded | ≤ 4 GB | 1.84 GB peak PSS with the VLM, OCR, detector and Whisper resident during a Describe window; 1.55–1.59 GB across 20 Describes | pass (protocol, airplane mode, unworn) | debug `BenchmarkReceiver` efficiency windows, Galaxy XR SM-I610, 2026-10-18 ("On-device efficiency") |
 | 10 min continuous Navigation, detector ≥ 3 fps | pass | not measured | | |
 | "stop" interrupts speech | ≤ 300 ms | not measured | | |
 
