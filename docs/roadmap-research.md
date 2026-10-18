@@ -65,8 +65,9 @@ source and Maven, GitHub projects Isaac pointed to), plus probes run with `adb` 
 
 **Status (2026-10-18):** built as FR-N9 without Overpass or Wikipedia (`MapPlaceSource`, `VectorTile`,
 `SurroundingsFinder`; ADR-0010 rows "Where am I map" / "Where am I wording"). On the headset the tile lookup takes
-0.48–0.87 s cold and 0.13 s warm, and Gemini's first words 0.76–2.49 s (smoke runs, `docs/benchmarks.md`); a live
-Wi-Fi fix still needs a wearer with Location on.
+0.48–0.87 s cold and 0.13 s warm, and Gemini's first words 0.76–2.49 s (smoke runs); worn, from a live Wi-Fi fix,
+"where am I" spoke its first word 4.56 s after the command (fix 1.78 s; `docs/benchmarks.md`). It needs Google Location
+Accuracy on.
 
 Measured from this laptop (San Francisco Civic Center), 2026-10-18:
 

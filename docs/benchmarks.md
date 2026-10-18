@@ -113,11 +113,20 @@ Template (offline): "You are near Larkin Street, between Grove Street and Fulton
 Phenomenal Woman, about 10 meters; Larkin Street & Grove Street, about 20 meters; and Double L Excentric Gyratory,
 about 30 meters."
 
+Worn, live (Isaac, 2026-10-18 07:58, Location on with Google Location Accuracy on, Wi-Fi; one run, asked through the
+debug `--es model ask-whereami` broadcast, which injects the same `Command.WhereAmI` as the voice):
+
 | Step | Measured |
 |---|---|
-| Wi-Fi location fix (fused provider, Location on) | not measured (Location is off on the headset; a fix needs the app in the foreground, i.e. worn) |
-| "where am I" recognized → first spoken word (`vysion.latency: whereami command->first-word`) | not measured (needs a wearer) |
+| Wi-Fi location fix (fused provider, fresh) | 1.78 s |
+| Tiles (2: the fix was within 300 m of an edge; 958,109 bytes) | download 403 ms, decode 696 ms, finder 473 ms |
+| Gemini wording, first chunk | 0.89 s |
+| "where am I" recognized → first spoken word (`vysion.latency: whereami command->first-word`) | **4.56 s**, worded by the cloud |
 | Offline (airplane mode): tiles from memory + template | not checked on the device (JVM tests only: `ModeControllerTest`, `CloudDescribeEngineTest`, `CuesTest`) |
+
+Found on the way: with Google Location Accuracy off, Android's network provider is `allowed=false` and the fused
+provider returns nothing after its 10 s, so the wearer hears the no-fix sentence (02:03 run, 10.05 s to that sentence).
+The headset needs Settings → Location → Location services → Google Location Accuracy on.
 
 ## Voice commands (ADR-0011; Whisper-tiny + Silero VAD on the headset)
 
