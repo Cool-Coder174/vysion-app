@@ -125,7 +125,9 @@ debug `--es model ask-whereami` broadcast, which injects the same `Command.Where
 | "where am I" recognized → first spoken word (`vysion.latency: whereami command->first-word`) | **4.56 s**, worded by the cloud |
 | Second worn run (10:14, 4 tiles: fix near a corner; 1,260,326 bytes) | fix 1.23 s; download 416 ms, decode 606 ms, finder 296 ms; Gemini first chunk 1.15 s; **3.78 s** command → first word, cloud |
 | Third and fourth worn runs (10:41, 11:02; same 4 tiles, main 3493450 / 7161952) | fix 1.32 s / 1.25 s; download 367 / 384 ms, decode 608 / 680 ms, finder 287 / 329 ms; Gemini first chunk 1.13 / 0.92 s; **3.79 s / 3.71 s** command → first word, cloud |
-| Offline (airplane mode): tiles from memory + template | not checked on the device (JVM tests only: `ModeControllerTest`, `CloudDescribeEngineTest`, `CuesTest`) |
+| Fifth worn run (11:21, main 7161952) | fix 1.44 s; 4 tiles downloaded 431 ms, decode 542 ms, finder 248 ms; Gemini 0.86 s; **3.68 s**, cloud |
+| Asked again 20 s later (fix cached, tiles in memory) | fix 4 ms; no download; finder 251 ms; Gemini 0.84 s; **1.22 s** command → first word, cloud |
+| Offline (airplane mode): tiles from memory + template | not checked on the device (JVM tests only: `ModeControllerTest`, `CloudDescribeEngineTest`, `CuesTest`); skipped by Isaac before the demo, which runs on Wi-Fi |
 
 Found on the way: with Google Location Accuracy off, Android's network provider is `allowed=false` and the fused
 provider returns nothing after its 10 s, so the wearer hears the no-fix sentence (02:03 run, 10.05 s to that sentence).
