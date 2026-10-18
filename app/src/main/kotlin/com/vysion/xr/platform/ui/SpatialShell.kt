@@ -217,6 +217,8 @@ private fun MarkerTestTool(graph: AppGraph) {
     var status by remember { mutableStateOf("Place marker ahead") }
     val liveFlow = remember { graph.perception?.debugLive ?: kotlinx.coroutines.flow.MutableStateFlow(null) }
     val live by liveFlow.collectAsState()
+    val pingFlow = remember { graph.perception?.debugPing ?: kotlinx.coroutines.flow.MutableStateFlow("ping: no XR") }
+    val ping by pingFlow.collectAsState()
     Column(
         verticalArrangement = Arrangement.spacedBy(Space.s),
         modifier = Modifier.glass(RoundedCornerShape(Radius.tile)).padding(Space.m),
@@ -237,6 +239,7 @@ private fun MarkerTestTool(graph: AppGraph) {
             textStyle = SpatialType.label,
             height = Target.spatial,
         )
+        Text(ping, color = Ink.tertiary, style = SpatialType.footnote)
     }
 }
 

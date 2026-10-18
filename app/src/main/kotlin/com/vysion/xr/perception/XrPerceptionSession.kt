@@ -2,6 +2,7 @@ package com.vysion.xr.perception
 
 import android.app.Activity
 import android.app.Application
+import android.content.res.AssetManager
 import android.media.SoundPool
 import android.os.SystemClock
 import android.util.Log
@@ -9,6 +10,10 @@ import androidx.xr.arcore.Anchor
 import androidx.xr.arcore.AnchorCreateSuccess
 import androidx.xr.arcore.ArDevice
 import androidx.xr.arcore.Depth
+import androidx.xr.arcore.Hand
+import androidx.xr.arcore.HandJointType
+import androidx.xr.arcore.Plane
+import androidx.xr.arcore.PlaneLabel
 import androidx.xr.arcore.RenderViewpoint
 import androidx.xr.arcore.TrackingState
 import androidx.xr.runtime.AnchorPersistenceMode
@@ -22,9 +27,15 @@ import androidx.xr.runtime.Session
 import androidx.xr.runtime.SessionConfigureSuccess
 import androidx.xr.runtime.SessionCreateSuccess
 import androidx.xr.runtime.XrDevice
+import androidx.xr.runtime.math.FloatSize2d
 import androidx.xr.runtime.math.Pose
 import androidx.xr.runtime.math.Vector3
+import androidx.xr.scenecore.AnchorSpace
+import androidx.xr.scenecore.Entity
+import androidx.xr.scenecore.PanelEntity
+import androidx.xr.scenecore.PointSourceParams
 import androidx.xr.scenecore.SpatialCapability
+import androidx.xr.scenecore.SpatialSoundPool
 import androidx.xr.scenecore.scene
 import com.vysion.xr.core.AnchorId
 import kotlinx.coroutines.CancellationException
@@ -43,6 +54,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -417,29 +430,14 @@ class XrPerceptionSession(
     override val depthFrames: Flow<DepthFrame> = _depthFrames.asSharedFlow()
 
     /**
-     * FR-N5 plane stream.
-     *
-     * Feeder to implement (stack.md R3 "Planes"):
-     * ```
-     * Plane.subscribe(session).collect { set ->
-     *     _planes.value = set.map { p ->
-     *         val s = p.state.value
-     *         PlaneObservation(id = p.hashCode().toString(), kind = s.label.toPlaneKind(),
-     *             tracking = s.trackingState.toTracking(),
-     *             center = s.centerPose.translation.v3(), normal = s.centerPose.up.v3(),
-     *             axisX = s.centerPose.right.v3(), axisZ = (s.centerPose.forward * -1f).v3(),
-     *             polygon = s.vertices.map { Vec2(it.x, it.y) }, timestampNanos = SystemClock.elapsedRealtimeNanos())
-     *     }
-     * }
-     * ```
+     * FR-N5 plane stream: `Plane.subscribe(session)` sampled every [PLANE_SAMPLE_MS]; subsumed planes
+     * are dropped. `center`/`normal` from the center pose (normal = local +Y), polygon in local X/Z.
      */
     override val planes: StateFlow<List<PlaneObservation>> = _planes.asStateFlow()
 
     /**
-     * Hand stream (R1 consumes pinch through its own `HandSource` later; R3's FR-D4 pointing is P2).
-     *
-     * Feeder to implement (stack.md R3 "Hands"): `Hand.left(session).state` and `Hand.right(session).state`,
-     * joints transformed with `session.scene.perceptionSpace.transformPoseTo(pose, session.scene.activitySpace)`.
+     * Hand stream from `Hand.left/right(session).state`: thumb tip, index tip and index proximal joints
+     * (R1's pinch, R3's FR-D4 pointing). Assumed to share [headPose]'s perception space (UNVERIFIED).
      */
     override val hands: Flow<HandObservation> = _hands.asSharedFlow()
 
@@ -604,6 +602,9 @@ class XrPerceptionSession(
                     feeders = scope.launch {
                         launchDepthFeed(xrSession)
                         launchHeadPoseFeed(xrSession)
+                        launchPlaneFeed(xrSession)
+                        // Hand feed (launchHandFeed) stays off until a consumer exists (FR-D4 pointing needs the VLM):
+                        // two hands at the frame rate is load with no reader.
                     }
                     _state.value = SessionState.RUNNING
                     Log.i(TAG, "XR session configured successfully; state=${_state.value}")
@@ -635,8 +636,13 @@ class XrPerceptionSession(
             val depth = if (stereo) Depth.left(xrSession) else Depth.mono(xrSession)
             val view = if (stereo) RenderViewpoint.left(xrSession) else RenderViewpoint.mono(xrSession)
 
+            var lastCopyNanos = 0L
             depth.state.collect { state ->
                 val map = state.smoothDepthMap ?: return@collect
+                // Consumers sample at 10 Hz; copying every runtime frame only makes garbage.
+                val nowNanos = SystemClock.elapsedRealtimeNanos()
+                if (nowNanos - lastCopyNanos < DEPTH_COPY_PERIOD_NANOS) return@collect
+                lastCopyNanos = nowNanos
                 val fov = view.state.value.fieldOfView
                 val fovDeg = FovDeg(
                     horizontal = Math.toDegrees((fov.angleRight - fov.angleLeft).toDouble()).toFloat(),
@@ -708,6 +714,76 @@ class XrPerceptionSession(
         }
     }
 
+    private fun CoroutineScope.launchPlaneFeed(xrSession: Session): Job = launch {
+        try {
+            val known = Plane.subscribe(xrSession)
+            var loggedFirst = false
+            // The set only emits when planes appear or go; poses and polygons change in place, so sample.
+            while (isActive) {
+                val now = SystemClock.elapsedRealtimeNanos()
+                _planes.value = known.value.mapNotNull { plane ->
+                    val st = plane.state.value
+                    if (st.subsumedBy != null) return@mapNotNull null
+                    val pose = st.centerPose
+                    PlaneObservation(
+                        id = plane.hashCode().toString(),
+                        kind = st.label.toPlaneKind(),
+                        tracking = st.trackingState.toTracking(),
+                        center = pose.translation.toVec3(),
+                        normal = pose.up.toVec3(),
+                        axisX = pose.right.toVec3(),
+                        axisZ = pose.backward.toVec3(),
+                        polygon = st.vertices.map { Vec2(it.x, it.y) },
+                        timestampNanos = now,
+                    )
+                }
+                if (!loggedFirst && _planes.value.isNotEmpty()) {
+                    Log.i(TAG, "planes tracked: ${_planes.value.groupingBy { it.kind }.eachCount()} (FR-N5)")
+                    loggedFirst = true
+                }
+                delay(PLANE_SAMPLE_MS)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "XR plane feed stopped; wall and floor cues are unavailable", e)
+        }
+    }
+
+    private fun CoroutineScope.launchHandFeed(xrSession: Session): Job = launch {
+        for ((side, hand) in listOf(HandSide.LEFT to Hand.left(xrSession), HandSide.RIGHT to Hand.right(xrSession))) {
+            launch {
+                try {
+                    hand.state.collect { st ->
+                        val joints = st.handJoints
+                        _hands.tryEmit(
+                            HandObservation(
+                                side = side,
+                                tracking = st.trackingState.toTracking(),
+                                thumbTip = joints[HandJointType.THUMB_TIP]?.translation?.toVec3(),
+                                indexTip = joints[HandJointType.INDEX_TIP]?.translation?.toVec3(),
+                                indexProximal = joints[HandJointType.INDEX_PROXIMAL]?.translation?.toVec3(),
+                                timestampNanos = SystemClock.elapsedRealtimeNanos(),
+                            ),
+                        )
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "XR $side hand feed stopped", e)
+                }
+            }
+        }
+    }
+
+    private fun PlaneLabel.toPlaneKind(): PlaneKind = when (this) {
+        PlaneLabel.WALL -> PlaneKind.WALL
+        PlaneLabel.FLOOR -> PlaneKind.FLOOR
+        PlaneLabel.CEILING -> PlaneKind.CEILING
+        PlaneLabel.TABLE -> PlaneKind.TABLE
+        else -> PlaneKind.UNKNOWN
+    }
+
     private fun Vector3.toVec3() = Vec3(x, y, z)
 
     private fun TrackingState.toTracking(): Tracking = when (this) {
@@ -720,12 +796,14 @@ class XrPerceptionSession(
     private var debugAnchorJob: Job? = null
     val debugLive = MutableStateFlow<String?>(null)
     var debugLastAnchor: AnchorId? = null
+    val debugPing = MutableStateFlow("ping: not attached")
 
     suspend fun debugPlaceAnchorAhead(): String {
         val head = _headPose.value ?: return "no head pose yet"
         val point = sampleDepthAlongBearing(head.yawDeg, head.pitchDeg) ?: return "no trusted depth ahead"
         val id = createAnchor(point) ?: return "anchor refused"
         debugLastAnchor = id
+        debugShowMarker(id)
         val start = sqrt(
             (point.x - head.position.x).let { it * it } + (point.y - head.position.y).let { it * it } +
                 (point.z - head.position.z).let { it * it },
@@ -748,6 +826,31 @@ class XrPerceptionSession(
         }
         Log.i(TAG, "DEBUG anchor ${id.value} placed %.2f m ahead".format(start))
         return "marker placed %.2f m ahead".format(start)
+    }
+
+    // TEMP-DEBUG (test only, remove before the demo): a visible red label at the anchor.
+    private var debugMarker: Pair<AnchorSpace, PanelEntity>? = null
+
+    private fun debugShowMarker(id: AnchorId) {
+        val xrSession = session ?: return
+        val anchor = nativeAnchors[id] ?: return
+        debugMarker?.let { (space, panel) -> panel.dispose(); space.dispose() }
+        debugMarker = try {
+            val label = android.widget.TextView(app).apply {
+                text = "MARKER"
+                textSize = 48f
+                setTextColor(android.graphics.Color.WHITE)
+                setBackgroundColor(android.graphics.Color.RED)
+                gravity = android.view.Gravity.CENTER
+            }
+            val space = AnchorSpace.create(xrSession, anchor)
+            val panel = PanelEntity.create(xrSession, label, FloatSize2d(0.3f, 0.15f), "debugMarker", Pose(), space)
+            space to panel
+        } catch (e: RuntimeException) {
+            Log.e(TAG, "DEBUG marker label failed", e)
+            null
+        }
+        Log.i(TAG, "DEBUG marker label shown=${debugMarker != null}")
     }
 
     /**
@@ -856,47 +959,55 @@ class XrPerceptionSession(
 
     // ── SceneCore spatial audio hook for SpatialAudioPinger (A-6; stack.md R3 "Spatial audio", "Entities") ──
 
+    /** Anchor spaces parenting the ping entities, by anchor; disposed with the entity. */
+    private val anchorSpaces = HashMap<AnchorId, AnchorSpace>()
+
+    /** For [SpatialAudioPinger]'s `SoundPool.load(assets.openFd(...))`; package-internal (ADR-0005). */
+    internal val assets: AssetManager get() = app.assets
+
     /**
-     * Real implementation (VERIFIED names):
-     * ```
-     * val anchor = nativeAnchors[id] ?: return null
-     * val space = AnchorSpace.create(session, anchor)                       // scenecore rc02
-     * val entity = Entity.create(session, name)                              // 1-4 arg overloads exist
-     * space.addChild(entity)
-     * return AnchorEntity(id, entity)
-     * ```
+     * An entity parented under `AnchorSpace.create(session, anchor)` so a sound played from it comes
+     * from the anchor. `null` without a session or a known native anchor.
      */
     internal fun createAnchorEntity(id: AnchorId, name: String): AnchorEntity? {
-        Log.w(
-            TAG,
-            "TODO(FR-N3) XrPerceptionSession.createAnchorEntity: AnchorSpace.create(session, anchor) + " +
-                "Entity.create(session, \"$name\") + addChild",
-        )
-        return null
+        val xrSession = session ?: return null
+        val anchor = nativeAnchors[id] ?: return null
+        return try {
+            val space = AnchorSpace.create(xrSession, anchor)
+            val entity = Entity.create(xrSession, name)
+            space.addChild(entity)
+            anchorSpaces[id] = space
+            AnchorEntity(id, entity)
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "anchor entity for ${id.value} not created", e)
+            null
+        }
     }
 
-    /** `(entity.native as Entity).dispose()`; the `AnchorSpace` is disposed with the anchor. */
     internal fun disposeAnchorEntity(entity: AnchorEntity) {
-        Log.w(TAG, "TODO(FR-N3) XrPerceptionSession.disposeAnchorEntity: entity.dispose()")
+        (entity.native as? Entity)?.dispose()
+        anchorSpaces.remove(entity.anchorId)?.dispose()
     }
 
     /**
-     * Real implementation (VERIFIED signature; defaults are not recoverable from bytecode, pass all four):
-     * ```
-     * if (!session.scene.spatialCapabilities.contains(SpatialCapability.SPATIAL_AUDIO)) return -1   // A-6 fallback
-     * return SpatialSoundPool.play(session = session, soundPool = soundPool, soundID = soundId,
-     *     params = PointSourceParams(), entity = entity.native as Entity,
-     *     volume = 1f, priority = 0, loop = 0, rate = 1f)
-     * ```
-     * Returns the SoundPool stream id, or -1 when spatial audio is unavailable.
+     * `SpatialSoundPool.play` from the entity (all four trailing arguments passed: their defaults are
+     * not recoverable from bytecode). Returns the stream id, or -1 when spatial audio is unavailable.
      */
     internal fun playPointSource(entity: AnchorEntity, soundPool: SoundPool, soundId: Int): Int {
-        Log.w(
-            TAG,
-            "TODO(FR-N3) XrPerceptionSession.playPointSource: SpatialSoundPool.play(session, soundPool, soundID, " +
-                "PointSourceParams(), entity, 1f, 0, 0, 1f)",
+        val xrSession = session ?: return -1
+        val native = entity.native as? Entity ?: return -1
+        if (!xrSession.scene.spatialCapabilities.contains(SpatialCapability.SPATIAL_AUDIO)) return -1 // A-6 fallback
+        return SpatialSoundPool.play(
+            session = xrSession,
+            soundPool = soundPool,
+            soundID = soundId,
+            params = PointSourceParams(),
+            entity = native,
+            volume = 1f,
+            priority = 0,
+            loop = 0,
+            rate = 1f,
         )
-        return -1
     }
 
     companion object {
@@ -904,5 +1015,11 @@ class XrPerceptionSession(
 
         /** How long [start] waits for Compose for XR to publish its Session before creating one. */
         private const val COMPOSE_SESSION_WAIT_MS = 5_000L
+
+        /** Plane snapshot cadence; [XrNavigationEngine] evaluates planes every 500 ms. */
+        private const val PLANE_SAMPLE_MS = 250L
+
+        /** Depth maps are copied at most this often (~12 Hz), just above the 10 Hz proximity loop. */
+        private const val DEPTH_COPY_PERIOD_NANOS = 80_000_000L
     }
 }
