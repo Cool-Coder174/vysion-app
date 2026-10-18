@@ -170,6 +170,25 @@ Put `GEMINI_API_KEY=<that string>` in `local.properties` and rebuild. The app se
 `X-Android-Cert` with every request (`AppGraph.signingCertSha1`); a request without them gets 403. Billing is off on
 `vysion-app`: Gemini's free tier answers, but Maps grounding returns 429 until billing is enabled.
 
+## 6c. See and record what the headset shows
+
+`scripts/record_headset.sh` records, or live-previews, the headset's own picture: your passthrough view plus the app, one
+square frame (checked on the Galaxy XR 2026-10-18: `screenrecord` gives 1920×1920 or the full 2880×2880 at about 36 fps).
+
+```bash
+scripts/record_headset.sh --live            # preview window on the Mac (scrcpy if installed, else ffplay); close it to stop
+scripts/record_headset.sh                   # record until Ctrl-C; saves ~/Movies/Vysion/vysion-<time>.mp4 (1080×1080) + the raw file
+scripts/record_headset.sh --size 2880x2880  # full resolution; --seconds 60 stops by itself; --test records 3 s and says if it is black
+```
+
+- **The headset must be on your head.** With the display off `screenrecord` fails with `INVALID_LAYER_STACK`, and an unworn
+  capture is black; the script says so and checks the first frame.
+- **No audio.** `screenrecord` records video only, so the app's spoken answers are missing. For a demo with sound use the
+  headset's own recorder: Launcher (Top button) → Quick settings → **Screen record** → pick an audio option → Start; stop
+  the same way; the file is in Gallery (pull it from `/sdcard/DCIM` or `/sdcard/Movies` with `adb pull`). Whether that
+  recorder includes the passthrough view is not verified. Or record the Mac's audio from the headset's speaker on the side.
+- **Bystanders appear in the picture.** Keep recordings out of the repo (`docs/demo.md`: do not commit the video).
+
 ## 7. Airplane mode: every benchmark and the demo
 
 The product claim is that Read, Describe and Find the door never need a connection and every optional network feature has an on-device fallback (ADR-0010, which lists each one and what it sends). The manifest declares `INTERNET` and `ACCESS_NETWORK_STATE`, and the overlay prints them (`Network permission: ACCESS_NETWORK_STATE, INTERNET` is the expected value). The benchmarks and the demo still run with the radios off, so every number and every answer comes from the headset and there is nothing to argue about (RK-4: never demo with Wi-Fi on).
