@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.vysion.xr.core.Command
 import com.vysion.xr.core.CommandSource
+import com.vysion.xr.core.Mode
 import com.vysion.xr.platform.ui.LocalDesignPreview
 import com.vysion.xr.platform.ui.LocalOnboardingStart
 import com.vysion.xr.platform.ui.OnboardingHost
@@ -39,7 +40,7 @@ import kotlinx.coroutines.launch
  *   headset, `AppGraph.startPerception(this)` (Session.create needs the resumed Activity, stack.md D7).
  *   `onStop`: [AppGraph.stop] (reversible: taking the headset off and on restarts the modules).
  *   `onDestroy` while finishing: [AppGraph.release] (recognizer, TTS, models).
- * - Logs the two NFR evidence lines: `vysion.latency` (command → action) and `vysion.reliability`
+ * - Logs the NFR evidence lines: `vysion.latency` (command → action, capture → first word) and `vysion.reliability`
  *   (failures the controller recovered from). No frame content is ever logged (ADR-0003).
  * */
 class MainActivity : ComponentActivity() {
@@ -90,6 +91,13 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             graph.modeController.commandLatencyNanos.filterNotNull().collect { nanos ->
                 Log.i(LATENCY_TAG, "command->action ${nanos / NANOS_PER_MS} ms")
+            }
+        }
+        // NFR latency: capture → first spoken word (Read ≤ 6 s, Describe ≤ 8 s), docs/nfr.md.
+        lifecycleScope.launch {
+            graph.modeController.firstWordLatency.filterNotNull().collect { (mode, nanos) ->
+                val command = if (mode == Mode.TEXT_READER) "read" else "describe"
+                Log.i(LATENCY_TAG, "$command capture->first-word ${nanos / NANOS_PER_MS} ms")
             }
         }
         // NFR reliability: every failure the controller spoke and recovered from, tag vysion.reliability.

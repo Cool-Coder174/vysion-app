@@ -161,6 +161,97 @@ class ModeControllerTest {
         assertEquals(listOf(TestPhrasebook.modeAnnounced(Mode.TEXT_READER), READ_ANSWER, READ_ANSWER), f.speaker.said)
     }
 
+    // ── FR-T1 / FR-D1 streaming: speak while the VLM is still generating ─────────────────────────
+
+    @Test
+    fun `describe speaks each sentence as it completes while the VLM is still generating`() = controllerTest { f ->
+        startAndSettle(f)
+        f.engine.streamChunks = listOf("The door", " is 2.", "5 meters", " ahead.", " A chair", " is on the left.")
+        f.engine.streamChunkDelayMs = STREAM_CHUNK_MS
+        val announced = TestPhrasebook.modeAnnounced(Mode.AUDIO_DESCRIPTION)
+        val first = "The door is 2.5 meters ahead."
+        val second = "A chair is on the left."
+        f.commands.inject(Command.Describe)
+
+        // Announcement, capture, prefill; then " A chair" (chunk 5) shows that "ahead." ended a sentence.
+        advanceTimeBy(SAY_MS + CAPTURE_MS + DESCRIBE_MS + 4 * STREAM_CHUNK_MS + 1)
+        assertEquals(listOf(announced, first), f.speaker.said)
+        assertEquals(ModeState.SPEAKING, f.controller.state.value)
+        assertEquals(first, f.controller.transcript.value)
+        assertEquals("one chunk still to generate", 5, f.engine.streamedChunks)
+
+        // The last chunk lands while the first sentence is still being spoken: collection never waits for speech.
+        advanceTimeBy(STREAM_CHUNK_MS)
+        assertEquals(6, f.engine.streamedChunks)
+        assertEquals("$first $second", f.controller.transcript.value)
+        assertEquals(listOf(announced, first), f.speaker.said)
+
+        advanceUntilIdle()
+        assertEquals("two utterances, in order", listOf(announced, first, second), f.speaker.said)
+        assertEquals(ModeState.IDLE, f.controller.state.value)
+        assertEquals(0, f.engine.streamsCancelled)
+    }
+
+    @Test
+    fun `stop mid-stream silences the speaker and cancels the generation`() = controllerTest { f ->
+        startAndSettle(f)
+        f.engine.streamChunks = listOf("A hallway.", " A chair", " on the left.", " A trash can", " on the right.")
+        f.engine.streamChunkDelayMs = STREAM_CHUNK_MS
+        val announced = TestPhrasebook.modeAnnounced(Mode.AUDIO_DESCRIPTION)
+        f.commands.inject(Command.Describe)
+        advanceTimeBy(SAY_MS + CAPTURE_MS + DESCRIBE_MS + STREAM_CHUNK_MS + 1)
+        assertEquals(listOf(announced, "A hallway."), f.speaker.said)
+        assertEquals(ModeState.SPEAKING, f.controller.state.value)
+
+        f.commands.inject(Command.Stop)
+        runCurrent() // no virtual time passes: Stop waits for neither the stream nor the speech (INV-6)
+
+        assertEquals(ModeState.IDLE, f.controller.state.value)
+        assertEquals(1, f.speaker.stopCalls)
+        assertEquals("the generation was cancelled", 1, f.engine.streamsCancelled)
+        advanceUntilIdle()
+        assertEquals("nothing more is spoken", listOf(announced, "A hallway."), f.speaker.said)
+        assertEquals(2, f.engine.streamedChunks)
+        assertFalse(f.speaker.said.contains(TestPhrasebook.inferenceFailed))
+    }
+
+    @Test
+    fun `a stream that never ends a sentence is spoken whole when it ends`() = controllerTest { f ->
+        startAndSettle(f)
+        f.engine.streamChunks = listOf("a red", " chair", " by the window")
+        f.engine.streamChunkDelayMs = STREAM_CHUNK_MS
+        val announced = TestPhrasebook.modeAnnounced(Mode.AUDIO_DESCRIPTION)
+        f.commands.inject(Command.Describe)
+        advanceTimeBy(SAY_MS + CAPTURE_MS + DESCRIBE_MS + STREAM_CHUNK_MS + 1)
+        assertEquals("nothing spoken mid-sentence", listOf(announced), f.speaker.said)
+        assertEquals(ModeState.INFERRING, f.controller.state.value)
+
+        advanceUntilIdle()
+        assertEquals(listOf(announced, "a red chair by the window"), f.speaker.said)
+        assertEquals("a red chair by the window", f.controller.transcript.value)
+        assertEquals(ModeState.IDLE, f.controller.state.value)
+    }
+
+    @Test
+    fun `capture to first spoken word is measured for describe and read, not for the arrival prompt`() =
+        controllerTest { f ->
+            startAndSettle(f)
+            f.navigation.cuesFlow.tryEmit(NavigationCue.Arrived)
+            advanceUntilIdle()
+            assertNull(f.controller.firstWordLatency.value)
+
+            f.commands.inject(Command.Describe)
+            advanceUntilIdle()
+            val describe = f.controller.firstWordLatency.value
+            assertEquals(Mode.AUDIO_DESCRIPTION, describe?.mode)
+            assertTrue(describe!!.nanos >= 0)
+
+            f.engine.cannedText = listOf("Room 101") // the OCR path is measured too
+            f.commands.inject(Command.Read)
+            advanceUntilIdle()
+            assertEquals(Mode.TEXT_READER, f.controller.firstWordLatency.value?.mode)
+        }
+
     // ── NFR reliability ───────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -608,6 +699,7 @@ class ModeControllerTest {
         const val SAY_MS = 100L
         const val CAPTURE_MS = 10L
         const val DESCRIBE_MS = 50L
+        const val STREAM_CHUNK_MS = 10L
         const val READ_ANSWER = "<vlm:read>"
         const val DESCRIBE_ANSWER = "<vlm:describe>"
         const val ARRIVAL_ANSWER = "<vlm:arrival>"
@@ -615,6 +707,38 @@ class ModeControllerTest {
 }
 
 // ── Pure helpers ───────────────────────────────────────────────────────────────────────────────────
+
+class SentenceSplitterTest {
+
+    @Test
+    fun `splits at a terminator followed by whitespace and at newlines, keeping the raw text`() {
+        val splitter = SentenceSplitter()
+        val text = "Wet floor! Is it open? Yes.\nEXIT\nPush bar"
+        val done = splitter.push(text)
+        assertEquals(listOf("Wet floor! ", "Is it open? ", "Yes.\n", "EXIT\n"), done)
+        val rest = splitter.finish()
+        assertEquals("Push bar", rest)
+        assertEquals("nothing lost or added", text, (done + rest).joinToString(""))
+    }
+
+    @Test
+    fun `a decimal is never split, even across chunks`() {
+        val splitter = SentenceSplitter()
+        assertEquals(emptyList<String>(), splitter.push("The door is 2."))
+        assertEquals(emptyList<String>(), splitter.push("5 meters away"))
+        assertEquals(listOf("The door is 2.5 meters away. "), splitter.push(". A chair"))
+        assertEquals("A chair", splitter.finish())
+    }
+
+    @Test
+    fun `a terminator at the end of a chunk waits for the next one, and finish empties the buffer`() {
+        val splitter = SentenceSplitter()
+        assertEquals(emptyList<String>(), splitter.push("Hello."))
+        assertEquals(listOf("Hello. "), splitter.push(" World"))
+        assertEquals("World", splitter.finish())
+        assertEquals("", splitter.finish())
+    }
+}
 
 class DoorVoteTest {
 
@@ -784,7 +908,10 @@ private class TestCommandBus : CommandBus {
     }
 }
 
-/** Records everything; `say` takes [sayMs] of virtual time so SPEAKING is observable. */
+/**
+ * Records everything; `say` takes [sayMs] of virtual time so SPEAKING is observable, and emits the
+ * `onStart`-style progress `AndroidSpeaker` emits (`charStart = charEnd = 0`, not done).
+ */
 private class TestSpeaker(private val sayMs: Long) : Speaker {
     val said = mutableListOf<String>()
     val earcons = mutableListOf<Earcon>()
@@ -792,13 +919,14 @@ private class TestSpeaker(private val sayMs: Long) : Speaker {
     /** Earcons and spoken texts interleaved in call order, for "earcon before words" assertions. */
     val events = mutableListOf<Any>()
     var stopCalls = 0
-    override val progress = MutableSharedFlow<SpeechProgress>()
+    override val progress = MutableSharedFlow<SpeechProgress>(extraBufferCapacity = 16)
     override val locale = MutableStateFlow(Speaker.EN_US)
     override val isSpeaking = MutableStateFlow(false)
 
     override suspend fun say(text: String, interrupt: Boolean) {
         said += text
         events += text
+        progress.tryEmit(SpeechProgress("test-${said.size}", text, charStart = 0, charEnd = 0, done = false))
         isSpeaking.value = true
         try {
             delay(sayMs)

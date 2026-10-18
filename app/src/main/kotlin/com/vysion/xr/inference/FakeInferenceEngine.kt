@@ -7,6 +7,7 @@ import com.vysion.xr.core.InferenceException
 import com.vysion.xr.core.InferenceStats
 import com.vysion.xr.core.ModelInfo
 import com.vysion.xr.core.NormalizedBox
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -51,6 +52,21 @@ class FakeInferenceEngine(
 
     /** Calls to [readText], for the OCR-first tests. */
     var readTextCalls: Int = 0
+
+    /**
+     * When set, every [describeStreaming] plays a VLM decoding tokens: [describeDelayMs] of prefill, then these chunks
+     * [streamChunkDelayMs] apart, all inside the mutex like the real engine, instead of the canned answer's sentences.
+     */
+    var streamChunks: List<String>? = null
+
+    /** Virtual time between two [streamChunks]. */
+    var streamChunkDelayMs: Long = STREAM_CHUNK_DELAY_MS
+
+    /** Chunks of [streamChunks] emitted so far, and streams cancelled before their last chunk (Stop, FR-G4). */
+    var streamedChunks: Int = 0
+        private set
+    var streamsCancelled: Int = 0
+        private set
 
     /** Keyed by prompt text. Defaults cover every `PromptLibrary` prompt; others get [DEFAULT_FOLLOW_UP_ANSWER]. */
     val cannedAnswers: MutableMap<String, String> = linkedMapOf(
@@ -142,8 +158,30 @@ class FakeInferenceEngine(
             }
         }
 
-    /** Emits the canned answer sentence by sentence so R4 can exercise early TTS start (FR-T1). */
+    /**
+     * Emits the canned answer sentence by sentence so R4 can exercise early TTS start (FR-T1), or [streamChunks]
+     * one by one when set.
+     */
     override fun describeStreaming(bitmap: Bitmap, prompt: String, maxNewTokens: Int): Flow<String> = flow {
+        val chunks = streamChunks
+        if (chunks != null) {
+            mutex.withLock {
+                lastPrompt = prompt
+                delay(describeDelayMs)
+                try {
+                    chunks.forEachIndexed { i, chunk ->
+                        if (i > 0) delay(streamChunkDelayMs)
+                        emit(chunk)
+                        streamedChunks++
+                    }
+                } catch (e: CancellationException) {
+                    streamsCancelled++
+                    throw e
+                }
+                describeCalls++
+            }
+            return@flow
+        }
         val text = describe(bitmap, prompt, maxNewTokens)
         val sentences = SENTENCE_SPLIT.split(text).filter { it.isNotBlank() }
         if (sentences.isEmpty()) {

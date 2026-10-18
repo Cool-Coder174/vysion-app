@@ -30,14 +30,16 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -57,14 +59,17 @@ import kotlinx.coroutines.withTimeout
  * - [start]: subscribes to the command bus, the listening state, navigation cues and detections;
  *   starts the frame source and warms the engine up; speaks the welcome (FR-G1).
  * - One-shot commands (Read FR-T1, Describe FR-D1, FindDoor FR-N3, arrival FR-N6): pause
- *   Navigation (ADR-0004) → THINKING earcon → `captureStill()` → `describe()` under the 15 s
+ *   Navigation (ADR-0004) → THINKING earcon → `captureStill()` → the VLM under the 15 s
  *   watchdog (INV-5) with a THINKING earcon every 1.5 s (designs: never silent > 2 s) →
  *   transcript → `Speaker.say` → resume Navigation. The still is recycled in `finally` (INV-9).
- *   Any failure speaks [ModePhrasebook.inferenceFailed] and returns to IDLE.
+ *   Read, Describe and arrival stream: `describeStreaming` is cut into sentences ([SentenceSplitter]) and
+ *   each is spoken as soon as it completes, while the rest generates; the door vote parses whole answers.
+ *   Read speaks the OCR lines instead when an OCR model is loaded. Capture → first spoken word is exposed
+ *   on [firstWordLatency]. Any failure speaks [ModePhrasebook.inferenceFailed] and returns to IDLE.
  * - Busy policy (plan.md Q3): a non-Stop command while CAPTURING/INFERRING is answered with
  *   [ModePhrasebook.busy] and dropped; while SPEAKING it preempts the speech.
- * - Stop (FR-G4, INV-6): a separate collector that never waits behind a command calls the
- *   non-suspending `Speaker.stop()` and cancels the in-flight command `Job`; nothing inside the
+ * - Stop (FR-G4, INV-6): a separate collector that never waits behind a command cancels the
+ *   in-flight command `Job` and calls the non-suspending `Speaker.stop()`; nothing inside the
  *   engine's `Mutex` is involved.
  * - Door vote (FR-N3, RK-6): two stills, two `describe(door)` calls, [DoorVote] allowlist parse,
  *   agreement required, else [ModePhrasebook.doorNotFound].
@@ -118,6 +123,14 @@ class ModeController(
 
     /** NFR latency "command recognized → action started" (≤ 1.5 s), measured per one-shot; `null` until measured. */
     val commandLatencyNanos: StateFlow<Long?> = _commandLatencyNanos
+
+    private val _firstWordLatency = MutableStateFlow<FirstWordLatency?>(null)
+
+    /**
+     * NFR latency "capture → first spoken word" (Read ≤ 6 s FR-T1, Describe ≤ 8 s FR-D1), per Read / Next / Describe;
+     * `null` until measured. `MainActivity` logs it under `vysion.latency`.
+     */
+    val firstWordLatency: StateFlow<FirstWordLatency?> = _firstWordLatency
 
     private val _lastError = MutableStateFlow<Throwable?>(null)
 
@@ -202,9 +215,9 @@ class ModeController(
     fun stop() {
         val run = runScope ?: return
         runScope = null
-        speaker.stop()
-        active?.cancel()
+        active?.cancel() // before silencing, as in [onStop]
         active = null
+        speaker.stop()
         run.cancel()
         overlay.clear()
         _state.value = ModeState.IDLE
@@ -226,10 +239,14 @@ class ModeController(
 
     // ── Command lanes ─────────────────────────────────────────────────────────────────────────────
 
-    /** INV-6 / FR-G4: runs outside any inference; `Speaker.stop()` is non-suspending, so this is sub-millisecond. */
+    /**
+     * INV-6 / FR-G4: runs outside any inference; both calls are non-suspending, so this is sub-millisecond. The
+     * command is cancelled before the speaker is silenced, so a sentence still queued by a streaming answer cannot
+     * reach the speaker after the silence.
+     */
     private fun onStop() {
-        speaker.stop()
         active?.cancel(CancellationException("Command.Stop"))
+        speaker.stop()
     }
 
     private suspend fun onCommand(event: CommandEvent) {
@@ -243,8 +260,9 @@ class ModeController(
                 }
                 // SPEAKING / LISTENING: a new command preempts the current utterance (SRS §3 "interruptible").
                 else -> {
+                    current.cancel() // before silencing, as in [onStop]
                     speaker.stop()
-                    current.cancelAndJoin()
+                    current.join()
                 }
             }
         }
@@ -331,17 +349,23 @@ class ModeController(
             _state.value = ModeState.CAPTURING
             speaker.earcon(Earcon.THINKING)
             still = frames.captureStill() // INV-9: this controller owns it from here
+            // NFR latency: capture → first spoken word, for Read and Describe; the arrival prompt is not measured.
+            val capturedAtNanos = if (event != null) System.nanoTime() else null
             _state.value = ModeState.INFERRING
             // FR-T1: an OCR model reads in well under a second; the VLM reads only when none is loaded.
             val lines = if (mode == Mode.TEXT_READER && prompt == prompts.read) engine.readText(still) else null
-            val text = when {
-                lines == null -> inferWithWatchdog(still, prompt)
-                lines.isEmpty() -> prompts.noTextSentinel ?: inferWithWatchdog(still, prompt)
+            val ocrText = when {
+                lines == null -> null
+                lines.isEmpty() -> prompts.noTextSentinel
                 else -> lines.joinToString("\n")
             }
-            _transcript.value = text // FR-T2
-            _state.value = ModeState.SPEAKING
-            say(text)
+            if (ocrText == null) {
+                speakWhileGenerating(mode, still, prompt, capturedAtNanos)
+            } else {
+                _transcript.value = ocrText // FR-T2
+                _state.value = ModeState.SPEAKING
+                sayTimed(ocrText, mode, capturedAtNanos)
+            }
         } catch (e: CancellationException) {
             throw e // Stop, or shutdown: nothing to say
         } catch (e: Exception) {
@@ -471,12 +495,7 @@ class ModeController(
      * is a failure: nothing is spoken that was not seen (SRS §3 rule 5).
      */
     private suspend fun inferWithWatchdog(still: Bitmap, prompt: String): String = coroutineScope {
-        val thinking = launch {
-            while (isActive) {
-                delay(THINKING_EARCON_PERIOD_MS)
-                speaker.earcon(Earcon.THINKING)
-            }
-        }
+        val thinking = launchThinkingTicker()
         try {
             val text = try {
                 // FR-G6: the output language follows the voice (R2 exempts DOOR, whose allowlist is English).
@@ -489,6 +508,89 @@ class ModeController(
             text
         } finally {
             thinking.cancel()
+        }
+    }
+
+    /**
+     * FR-T1 / FR-D1: speaks the VLM answer sentence by sentence while it is still generating, so the first word
+     * waits for the first sentence instead of the whole answer (6.0 s prefill, then 36 tok/s on the headset). The
+     * collector cuts the token stream with [SentenceSplitter] and hands each sentence to a speech coroutine through
+     * an unlimited [Channel], so it never waits for speech; the transcript grows sentence by sentence (FR-T2) and
+     * the state turns SPEAKING with the first one. INV-5: the stream runs under [InferenceEngine.VLM_TIMEOUT_MS]
+     * (speech time is not counted) with the THINKING earcon until the first sentence. A stream with no text is a
+     * failure (SRS §3 rule 5). Stop cancels this scope: the collection, which makes the engine stop the runner, and
+     * the speech coroutine together.
+     */
+    private suspend fun speakWhileGenerating(mode: Mode, still: Bitmap, prompt: String, capturedAtNanos: Long?) =
+        coroutineScope {
+            val sentences = Channel<String>(Channel.UNLIMITED)
+            launch {
+                var first = true
+                for (sentence in sentences) {
+                    ensureActive() // a Stop that landed while this sentence was waiting wins over it (INV-6)
+                    sayTimed(sentence, mode, capturedAtNanos.takeIf { first })
+                    first = false
+                }
+            }
+            val thinking = launchThinkingTicker()
+            val splitter = SentenceSplitter()
+            val generated = StringBuilder()
+            var spoken = 0
+            fun onSegment(segment: String) {
+                generated.append(segment)
+                val sentence = segment.trim()
+                if (sentence.isEmpty()) return
+                if (spoken++ == 0) {
+                    thinking.cancel()
+                    _state.value = ModeState.SPEAKING
+                }
+                _transcript.value = generated.toString().trim() // FR-T2
+                sentences.trySend(sentence) // unlimited: never fails, never suspends
+            }
+            try {
+                try {
+                    // FR-G6: the output language follows the voice.
+                    val localized = prompts.forLocale(prompt, speaker.locale.value)
+                    withTimeout(InferenceEngine.VLM_TIMEOUT_MS) {
+                        engine.describeStreaming(still, localized).collect { chunk ->
+                            splitter.push(chunk).forEach(::onSegment)
+                        }
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    throw InferenceException("VLM exceeded ${InferenceEngine.VLM_TIMEOUT_MS} ms", e)
+                }
+                onSegment(splitter.finish()) // the end of the stream ends the last sentence
+                if (spoken == 0) throw InferenceException("VLM returned no text")
+            } finally {
+                thinking.cancel()
+                sentences.close() // the speech coroutine finishes what is queued, then this scope returns
+            }
+        }
+
+    /** Designs (Headset 3): never silent while the VLM works; a THINKING earcon every [THINKING_EARCON_PERIOD_MS]. */
+    private fun CoroutineScope.launchThinkingTicker(): Job = launch {
+        while (isActive) {
+            delay(THINKING_EARCON_PERIOD_MS)
+            speaker.earcon(Earcon.THINKING)
+        }
+    }
+
+    /**
+     * [say], and with [capturedAtNanos] also NFR latency (docs/nfr.md): `captureStill()` return → the first
+     * `Speaker.progress` of [text], monotonic (H-21). The watcher subscribes before [text] is said (UNDISPATCHED;
+     * `progress` has no replay) and is cancelled when the utterance ends, measured or not (interrupted first).
+     */
+    private suspend fun sayTimed(text: String, mode: Mode, capturedAtNanos: Long?) = coroutineScope {
+        val watcher = capturedAtNanos?.let { t0 ->
+            launch(start = CoroutineStart.UNDISPATCHED) {
+                speaker.progress.first { !it.done && it.text == text }
+                _firstWordLatency.value = FirstWordLatency(mode, System.nanoTime() - t0)
+            }
+        }
+        try {
+            say(text)
+        } finally {
+            watcher?.cancel()
         }
     }
 
@@ -557,6 +659,53 @@ class ModeController(
          * panel prints this same constant, so the screen and the sound cannot disagree.
          */
         const val THINKING_EARCON_PERIOD_MS: Long = 1_500
+    }
+}
+
+/** NFR latency: `captureStill()` return → the first spoken word of the answer, in [mode] (Read or Describe). */
+data class FirstWordLatency(val mode: Mode, val nanos: Long)
+
+/**
+ * FR-T1 / FR-D1 streaming: cuts the VLM's token stream into sentences as they complete, so each can be spoken while
+ * the rest is still generating. A sentence ends at ".", "!" or "?" followed by whitespace, or at a newline; the end
+ * of the stream ends the last one ([finish]). A terminator with nothing after it yet waits for the next chunk, so a
+ * decimal cut across chunks ("2." then "5 meters") stays whole. Segments keep their whitespace, so together they
+ * are the answer as generated; the caller trims before speaking. Pure; unit-tested.
+ */
+internal class SentenceSplitter {
+
+    private val buffer = StringBuilder()
+
+    /** Appends [chunk] and returns the sentences it completed, in order. */
+    fun push(chunk: String): List<String> {
+        buffer.append(chunk)
+        val done = mutableListOf<String>()
+        var start = 0
+        var i = 0
+        while (i < buffer.length) {
+            val c = buffer[i]
+            val end = when {
+                c == '\n' -> i + 1
+                c in TERMINATORS && i + 1 < buffer.length && buffer[i + 1].isWhitespace() -> i + 2
+                else -> -1
+            }
+            if (end < 0) {
+                i++
+                continue
+            }
+            done += buffer.substring(start, end)
+            start = end
+            i = end
+        }
+        buffer.delete(0, start)
+        return done
+    }
+
+    /** The end of the stream: whatever is left, possibly blank. */
+    fun finish(): String = buffer.toString().also { buffer.setLength(0) }
+
+    private companion object {
+        const val TERMINATORS = ".!?"
     }
 }
 
