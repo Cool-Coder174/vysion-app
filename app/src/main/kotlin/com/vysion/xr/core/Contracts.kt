@@ -195,6 +195,14 @@ interface InferenceEngine {
     /** ADR-0010: whether [describeScene] can reach a cloud model at all (this build has a key). Default `false`. */
     val cloudDescribeAvailable: Boolean get() = false
 
+    /**
+     * FR-N9 "where am I" (ADR-0010 row "Where am I wording"): a text-only answer to [prompt] from the cloud model,
+     * streamed in chunks. Throws [InferenceException] (when collected) without a key, offline, or on any failure, and
+     * the caller speaks its on-device template ([ModePhrasebook.whereAmI]) instead. Never touches the on-device models
+     * or their mutex. The default has no cloud model.
+     */
+    fun cloudWording(prompt: String): Flow<String> = flow { throw InferenceException("no cloud model in this build") }
+
     /** Run the detector on one analysis frame (FR-N2). Must sustain ≥ 5 fps on the headset. */
     suspend fun detect(bitmap: Bitmap): List<Detection>
 
@@ -357,6 +365,54 @@ interface NavigationEngine {
     suspend fun clearTarget()
 }
 
+/** A named street or place near the wearer: its name, its OpenMapTiles class or subclass ("cafe", "primary"), meters. */
+data class NamedPlace(val name: String, val kind: String?, val distanceM: Float)
+
+/**
+ * FR-N9 "where am I", decoded on the headset from OpenFreeMap tiles around the approximate (Wi-Fi) location. Distances
+ * are straight-line meters from that location. There are no directions: the headset has no public compass, so its
+ * heading is unknown (docs/roadmap-research.md §3). Location and names are never logged or stored (ADR-0010).
+ */
+data class Surroundings(
+    /** The nearest named street or footpath; `null` when the map around the wearer names none. */
+    val street: NamedPlace?,
+    /** The nearest named streets that cross [street], at most one on each side along it, nearest first. */
+    val crossStreets: List<NamedPlace>,
+    /** The nearest named places (shops, stops, buildings), at most three, nearest first, distinct names. */
+    val places: List<NamedPlace>,
+    /** Radius of the location fix in meters (`Location.accuracy`, 68 % confidence). */
+    val accuracyM: Float,
+)
+
+/** What [PlaceSource.whereAmI] found out; every case has words in [ModePhrasebook.whereAmI]. */
+sealed interface WhereAmI {
+    data class Found(val surroundings: Surroundings) : WhereAmI
+
+    /** Precise location is not granted. The controller explains, then asks once through the activity. */
+    data object PermissionNeeded : WhereAmI
+
+    /** The wearer refused precise location in the system dialog (or refused it for good earlier). */
+    data object PermissionDenied : WhereAmI
+
+    /** Location is off in Settings. */
+    data object LocationOff : WhereAmI
+
+    /** No fix in time: no Wi-Fi nearby, or no network for the Wi-Fi lookup. */
+    data object NoFix : WhereAmI
+
+    /** The map around the fix could not be downloaded and is not in memory. */
+    data object NoMap : WhereAmI
+}
+
+/**
+ * FR-N9: where the wearer is, from Android network location (Wi-Fi through Play services; the Galaxy XR has no GPS)
+ * and OpenFreeMap vector tiles decoded on the device. Tiles stay in memory; nothing about the location is stored or
+ * logged (ADR-0010 row "Where am I map").
+ */
+interface PlaceSource {
+    suspend fun whereAmI(): WhereAmI
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // R4 · Voice & Accessibility UX — provides CommandBus, Speaker (and owns Cues.kt, the grammar)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -387,6 +443,9 @@ sealed interface Command {
 
     /** ADR-0010: "cloud on" / "cloud off" for Describe ([InferenceEngine.describeScene]); off at every launch. */
     data class CloudDescribe(val on: Boolean) : Command
+
+    /** FR-N9: "where am I": the nearest street, its cross streets and the nearest named places ([PlaceSource]). */
+    data object WhereAmI : Command
 }
 
 enum class ListeningState { IDLE, LISTENING, PROCESSING, UNAVAILABLE }
@@ -538,6 +597,13 @@ interface ModePhrasebook {
     /** ADR-0010: "cloud on" in a build with no cloud model ([InferenceEngine.cloudDescribeAvailable] false). Default blank. */
     val cloudDescribeUnavailable: String get() = ""
 
+    /**
+     * FR-N9: the words for every "where am I" outcome. [WhereAmI.Found] is the on-device template answer (used offline
+     * or when the cloud wording fails); [WhereAmI.PermissionNeeded] is said before the location dialog and names what
+     * leaves the headset; the others say what is wrong and how to fix it, in one sentence. Default blank.
+     */
+    fun whereAmI(result: WhereAmI): String = ""
+
     /** FR-G3: "<mode> mode" on every mode change. */
     fun modeAnnounced(mode: Mode): String
 
@@ -605,6 +671,9 @@ interface PromptSet {
 
     /** FR-D2, P1: a follow-up question about the same frame. */
     fun followUp(question: String): String? = null
+
+    /** FR-N9: the text-only prompt that asks the cloud model to word [surroundings] ([InferenceEngine.cloudWording]). */
+    fun whereAmI(surroundings: Surroundings): String? = null
 
     /**
      * The exact answer the READ prompt asks the VLM to give when it sees no text ("No text found"), so the UI

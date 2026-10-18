@@ -22,6 +22,7 @@ Rules (ADR-0005):
 | `AnchorStore` | R3 `perception.XrAnchorStore` | R1 `ModeController`, R3 `NavigationEngine` | 5 | "AnchorStore" |
 | `HeadPoseSource` | R3 | R1 (FR-T5), R3 | 5 | implied by "head pose" |
 | `HandGestureSource` | R3 `perception.XrHandGestures` | R1 `GestureCommands` | added 2026-10-17 | eyes-free control for blind users (FR-G2) |
+| `PlaceSource` | R3 `perception.MapPlaceSource` (Wi-Fi location + OpenFreeMap tiles decoded on the device; `FakePlaceSource` for tests and `-PuseFakes=true`) | R1 `ModeController` ("where am I", FR-N9) | added 2026-10-18 | not in the SRS: the free replacement for the Geospatial tour guide (`docs/roadmap-research.md` §3, ADR-0010) |
 | `CommandBus` | R4 `voice.SpeechCommandBus` | R1 `ModeController`, panels; `AppGraph.release()` (`release()`) | 3 (Sat 15:00) | "CommandBus (parsed commands as a flow)" |
 | `Speaker` | R4 `voice.AndroidSpeaker` | R1 `ModeController`, R3 (through R1), transcript panel; `AppGraph.release()` (`release()`) | 3 | "Speaker (queue, interrupt, rate, locale)" |
 | `ModePhrasebook` (seam in `core`) | R4 `voice.CuesPhrasebook` (object; every sentence comes from `voice.Cues`, follows `Speaker.locale` after `bind(speaker)`) | R1 `ModeController(phrasebook = …)`; R3 never builds strings, R1 turns each `NavigationCue` into words through `navigationCue(cue)`. Wired by `AppGraph`: `phrasebook = CuesPhrasebook.also { it.bind(speaker) }` | 3 | "every cue string in Cues.kt, nothing hardcoded elsewhere" |
@@ -59,6 +60,7 @@ interface InferenceEngine {
     fun describeStreaming(bitmap: Bitmap, prompt: String, maxNewTokens: Int = DEFAULT_MAX_NEW_TOKENS): Flow<String>   // default wraps describe
     fun describeScene(bitmap: Bitmap, prompt: String, cloud: Boolean, maxNewTokens: Int = DEFAULT_MAX_NEW_TOKENS): Flow<String>   // FR-D1 + ADR-0010: cloud when on + online, else/on error/slower = describeStreaming; default = describeStreaming
     val cloudDescribeAvailable: Boolean get() = false   // ADR-0010: a cloud key is built in
+    fun cloudWording(prompt: String): Flow<String>       // FR-N9: text-only cloud answer; throws InferenceException without key / offline / on failure (caller speaks the Cues template); default throws
     suspend fun detect(bitmap: Bitmap): List<Detection>
     suspend fun readText(bitmap: Bitmap): List<String>? = null   // FR-T1 OCR fast path: lines in reading order, [] = no text, null = no OCR model (use describe + READ)
     suspend fun readTextIn(bitmap: Bitmap, region: NormalizedBox): List<String>? = null   // reading crosshair: only the text inside region (cropped before detection); null = regions unsupported, read the whole frame
@@ -87,6 +89,10 @@ interface AnchorStore {
     suspend fun placeFromBearing(bearing: HorizontalBearing): AnchorId?; fun track(id: AnchorId): Flow<RelativeTarget>
     suspend fun remove(id: AnchorId); suspend fun clear()
 }
+data class NamedPlace(val name: String, val kind: String?, val distanceM: Float)   // FR-N9: straight-line meters, no direction (no compass)
+data class Surroundings(val street: NamedPlace?, val crossStreets: List<NamedPlace>, val places: List<NamedPlace>, val accuracyM: Float)
+sealed interface WhereAmI { Found(val surroundings: Surroundings) · PermissionNeeded · PermissionDenied · LocationOff · NoFix · NoMap }
+interface PlaceSource { suspend fun whereAmI(): WhereAmI }   // FR-N9; location and names never logged or stored (ADR-0010)
 interface NavigationEngine {
     val cues: Flow<NavigationCue>; val detections: Flow<List<Detection>>; val isRunning: StateFlow<Boolean>
     suspend fun start(); suspend fun pause(); suspend fun resume(); suspend fun stop()
@@ -94,7 +100,7 @@ interface NavigationEngine {
 }
 
 // R4
-sealed interface Command { Read · Describe · GuideMe · FindDoor · Stop · Repeat · Slower · InSpanish · Next · Brief · Detailed · FollowUp(val question: String) · SelectDoor(val side: HorizontalBearing) · CloudDescribe(val on: Boolean) }
+sealed interface Command { Read · Describe · GuideMe · FindDoor · Stop · Repeat · Slower · InSpanish · Next · Brief · Detailed · FollowUp(val question: String) · SelectDoor(val side: HorizontalBearing) · CloudDescribe(val on: Boolean) · WhereAmI }
 enum class ListeningState { IDLE, LISTENING, PROCESSING, UNAVAILABLE }
 enum class CommandSource { VOICE, PINCH, PANEL, TEST }
 data class CommandEvent(val command: Command, val source: CommandSource, val recognizedAtNanos: Long)
@@ -128,6 +134,7 @@ interface ModePhrasebook {
     fun navigationCue(cue: NavigationCue): String?   // null = nothing to say (e.g. Arrived runs the ARRIVAL prompt)
     fun onboarding(step: OnboardingStep): OnboardingPage   // designs pages 2-8: shown AND read aloud; default blank page
     val stopPractice: String get() = ""                    // onboarding page 4: Vysion talks until the user stops it
+    fun whereAmI(result: WhereAmI): String = ""      // FR-N9: template answer (offline / cloud failed), the permission explanation, or what is wrong + the way out
     object Unwired : ModePhrasebook                  // every value "", navigationCue → null; blank is skipped, never spoken
 }
 enum class OnboardingStep { WELCOME, PRIVACY, TALK, STOP, SOUNDS, SAFETY, ALL_SET }
@@ -138,6 +145,7 @@ interface PromptSet {
     val read: String; val describe: String; val door: String; val arrival: String   // the four P0 prompts
     val translateEs: String? get() = null; val describeBrief: String? get() = null; val describeDetailed: String? get() = null
     fun followUp(question: String): String? = null                                   // P1 variants: null = not available yet
+    fun whereAmI(surroundings: Surroundings): String? = null                         // FR-N9: text-only prompt for InferenceEngine.cloudWording
     fun forLocale(prompt: String, locale: Locale): String = prompt                   // FR-G6: R2 appends "Respond in Spanish." (DOOR exempt)
     val noTextSentinel: String? get() = null                                         // the READ prompt's "No text found"; the UI shows "move closer"
     object Unwired : PromptSet                                                       // the four P0 prompts are ""

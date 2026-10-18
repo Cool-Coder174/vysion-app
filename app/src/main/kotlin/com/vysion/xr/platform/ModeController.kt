@@ -311,6 +311,7 @@ class ModeController(
             }
             is Command.SelectDoor -> Unit // TODO(FR-N7): choose among door candidates (P2)
             is Command.CloudDescribe -> launchOneShot(ModeState.SPEAKING) { setCloudDescribe(command.on) } // ADR-0010
+            Command.WhereAmI -> Unit // TODO(FR-N9): PlaceSource → cloud wording or Cues template
             Command.Stop -> Unit // handled on its own lane
         }
     }
