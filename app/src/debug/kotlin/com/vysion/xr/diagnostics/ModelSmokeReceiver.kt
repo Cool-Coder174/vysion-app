@@ -34,6 +34,8 @@ import kotlinx.coroutines.launch
  * `--es model whereami [--ez cold true]` runs FR-N9 at a fixed test point (the Civic Center tile in the unit tests,
  * never the wearer's location, which needs a worn headset and Location on): the tiles (cold = dropped from memory
  * first), the on-device finder, the cloud wording and the template, with their times. No image is needed.
+ * `--es model ask-whereami` asks the running app "where am I" as if spoken (the worn check, and the offline check
+ * after airplane mode is turned on: the process and its tiles in memory stay, unlike a relaunch).
  *
  * The image is a test fixture pushed by the developer, never a camera frame (ADR-0003); the receiver writes nothing
  * and is guarded by `android.permission.DUMP` like [BenchmarkReceiver]. Only file names under `files/smoke/` are
@@ -45,6 +47,11 @@ class ModelSmokeReceiver : BroadcastReceiver() {
         if (intent.action != ACTION) return
         val app = context.applicationContext as? VysionApplication ?: return
         val model = intent.getStringExtra(EXTRA_MODEL)?.lowercase()
+        if (model == "ask-whereami") {
+            app.graph.commandBus.inject(com.vysion.xr.core.Command.WhereAmI, com.vysion.xr.core.CommandSource.TEST)
+            Log.i(TAG, "ask-whereami injected")
+            return
+        }
         if (model == "whereami") {
             val pending = goAsync()
             app.graph.scope.launch {
@@ -208,7 +215,7 @@ class ModelSmokeReceiver : BroadcastReceiver() {
         const val TEST_ACCURACY_M = 30f
         const val DIR = "smoke"
         const val DEFAULT_PROMPT = "Describe what is in front of me in one short sentence."
-        val MODELS = setOf("ocr", "vlm", "detector", "vlm-probe", "tts", "describe", "cloud", "whereami")
+        val MODELS = setOf("ocr", "vlm", "detector", "vlm-probe", "tts", "describe", "cloud", "whereami", "ask-whereami")
         val NAME = Regex("[A-Za-z0-9._-]{1,64}")
     }
 }
