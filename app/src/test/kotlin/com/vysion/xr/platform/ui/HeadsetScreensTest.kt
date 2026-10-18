@@ -123,4 +123,14 @@ class HeadsetScreensTest {
             HeadsetScreens.reduce(answer.copy(state = ModeState.INFERRING, lastCommand = Command.WhereAmI)),
         )
     }
+
+    @Test
+    fun `the silent door watch shows Looking for a door until guidance starts`() {
+        assertEquals(HeadsetScreen.LookingForDoor, HeadsetScreens.reduce(idle.copy(mode = Mode.NAVIGATION, lookingForDoor = true)))
+        val guiding = idle.copy(
+            mode = Mode.NAVIGATION, lookingForDoor = true,
+            navCue = NavigationCue.DoorBearing(12, 3f, true), navCueAtMs = 1_000, nowMs = 2_000,
+        )
+        assertEquals(HeadsetScreen.Guiding(12, 3f, true), HeadsetScreens.reduce(guiding))
+    }
 }

@@ -61,6 +61,8 @@ data class ScreenInput(
     val listening: ListeningState,
     /** What [transcript] is: a Read / Describe answer or a "where am I" one (FR-N9). */
     val transcriptKind: TranscriptKind = TranscriptKind.ANSWER,
+    /** "Find the door" is watching the detector for a door, silently (`ModeController.lookingForDoor`). */
+    val lookingForDoor: Boolean = false,
     val lastCommand: Command? = null,
     val lastCommandAtMs: Long? = null,
     val lastErrorAtMs: Long? = null,
@@ -95,6 +97,8 @@ object HeadsetScreens {
         if (errorIsCurrent(input)) return HeadsetScreen.Error
 
         navigationScreen(input)?.let { return it }
+
+        if (input.lookingForDoor) return HeadsetScreen.LookingForDoor
 
         val text = input.transcript
         if (text != null && input.transcriptKind != TranscriptKind.ANSWER) {

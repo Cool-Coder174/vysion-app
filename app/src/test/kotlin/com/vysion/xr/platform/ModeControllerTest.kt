@@ -95,6 +95,7 @@ class ModeControllerTest {
         // StandardTestDispatcher collector in backgroundScope misses the final IDLE, because
         // advanceUntilIdle() returns once only background work is left (kotlinx-coroutines-test ≥ 1.7).
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { f.controller.state.collect { states += it } }
+        val shown = transcriptsOf(f)
 
         f.commands.inject(Command.Read)
         advanceUntilIdle()
@@ -104,7 +105,8 @@ class ModeControllerTest {
             states,
         )
         assertEquals(ModeState.IDLE, f.controller.state.value)
-        assertEquals(READ_ANSWER, f.controller.transcript.value)
+        assertTrue("shown while it is read aloud", READ_ANSWER in shown)
+        assertNull("gone once the voice finished", f.controller.transcript.value)
         assertEquals(Mode.TEXT_READER, f.controller.mode.value)
         // FR-G3, then the text
         assertEquals(listOf(TestPhrasebook.modeAnnounced(Mode.TEXT_READER), READ_ANSWER), f.speaker.said)
@@ -118,10 +120,11 @@ class ModeControllerTest {
         startAndSettle(f)
         f.engine.cannedText = listOf("Meeting rooms", "Floor 2")
         val describesBefore = f.engine.describeCalls
+        val shown = transcriptsOf(f)
         f.commands.inject(Command.Read)
         advanceUntilIdle()
 
-        assertEquals("Meeting rooms\nFloor 2", f.controller.transcript.value)
+        assertTrue("Meeting rooms\nFloor 2" in shown)
         assertEquals(listOf(TestPhrasebook.modeAnnounced(Mode.TEXT_READER), "Meeting rooms\nFloor 2"), f.speaker.said)
         assertEquals(1, f.engine.readTextCalls)
         assertEquals(describesBefore, f.engine.describeCalls)
@@ -133,11 +136,12 @@ class ModeControllerTest {
         startAndSettle(f)
         f.engine.cannedRegionText = listOf("EXIT")
         f.engine.cannedText = listOf("EXIT", "Wet floor", "Room 204")
+        val shown = transcriptsOf(f)
         f.commands.inject(Command.Read)
         advanceUntilIdle()
 
         assertEquals(listOf(ReadingFrame.stillBox), f.engine.readRegions)
-        assertEquals("EXIT", f.controller.transcript.value)
+        assertTrue("EXIT" in shown)
         assertEquals(listOf(TestPhrasebook.modeAnnounced(Mode.TEXT_READER), "EXIT"), f.speaker.said)
         assertEquals(0, f.engine.readTextCalls)
     }
@@ -168,12 +172,14 @@ class ModeControllerTest {
     fun `read pins the text in the room where the wearer looks, but never the no-text sentinel`() = controllerTest { f ->
         startAndSettle(f)
         f.engine.cannedText = listOf("Meeting rooms", "Floor 2")
+        val labels = labelsOf(f)
         f.commands.inject(Command.Read)
         advanceUntilIdle()
-        val label = f.controller.worldLabel.value
-        assertEquals(WorldLabel.Kind.TEXT, label?.kind)
-        assertEquals("Meeting rooms\nFloor 2", label?.text)
-        assertEquals(f.anchors.lastId, label?.anchor)
+        val label = labels.filterNotNull().last()
+        assertNull("the card leaves with the voice", f.controller.worldLabel.value)
+        assertEquals(WorldLabel.Kind.TEXT, label.kind)
+        assertEquals("Meeting rooms\nFloor 2", label.text)
+        assertEquals(f.anchors.lastId, label.anchor)
         assertEquals(1, f.anchors.gazePlacements)
 
         f.engine.cannedText = emptyList()
@@ -197,9 +203,11 @@ class ModeControllerTest {
     fun `read with OCR that finds no text shows the no-text sentinel, and describe never runs OCR`() = controllerTest { f ->
         startAndSettle(f)
         f.engine.cannedText = emptyList()
+        val shown = transcriptsOf(f)
         f.commands.inject(Command.Read)
         advanceUntilIdle()
-        assertEquals(TestPrompts.noTextSentinel, f.controller.transcript.value)
+        assertTrue(TestPrompts.noTextSentinel in shown)
+        assertNull(f.controller.transcript.value)
 
         f.commands.inject(Command.Describe)
         advanceUntilIdle()
@@ -524,7 +532,7 @@ class ModeControllerTest {
     }
 
     @Test
-    fun `door vote with disagreeing answers says doorNotFound and places nothing`() =
+    fun `door vote with disagreeing answers says nothing, places nothing and keeps looking`() =
         controllerTest(engineWrapper = { ScriptedDoorEngine(it, "left", "right") }) { f ->
             startAndSettle(f)
             f.commands.inject(Command.FindDoor)
@@ -533,30 +541,78 @@ class ModeControllerTest {
             assertEquals(2, f.frames.captures)
             assertTrue(f.anchors.placed.isEmpty())
             assertTrue(f.navigation.guided.isEmpty())
-            assertTrue(f.speaker.said.contains(TestPhrasebook.doorNotFound))
+            assertEquals("only the mode is said", listOf(TestPhrasebook.modeAnnounced(Mode.NAVIGATION)), f.speaker.said)
+            assertTrue(f.controller.lookingForDoor.value)
             assertEquals(ModeState.IDLE, f.controller.state.value)
             assertEquals(1, f.navigation.resumeCount)
         }
 
     @Test
-    fun `door vote answering none twice says doorNotFound`() = controllerTest { f ->
+    fun `door vote answering none twice says nothing and keeps looking`() = controllerTest { f ->
         startAndSettle(f)
         f.engine.cannedAnswers[TestPrompts.door] = "none"
         f.commands.inject(Command.FindDoor)
         advanceUntilIdle()
         assertTrue(f.anchors.placed.isEmpty())
-        assertTrue(f.speaker.said.contains(TestPhrasebook.doorNotFound))
+        assertFalse(f.speaker.said.contains(TestPhrasebook.doorNotFound))
+        assertTrue(f.controller.lookingForDoor.value)
     }
 
     @Test
-    fun `door vote with no usable depth says doorNotFound`() = controllerTest { f ->
+    fun `a door the detector holds in one third for five frames is anchored and guided, with nothing said before`() =
+        controllerTest { f ->
+            startAndSettle(f)
+            f.engine.cannedAnswers[TestPrompts.door] = "none"
+            f.commands.inject(Command.FindDoor)
+            advanceUntilIdle()
+            assertTrue(f.controller.lookingForDoor.value)
+
+            repeat(ModeController.DOOR_WATCH_FRAMES - 1) { f.navigation.detectionsFlow.tryEmit(listOf(LEFT_DOOR)) }
+            advanceUntilIdle()
+            f.navigation.detectionsFlow.tryEmit(emptyList()) // a frame without the door starts the count again
+            advanceUntilIdle()
+            assertTrue("not yet", f.anchors.placed.isEmpty())
+
+            repeat(ModeController.DOOR_WATCH_FRAMES) { f.navigation.detectionsFlow.tryEmit(listOf(LEFT_DOOR)) }
+            advanceUntilIdle()
+            assertEquals(listOf(HorizontalBearing.LEFT), f.anchors.placed)
+            assertEquals(listOf(f.anchors.lastId!!), f.navigation.guided)
+            assertEquals(WorldLabel.Kind.DOOR, f.controller.worldLabel.value?.kind)
+            assertFalse(f.controller.lookingForDoor.value)
+            assertEquals(listOf(TestPhrasebook.modeAnnounced(Mode.NAVIGATION)), f.speaker.said)
+        }
+
+    @Test
+    fun `stop, read or the headset coming off ends the silent door watch`() = controllerTest { f ->
+        startAndSettle(f)
+        f.engine.cannedAnswers[TestPrompts.door] = "none"
+        for (end in listOf<() -> Unit>({ f.commands.inject(Command.Stop) }, { f.commands.inject(Command.Read) })) {
+            f.commands.inject(Command.FindDoor)
+            advanceUntilIdle()
+            assertTrue(f.controller.lookingForDoor.value)
+            end()
+            advanceUntilIdle()
+            assertFalse(f.controller.lookingForDoor.value)
+            repeat(ModeController.DOOR_WATCH_FRAMES) { f.navigation.detectionsFlow.tryEmit(listOf(LEFT_DOOR)) }
+            advanceUntilIdle()
+            assertTrue(f.anchors.placed.isEmpty())
+        }
+        f.commands.inject(Command.FindDoor)
+        advanceUntilIdle()
+        f.controller.stop()
+        assertFalse(f.controller.lookingForDoor.value)
+    }
+
+    @Test
+    fun `door vote with no usable depth says nothing and keeps looking`() = controllerTest { f ->
         startAndSettle(f)
         f.anchors.failPlacement = true
         f.commands.inject(Command.FindDoor)
         advanceUntilIdle()
         assertEquals(listOf(HorizontalBearing.LEFT), f.anchors.placed)
         assertTrue(f.navigation.guided.isEmpty())
-        assertTrue(f.speaker.said.contains(TestPhrasebook.doorNotFound))
+        assertFalse(f.speaker.said.contains(TestPhrasebook.doorNotFound))
+        assertTrue(f.controller.lookingForDoor.value)
     }
 
     // ── Navigation (FR-N1, FR-N2, ADR-0004, ADR-0006) ─────────────────────────────────────────────
@@ -791,7 +847,7 @@ class ModeControllerTest {
         f.commands.inject(Command.Read)
         advanceUntilIdle()
         assertEquals(listOf(TestPhrasebook.modeAnnounced(Mode.TEXT_READER), READ_ANSWER), f.speaker.said)
-        assertEquals(READ_ANSWER, f.controller.transcript.value)
+        assertNull("read, then cleared", f.controller.transcript.value)
 
         f.navigation.cuesFlow.tryEmit(NavigationCue.WallAhead(1.2f))
         advanceUntilIdle()
@@ -991,6 +1047,16 @@ class ModeControllerTest {
         }
     }
 
+    /** Every transcript the controller showed, in order (Unconfined: the collector sees each write). */
+    private fun TestScope.transcriptsOf(f: Fixture): List<String?> = mutableListOf<String?>().also { list ->
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { f.controller.transcript.collect { list += it } }
+    }
+
+    /** Every world label the controller pinned or cleared, in order. */
+    private fun TestScope.labelsOf(f: Fixture): List<WorldLabel?> = mutableListOf<WorldLabel?>().also { list ->
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { f.controller.worldLabel.collect { list += it } }
+    }
+
     /** `start()` and let the welcome finish, so each test begins in IDLE with the collectors subscribed. */
     private fun TestScope.startAndSettle(f: Fixture) {
         f.controller.start()
@@ -1009,6 +1075,9 @@ class ModeControllerTest {
         const val READ_ANSWER = "<vlm:read>"
         const val DESCRIBE_ANSWER = "<vlm:describe>"
         const val ARRIVAL_ANSWER = "<vlm:arrival>"
+
+        /** An Open Images "Door" box centered in the left third (`DoorDetections`). */
+        val LEFT_DOOR = Detection("Door", 0.9f, NormalizedBox(0.05f, 0.2f, 0.25f, 0.8f))
         val SURROUNDINGS = Surroundings(
             street = NamedPlace("Larkin Street", "secondary", 10f),
             crossStreets = listOf(NamedPlace("Grove Street", "minor", 50f), NamedPlace("Fulton Street", "tertiary", 53f)),

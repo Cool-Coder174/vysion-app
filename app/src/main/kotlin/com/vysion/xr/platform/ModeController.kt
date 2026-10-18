@@ -47,6 +47,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -82,7 +83,11 @@ import kotlinx.coroutines.withTimeout
  *   in-flight command `Job` and calls the non-suspending `Speaker.stop()`; nothing inside the
  *   engine's `Mutex` is involved.
  * - Door vote (FR-N3, RK-6): two stills, two `describe(door)` calls, [DoorVote] allowlist parse,
- *   agreement required, else [ModePhrasebook.doorNotFound].
+ *   agreement required. With no door, nothing is said (Isaac, 2026-10-18: "only notify if you find a door"): the
+ *   controller keeps watching the Navigation detector ([watchForDoor], [lookingForDoor]) and anchors and guides as
+ *   soon as a door holds in one third of the view for [DOOR_WATCH_FRAMES] frames; the guidance is the notification.
+ * - Read (FR-T1): the answer and the card pinned in the room disappear once the voice has finished reading
+ *   (Isaac, 2026-10-18); "repeat" still says it again.
  * - Mode changes are announced (FR-G3) and exposed on [mode] for the panel.
  * - "In Spanish" switches `Speaker` and `CommandBus` to `Speaker.ES_MX` together (FR-G6); nothing switches
  *   back yet (the grammar has no "in English").
@@ -203,6 +208,22 @@ class ModeController(
     @Volatile
     private var describeVariant: DescribeVariant = DescribeVariant.DEFAULT
 
+    private val _lookingForDoor = MutableStateFlow(false)
+
+    /**
+     * "Find the door" found none at once and is watching the Navigation detector for one, silently (the HUD shows
+     * "Looking for a door"). Ends when a door is anchored, on Stop, or when Navigation stops.
+     */
+    val lookingForDoor: StateFlow<Boolean> = _lookingForDoor
+
+    /** The silent door watch ([watchForDoor]); at most one. */
+    @Volatile
+    private var doorWatch: Job? = null
+
+    /** The pending pin of the text just read ([pinReadText]), cancelled when the text is cleared. */
+    @Volatile
+    private var readPin: Job? = null
+
     private val _cloudDescribe = MutableStateFlow(false)
 
     /**
@@ -277,6 +298,7 @@ class ModeController(
         _state.value = ModeState.IDLE
         _mode.value = null
         _cloudDescribe.value = false // ADR-0010: consent is per wearer; taking the headset off withdraws it
+        endDoorWatch()
         // UNDISPATCHED + NonCancellable: completes even if the caller tears the graph down right after.
         teardown = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             withContext(NonCancellable) {
@@ -314,6 +336,7 @@ class ModeController(
     private fun onStop() {
         active?.cancel(CancellationException("Command.Stop"))
         speaker.stop()
+        endDoorWatch()
     }
 
     private suspend fun onCommand(event: CommandEvent) {
@@ -412,10 +435,21 @@ class ModeController(
      */
     private fun pinReadText(text: String?) {
         if (text.isNullOrBlank() || text == prompts.noTextSentinel) return
-        runScope?.launch {
+        readPin = runScope?.launch {
             val anchor = runCatching { anchors.placeAtGaze() }.getOrNull() ?: return@launch
             _worldLabel.value = WorldLabel(anchor, WorldLabel.Kind.TEXT, text)
         }
+    }
+
+    /**
+     * Read (Isaac, 2026-10-18): once the voice has finished, the text leaves the window and the room, so nothing
+     * lingers in the wearer's view. Also after a Stop. "Repeat" still replays it from the Speaker.
+     */
+    private fun clearReadText() {
+        readPin?.cancel()
+        readPin = null
+        if (_worldLabel.value?.kind == WorldLabel.Kind.TEXT) _worldLabel.value = null
+        if (_transcriptKind.value == TranscriptKind.ANSWER) showTranscript(null)
     }
 
     /**
@@ -461,6 +495,7 @@ class ModeController(
             withContext(NonCancellable) {
                 still?.let { release(it) } // INV-9
                 if (wasRunning) navigation.resume() // ADR-0004
+                if (mode == Mode.TEXT_READER && event != null) clearReadText() // the voice is done: clear the view
             }
         }
     }
@@ -634,6 +669,7 @@ class ModeController(
     /** FR-N3 / RK-6: two stills, two answers, agreement required; then anchor and guide. */
     private suspend fun findDoor(event: CommandEvent) {
         markActionStarted(event) // NFR: the state is already CAPTURING; the announcement is not latency
+        endDoorWatch() // a new search replaces the old one
         announceMode(Mode.NAVIGATION)
         if (!ensureNavigationRunning()) {
             _state.value = ModeState.SPEAKING
@@ -663,11 +699,10 @@ class ModeController(
             _state.value = ModeState.SPEAKING
             val anchor = bearing?.let { anchors.placeFromBearing(it) }
             if (anchor == null) {
-                say(phrasebook.doorNotFound) // "I can't find a door, turn slowly"
+                watchForDoor() // nothing said: keep looking, speak only when a door is found
                 return
             }
-            navigation.guideTo(anchor) // R3 emits DoorBearing every 3 s; spoken in [onCue]
-            _worldLabel.value = WorldLabel(anchor, WorldLabel.Kind.DOOR, text = "") // the marker at the door
+            guideToDoor(anchor)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -681,6 +716,58 @@ class ModeController(
                 if (wasRunning) navigation.resume()
             }
         }
+    }
+
+    /** R3 emits DoorBearing every 3 s, spoken in [onCue] with the spatial ping: that is how the wearer learns of it. */
+    private suspend fun guideToDoor(anchor: AnchorId) {
+        navigation.guideTo(anchor)
+        _worldLabel.value = WorldLabel(anchor, WorldLabel.Kind.DOOR, text = "") // the marker at the door
+    }
+
+    /**
+     * No door at the first look: watch the Navigation detector (≥ 5 fps, FR-N2) without a word until a door stays in
+     * the same third of the view for [DOOR_WATCH_FRAMES] frames in a row (RK-6: agreement, not one frame), then anchor
+     * and guide. A frame with no usable depth along that bearing just keeps the watch going.
+     */
+    private fun watchForDoor() {
+        val run = runScope ?: return
+        _lookingForDoor.value = true
+        doorWatch = run.launch {
+            try {
+                var streak = 0
+                var last: HorizontalBearing? = null
+                navigation.detections.firstOrNull { detections ->
+                    val bearing = DoorDetections.bearing(detections).takeIf { it != HorizontalBearing.NONE }
+                    streak = when {
+                        bearing == null -> 0
+                        bearing == last -> streak + 1
+                        else -> 1
+                    }
+                    last = bearing
+                    if (bearing == null || streak < DOOR_WATCH_FRAMES) return@firstOrNull false
+                    val anchor = placeDoor(bearing)
+                    if (anchor == null) streak = 0 else guideToDoor(anchor)
+                    anchor != null
+                }
+            } finally {
+                _lookingForDoor.value = false
+            }
+        }
+    }
+
+    /** [AnchorStore.placeFromBearing], with a store failure read as "no usable depth" (the watch goes on). */
+    private suspend fun placeDoor(bearing: HorizontalBearing): AnchorId? = try {
+        anchors.placeFromBearing(bearing)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun endDoorWatch() {
+        doorWatch?.cancel()
+        doorWatch = null
+        _lookingForDoor.value = false
     }
 
     /** What the detector said about two stills: [ran] false when it is not loaded or failed. */
@@ -873,6 +960,7 @@ class ModeController(
      * resume after the answer. `NavigationEngine.stop()` also clears the door target.
      */
     private suspend fun stopNavigation() {
+        endDoorWatch()
         if (!navigation.isRunning.value) return
         navigation.stop()
         overlay.clear()
@@ -936,6 +1024,12 @@ class ModeController(
          * Past it the wearer hears [ModePhrasebook.inferenceFailed].
          */
         const val WHERE_AM_I_TIMEOUT_MS: Long = 25_000
+
+        /**
+         * The silent door watch anchors a door seen in the same third of the view in this many detector frames in a
+         * row (about half a second at the ~11 fps measured on the headset), so one stray box never sends anyone off.
+         */
+        const val DOOR_WATCH_FRAMES: Int = 5
 
         /**
          * FR-N9: the cloud's first sentence must arrive within this, or the template answers. Gemini worded a place
